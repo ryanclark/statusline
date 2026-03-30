@@ -13,6 +13,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
       - name: Install release-plz
         env:
           RELEASE_PLZ_VERSION: "0.3.157"
