@@ -22,7 +22,7 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
 
-      - uses: actions/cache/restore@v4
+      - uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cargo/registry
@@ -45,7 +45,7 @@ jobs:
 
       - name: Save cache
         if: github.event_name == 'push'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             ~/.cargo/registry

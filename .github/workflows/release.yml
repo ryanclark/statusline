@@ -22,7 +22,7 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
 
-      - uses: actions/cache/restore@v4
+      - uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cargo/registry
