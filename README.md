@@ -2,6 +2,10 @@
 
 A fast, native statusline for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that shows context window usage and API rate limits.
 
+<p align="center">
+  <img src="example.png" alt="statusline example" />
+</p>
+
 Reads from Claude Code's statusline JSON on stdin and fetches usage data from claude.ai using your browser session.
 
 ## Install
