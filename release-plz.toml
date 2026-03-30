@@ -2,7 +2,3 @@
 publish = false
 git_tag_name = "v{{ version }}"
 git_only = true
-
-[[package]]
-name = "statusline"
-publish_no_verify = true
