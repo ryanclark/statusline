@@ -31,9 +31,9 @@ jobs:
       - name: Create or update release PR
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: release-plz release-pr
+        run: release-plz release-pr --git-token "$GITHUB_TOKEN"
 
       - name: Tag and release if PR was merged
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: release-plz release
+        run: release-plz release --git-token "$GITHUB_TOKEN"
