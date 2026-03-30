@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-plz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install release-plz
+        env:
+          RELEASE_PLZ_VERSION: "0.3.157"
+          RELEASE_PLZ_SHA256: "e9ec7c7e86ef364a5c19197c48b8e084ada60dc27382643ad19fafc68b441c34"
+        run: |
+          curl -sSLf "https://github.com/release-plz/release-plz/releases/download/release-plz-v${RELEASE_PLZ_VERSION}/release-plz-x86_64-unknown-linux-gnu.tar.gz" -o release-plz.tar.gz
+          echo "${RELEASE_PLZ_SHA256}  release-plz.tar.gz" | shasum -a 256 --check
+          tar xzf release-plz.tar.gz
+          sudo mv release-plz /usr/local/bin/
+          rm release-plz.tar.gz
+
+      - name: Create or update release PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: release-plz release-pr
+
+      - name: Tag and release if PR was merged
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: release-plz release

@@ -1,0 +1,84 @@
+[package]
+name = "statusline"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85.0"
+description = "Claude Code status line with context window and usage tracking"
+repository = "https://github.com/ryanclark/statusline"
+license = "MIT"
+
+[dependencies]
+clap = { version = "4.6.0", features = ["derive"] }
+eyre = "0.6.12"
+owo-colors = "4.3.0"
+security-framework = "3"
+rusqlite = "0.31"
+aes = "0.8"
+cbc = "0.1"
+pbkdf2 = "0.12"
+sha1 = "0.10"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+chrono = { version = "0.4.44", features = ["serde"] }
+ureq = "3.3.0"
+dirs = "6.0.0"
+
+[features]
+codesigned = []
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[dev-dependencies]
+strip-ansi-escapes = "0.2.1"
+
+[lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[lints.clippy]
+# Correctness & safety
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_sign_loss = "warn"
+checked_conversions = "warn"
+float_cmp = "warn"
+invalid_upcast_comparisons = "warn"
+large_types_passed_by_value = "warn"
+
+# Clarity & readability
+cloned_instead_of_copied = "warn"
+explicit_iter_loop = "warn"
+flat_map_option = "warn"
+if_not_else = "warn"
+implicit_clone = "warn"
+inconsistent_struct_constructor = "warn"
+manual_let_else = "warn"
+map_unwrap_or = "warn"
+match_bool = "warn"
+needless_continue = "warn"
+needless_pass_by_value = "warn"
+range_plus_one = "warn"
+redundant_closure_for_method_calls = "warn"
+redundant_else = "warn"
+ref_option_ref = "warn"
+semicolon_if_nothing_returned = "warn"
+unnested_or_patterns = "warn"
+unused_self = "warn"
+
+# Strings & allocations
+inefficient_to_string = "warn"
+str_to_string = "warn"
+string_add_assign = "warn"
+
+# Style
+doc_markdown = "warn"
+manual_assert = "warn"
+manual_instant_elapsed = "warn"
+must_use_candidate = "warn"
+return_self_not_must_use = "warn"
+trivially_copy_pass_by_ref = "warn"
+uninlined_format_args = "warn"

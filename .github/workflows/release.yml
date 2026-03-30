@@ -1,0 +1,112 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: release-cargo-${{ runner.os }}-
+
+      - name: Detect architecture
+        id: arch
+        run: echo "target=$(uname -m | sed 's/arm64/aarch64/')-apple-darwin" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: cargo build --locked --release --features codesigned
+
+      - name: Codesign
+        env:
+          CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          KEYCHAIN="build.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+
+          echo "$CERTIFICATE_P12" | base64 -d > certificate.p12
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import certificate.p12 -k "$KEYCHAIN" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+
+          codesign --force --options runtime --sign "$IDENTITY" target/release/statusline
+          codesign --verify --verbose target/release/statusline
+
+      - name: Package
+        run: tar czf statusline-${{ steps.arch.outputs.target }}.tar.gz -C target/release statusline
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload ${{ github.ref_name }} statusline-${{ steps.arch.outputs.target }}.tar.gz
+
+      - name: Update Homebrew tap
+        env:
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          REPO="${{ github.repository }}"
+          ARCHIVE="statusline-${{ steps.arch.outputs.target }}.tar.gz"
+          SHA=$(shasum -a 256 "${ARCHIVE}" | awk '{print $1}')
+
+          cat > formula.rb <<RUBY
+          class Statusline < Formula
+            desc "Claude Code statusline with usage tracking"
+            homepage "https://github.com/${REPO}"
+            version "${VERSION}"
+            url "https://github.com/${REPO}/releases/download/${GITHUB_REF_NAME}/${ARCHIVE}"
+            sha256 "${SHA}"
+
+            def install
+              bin.install "statusline"
+            end
+          end
+          RUBY
+
+          TAP_REPO="${{ github.repository_owner }}/homebrew-statusline"
+          EXISTING_SHA=$(gh api "repos/${TAP_REPO}/contents/Formula/statusline.rb" --jq .sha 2>/dev/null || echo "")
+
+          ARGS=(
+            --method PUT
+            --field "message=statusline ${VERSION}"
+            --field "content=$(base64 -i formula.rb)"
+          )
+          if [ -n "$EXISTING_SHA" ]; then
+            ARGS+=(--field "sha=${EXISTING_SHA}")
+          fi
+
+          gh api "repos/${TAP_REPO}/contents/Formula/statusline.rb" "${ARGS[@]}"
+
+      - name: Cleanup signing artifacts
+        if: always()
+        run: |
+          rm -f certificate.p12
+          security delete-keychain build.keychain-db 2>/dev/null || true
