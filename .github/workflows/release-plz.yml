@@ -13,14 +13,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/cache/restore@v5
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-
+            /tmp/release-plz-target
+          key: cargo-release-plz-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-release-plz-${{ runner.os }}-
 
       - name: Install release-plz
         env:
@@ -36,9 +36,11 @@ jobs:
       - name: Create or update release PR
         env:
           RELEASE_PLZ_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          CARGO_TARGET_DIR: /tmp/release-plz-target
         run: release-plz release-pr --git-token "$RELEASE_PLZ_TOKEN"
 
       - name: Tag and release if PR was merged
         env:
           RELEASE_PLZ_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          CARGO_TARGET_DIR: /tmp/release-plz-target
         run: release-plz release --git-token "$RELEASE_PLZ_TOKEN"
