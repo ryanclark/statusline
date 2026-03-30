@@ -1,20 +1,16 @@
+use crate::format::Percentage;
 use crate::settings::Settings;
 use crate::util::home_dir;
 use eyre::{Context, Result};
 use owo_colors::OwoColorize;
 use std::fs;
-use crate::format::Percentage;
 
 pub(crate) fn install(
 	org_id: &str,
 	five_hour_reset_threshold: Percentage,
 	seven_day_reset_threshold: Percentage,
 ) -> Result<()> {
-	Settings::ensure(
-		org_id,
-		five_hour_reset_threshold,
-		seven_day_reset_threshold,
-	)?;
+	Settings::ensure(org_id, five_hour_reset_threshold, seven_day_reset_threshold)?;
 
 	println!("{} Saved settings", "✓".green());
 

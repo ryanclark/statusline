@@ -1,6 +1,6 @@
-use std::cmp::Ordering;
 use owo_colors::{OwoColorize, Rgb};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Formatter;
 
@@ -33,7 +33,6 @@ impl fmt::Display for Cents {
 pub(crate) struct Percentage(f64);
 
 impl Percentage {
-
 	pub(crate) fn color(self) -> Rgb {
 		let p = self.0.clamp(0.0, 100.0);
 
@@ -100,7 +99,11 @@ pub(crate) struct ColoredPercentage(pub(crate) Percentage);
 
 impl fmt::Display for ColoredPercentage {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-		write!(f, "{}", format_args!("{}", self.0).color(self.0.color()).bold())
+		write!(
+			f,
+			"{}",
+			format_args!("{}", self.0).color(self.0.color()).bold()
+		)
 	}
 }
 
@@ -225,12 +228,18 @@ mod tests {
 
 	#[test]
 	fn percentage_from_str_bare_number() {
-		assert_eq!("42.5".parse::<Percentage>().unwrap(), Percentage::from(42.5));
+		assert_eq!(
+			"42.5".parse::<Percentage>().unwrap(),
+			Percentage::from(42.5)
+		);
 	}
 
 	#[test]
 	fn percentage_from_str_with_percent_suffix() {
-		assert_eq!("42.5%".parse::<Percentage>().unwrap(), Percentage::from(42.5));
+		assert_eq!(
+			"42.5%".parse::<Percentage>().unwrap(),
+			Percentage::from(42.5)
+		);
 	}
 
 	#[test]
@@ -258,7 +267,10 @@ mod tests {
 		let high = Percentage::from(75.0);
 		assert!(low < high);
 		assert!(high > low);
-		assert_eq!(low.partial_cmp(&Percentage::from(25.0)), Some(Ordering::Equal));
+		assert_eq!(
+			low.partial_cmp(&Percentage::from(25.0)),
+			Some(Ordering::Equal)
+		);
 	}
 
 	#[test]

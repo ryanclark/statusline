@@ -1,7 +1,7 @@
-use eyre::{Context, Result};
-use serde::{Deserialize, Serialize};
 use crate::format::Percentage;
 use crate::util::app_data_dir;
+use eyre::{Context, Result};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct Settings {
@@ -12,13 +12,16 @@ pub(crate) struct Settings {
 
 impl Settings {
 	pub(crate) fn load() -> Result<Self> {
-		let content = std::fs::read_to_string(settings_path()?)
-			.context("reading settings file")?;
+		let content = std::fs::read_to_string(settings_path()?).context("reading settings file")?;
 
 		serde_json::from_str(&content).context("parsing settings file")
 	}
 
-	pub(crate) fn ensure(org_id: &str, five_hour_reset_threshold: Percentage, seven_day_reset_threshold: Percentage) -> Result<Self> {
+	pub(crate) fn ensure(
+		org_id: &str,
+		five_hour_reset_threshold: Percentage,
+		seven_day_reset_threshold: Percentage,
+	) -> Result<Self> {
 		let settings = Self {
 			org_id: org_id.to_owned(),
 			five_hour_reset_threshold,

@@ -1,12 +1,12 @@
-use owo_colors::OwoColorize;
+use crate::chrome::load_session_key;
+use crate::constants::{DIVIDER, FIVE_HOUR_ICON, SEVEN_DAY_ICON};
 use crate::format::{Cents, ColoredPercentage, Percentage};
 use eyre::{Context, Result};
+use owo_colors::OwoColorize;
 use owo_colors::XtermColors;
 use serde::Deserialize;
 use std::fmt;
 use std::fmt::Formatter;
-use crate::chrome::load_session_key;
-use crate::constants::{DIVIDER, FIVE_HOUR_ICON, SEVEN_DAY_ICON};
 use std::time::Duration;
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -26,7 +26,10 @@ pub(crate) fn fetch_usage(org_id: &str) -> Result<UsageResponse> {
 		.call()
 		.context("fetching usage data")?;
 
-	let body = response.into_body().read_to_string().context("reading response body")?;
+	let body = response
+		.into_body()
+		.read_to_string()
+		.context("reading response body")?;
 
 	serde_json::from_str(&body).context("parsing usage response JSON")
 }
@@ -65,7 +68,11 @@ pub(crate) struct UsageResponse {
 
 impl UsageResponse {
 	pub(crate) fn display(&self, five: Percentage, seven: Percentage) -> UsageDisplay<'_> {
-		UsageDisplay { response: self, five_threshold: five, seven_threshold: seven }
+		UsageDisplay {
+			response: self,
+			five_threshold: five,
+			seven_threshold: seven,
+		}
 	}
 }
 
@@ -75,8 +82,18 @@ struct UsagePeriod {
 	resets_at: ResetTime,
 }
 
-fn fmt_usage_period(f: &mut fmt::Formatter<'_>, icon: &str, period: &UsagePeriod, threshold: Percentage) -> fmt::Result {
-	write!(f, "{} {} ", icon.color(XtermColors::LightGray), ColoredPercentage(period.utilization))?;
+fn fmt_usage_period(
+	f: &mut fmt::Formatter<'_>,
+	icon: &str,
+	period: &UsagePeriod,
+	threshold: Percentage,
+) -> fmt::Result {
+	write!(
+		f,
+		"{} {} ",
+		icon.color(XtermColors::LightGray),
+		ColoredPercentage(period.utilization)
+	)?;
 
 	if period.utilization > threshold {
 		write!(f, "{} ", period.resets_at)?;
@@ -133,8 +150,18 @@ impl fmt::Display for ExtraUsage {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
 		let percentage = self.used_credits.as_percentage_of(self.monthly_limit);
 
-		write!(f, "{}", format_args!("{}", self.used_credits).color(percentage.color()).bold())?;
-		write!(f, "{}", format_args!("/{}", self.monthly_limit).color(XtermColors::LightGray))?;
+		write!(
+			f,
+			"{}",
+			format_args!("{}", self.used_credits)
+				.color(percentage.color())
+				.bold()
+		)?;
+		write!(
+			f,
+			"{}",
+			format_args!("/{}", self.monthly_limit).color(XtermColors::LightGray)
+		)?;
 
 		Ok(())
 	}
@@ -195,8 +222,14 @@ mod tests {
 			used_credits: 500.0.into(),
 		};
 		let output = strip_ansi(format!("{extra}"));
-		assert!(output.contains("$5"), "should show used credits, got: {output}");
-		assert!(output.contains("$0"), "should show zero limit, got: {output}");
+		assert!(
+			output.contains("$5"),
+			"should show used credits, got: {output}"
+		);
+		assert!(
+			output.contains("$0"),
+			"should show zero limit, got: {output}"
+		);
 	}
 
 	#[test]
@@ -219,8 +252,14 @@ mod tests {
 			100.0,
 			100.0,
 		);
-		assert!(output.contains("42.5%"), "should show five-hour utilization, got: {output}");
-		assert!(output.contains("75%"), "should show seven-day utilization, got: {output}");
+		assert!(
+			output.contains("42.5%"),
+			"should show five-hour utilization, got: {output}"
+		);
+		assert!(
+			output.contains("75%"),
+			"should show seven-day utilization, got: {output}"
+		);
 	}
 
 	#[test]
@@ -233,7 +272,10 @@ mod tests {
 			100.0,
 		);
 		assert!(output.contains("80%"), "got: {output}");
-		assert!(output.contains("d"), "above threshold should show reset time, got: {output}");
+		assert!(
+			output.contains("d"),
+			"above threshold should show reset time, got: {output}"
+		);
 	}
 
 	#[test]
@@ -249,8 +291,14 @@ mod tests {
 			70.0,
 			100.0,
 		);
-		assert!(output.contains("$25"), "should show used credits, got: {output}");
-		assert!(output.contains("$100"), "should show monthly limit, got: {output}");
+		assert!(
+			output.contains("$25"),
+			"should show used credits, got: {output}"
+		);
+		assert!(
+			output.contains("$100"),
+			"should show monthly limit, got: {output}"
+		);
 	}
 
 	fn fixed_now() -> chrono::DateTime<chrono::Utc> {
@@ -265,17 +313,26 @@ mod tests {
 
 	#[test]
 	fn duration_until_days_and_hours() {
-		assert_eq!(reset_time(90061).duration_until(fixed_now()), Some("1d1h".to_owned()));
+		assert_eq!(
+			reset_time(90061).duration_until(fixed_now()),
+			Some("1d1h".to_owned())
+		);
 	}
 
 	#[test]
 	fn duration_until_hours_and_minutes() {
-		assert_eq!(reset_time(7260).duration_until(fixed_now()), Some("2h1m".to_owned()));
+		assert_eq!(
+			reset_time(7260).duration_until(fixed_now()),
+			Some("2h1m".to_owned())
+		);
 	}
 
 	#[test]
 	fn duration_until_minutes_only() {
-		assert_eq!(reset_time(300).duration_until(fixed_now()), Some("5m".to_owned()));
+		assert_eq!(
+			reset_time(300).duration_until(fixed_now()),
+			Some("5m".to_owned())
+		);
 	}
 
 	#[test]
@@ -290,16 +347,25 @@ mod tests {
 
 	#[test]
 	fn duration_until_one_second() {
-		assert_eq!(reset_time(1).duration_until(fixed_now()), Some("1s".to_owned()));
+		assert_eq!(
+			reset_time(1).duration_until(fixed_now()),
+			Some("1s".to_owned())
+		);
 	}
 
 	#[test]
 	fn duration_until_59_seconds() {
-		assert_eq!(reset_time(59).duration_until(fixed_now()), Some("59s".to_owned()));
+		assert_eq!(
+			reset_time(59).duration_until(fixed_now()),
+			Some("59s".to_owned())
+		);
 	}
 
 	#[test]
 	fn duration_until_60_seconds_is_one_minute() {
-		assert_eq!(reset_time(60).duration_until(fixed_now()), Some("1m".to_owned()));
+		assert_eq!(
+			reset_time(60).duration_until(fixed_now()),
+			Some("1m".to_owned())
+		);
 	}
 }

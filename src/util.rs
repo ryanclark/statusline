@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use eyre::Result;
+use std::path::PathBuf;
 
 pub(crate) fn home_dir() -> Result<PathBuf> {
 	dirs::home_dir().ok_or_else(|| eyre::eyre!("could not determine home directory"))

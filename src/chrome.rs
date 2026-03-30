@@ -1,6 +1,6 @@
-use eyre::{Context, Result};
-use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 use crate::util::home_dir;
+use cbc::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
+use eyre::{Context, Result};
 
 pub(crate) fn load_session_key() -> Result<String> {
 	let home_dir = home_dir()?;
@@ -10,7 +10,7 @@ pub(crate) fn load_session_key() -> Result<String> {
 		&db_path,
 		rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
 	)
-		.context("opening Chrome cookies database")?;
+	.context("opening Chrome cookies database")?;
 
 	let (value, encrypted_value): (String, Vec<u8>) = conn.prepare(
 		"SELECT value, encrypted_value FROM cookies WHERE host_key IN ('.claude.ai', 'claude.ai') AND name = 'sessionKey' LIMIT 1",
@@ -84,8 +84,7 @@ fn decrypt_cookie(password: &[u8], encrypted_value: &[u8]) -> Result<String> {
 			match String::from_utf8(plaintext.to_vec()) {
 				Ok(s) => Ok(s),
 				Err(_) if plaintext.len() > 32 => {
-					String::from_utf8(plaintext[32..].to_vec())
-						.context("decrypted cookie is not valid UTF-8")
+					String::from_utf8(plaintext[32..].to_vec()).context("decrypted cookie is not valid UTF-8")
 				}
 				Err(e) => Err(e).context("decrypted cookie is not valid UTF-8"),
 			}
@@ -118,7 +117,7 @@ mod tests {
 	#[test]
 	fn decrypt_cookie_v10_roundtrip() {
 		// Encrypt a known plaintext with the same PBKDF2 + AES-CBC pipeline
-		use cbc::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+		use cbc::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 
 		let password = b"test_password";
 		let plaintext = b"sk-ant-session-key-12345";

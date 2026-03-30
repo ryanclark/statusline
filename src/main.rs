@@ -7,14 +7,14 @@ mod settings;
 mod usage;
 mod util;
 
+use crate::constants::RED;
 use crate::context_window::ContextWindow;
+use crate::format::Percentage;
 use crate::install::install;
 use crate::settings::Settings;
 use crate::usage::fetch_usage;
 use clap::{Parser, Subcommand};
 use owo_colors::OwoColorize;
-use crate::constants::RED;
-use crate::format::Percentage;
 
 #[derive(Parser)]
 struct Cli {
@@ -63,7 +63,11 @@ fn main() {
 			let settings = match Settings::load() {
 				Ok(s) => s,
 				Err(e) => {
-					eprintln!("{} {e}. Run {} to set up.", "! error:".red().bold(), "statusline install".green());
+					eprintln!(
+						"{} {e}. Run {} to set up.",
+						"! error:".red().bold(),
+						"statusline install".green()
+					);
 
 					return;
 				}
