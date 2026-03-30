@@ -4,10 +4,6 @@ on:
   push:
     branches: [main]
 
-permissions:
-  contents: write
-  pull-requests: write
-
 jobs:
   release-plz:
     runs-on: ubuntu-latest
@@ -30,10 +26,10 @@ jobs:
 
       - name: Create or update release PR
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: release-plz release-pr --git-token "$GITHUB_TOKEN"
+          RELEASE_PLZ_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: release-plz release-pr --git-token "$RELEASE_PLZ_TOKEN"
 
       - name: Tag and release if PR was merged
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: release-plz release --git-token "$GITHUB_TOKEN"
+          RELEASE_PLZ_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: release-plz release --git-token "$RELEASE_PLZ_TOKEN"
