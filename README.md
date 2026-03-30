@@ -13,7 +13,7 @@ brew tap ryanclark/statusline
 brew install statusline
 ```
 > [!NOTE]
-> Note - you'll need to grant Keychain access to "Chrome Safe Storage" on first run (see below).
+> You'll need to grant Keychain access to "Chrome Safe Storage" on first run (see below).
 
 Or build from source:
 
