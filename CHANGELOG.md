@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/ryanclark/statusline/compare/v0.1.2...v0.1.3) - 2026-04-02
+
+### Other
+
+- Add segments with config, support for Brave + Firefox
+- *(README)* remove duplicate note wording
+- *(README)* formatting/text updates
+- *(README)* add example image
+
 ## [0.1.2](https://github.com/ryanclark/statusline/compare/v0.1.1...v0.1.2) - 2026-03-30
 
 ### Other
