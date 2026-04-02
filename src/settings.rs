@@ -1,4 +1,6 @@
+use crate::browser::Browser;
 use crate::format::Percentage;
+use crate::segment::SegmentConfig;
 use crate::util::app_data_dir;
 use eyre::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -8,6 +10,14 @@ pub(crate) struct Settings {
 	pub(crate) org_id: String,
 	pub(crate) five_hour_reset_threshold: Percentage,
 	pub(crate) seven_day_reset_threshold: Percentage,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) segments: Option<Vec<SegmentConfig>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) divider: Option<String>,
+	#[serde(default)]
+	pub(crate) nerd_font: bool,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) browser: Option<Browser>,
 }
 
 impl Settings {
@@ -26,6 +36,10 @@ impl Settings {
 			org_id: org_id.to_owned(),
 			five_hour_reset_threshold,
 			seven_day_reset_threshold,
+			segments: None,
+			divider: None,
+			nerd_font: false,
+			browser: None,
 		};
 
 		let path = settings_path()?;
@@ -54,6 +68,10 @@ mod tests {
 			org_id: "org-abc123".to_owned(),
 			five_hour_reset_threshold: 70.0.into(),
 			seven_day_reset_threshold: 100.0.into(),
+			segments: None,
+			divider: None,
+			nerd_font: false,
+			browser: None,
 		};
 
 		let json = serde_json::to_string(&settings).unwrap();
@@ -87,5 +105,71 @@ mod tests {
 			msg.contains("five_hour_reset_threshold"),
 			"error should mention the missing field, got: {msg}"
 		);
+	}
+
+	#[test]
+	fn settings_backward_compat_no_segments() {
+		let json = r#"{
+			"org_id": "org-test",
+			"five_hour_reset_threshold": 70,
+			"seven_day_reset_threshold": 100
+		}"#;
+		let loaded: Settings = serde_json::from_str(json).unwrap();
+		assert!(loaded.segments.is_none());
+		assert!(loaded.divider.is_none());
+	}
+
+	#[test]
+	fn settings_with_segments() {
+		let json = r#"{
+			"org_id": "org-test",
+			"five_hour_reset_threshold": 70,
+			"seven_day_reset_threshold": 100,
+			"segments": ["context_percentage", "divider", "model"],
+			"divider": "|"
+		}"#;
+		let loaded: Settings = serde_json::from_str(json).unwrap();
+		assert_eq!(loaded.segments.as_ref().unwrap().len(), 3);
+		assert_eq!(loaded.divider.as_deref(), Some("|"));
+	}
+
+	#[test]
+	fn settings_segments_not_serialized_when_none() {
+		let settings = Settings {
+			org_id: "org-test".to_owned(),
+			five_hour_reset_threshold: 70.0.into(),
+			seven_day_reset_threshold: 100.0.into(),
+			segments: None,
+			divider: None,
+			nerd_font: false,
+			browser: None,
+		};
+		let json = serde_json::to_string(&settings).unwrap();
+		assert!(!json.contains("segments"));
+		assert!(!json.contains("divider"));
+		assert!(!json.contains("browser"));
+	}
+
+	#[test]
+	fn settings_with_browser() {
+		let json = r#"{
+			"org_id": "org-test",
+			"five_hour_reset_threshold": 70,
+			"seven_day_reset_threshold": 100,
+			"browser": "brave"
+		}"#;
+		let loaded: Settings = serde_json::from_str(json).unwrap();
+		assert_eq!(loaded.browser, Some(Browser::Brave));
+	}
+
+	#[test]
+	fn settings_backward_compat_no_browser() {
+		let json = r#"{
+			"org_id": "org-test",
+			"five_hour_reset_threshold": 70,
+			"seven_day_reset_threshold": 100
+		}"#;
+		let loaded: Settings = serde_json::from_str(json).unwrap();
+		assert!(loaded.browser.is_none());
 	}
 }
