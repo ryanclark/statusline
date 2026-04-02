@@ -1,4 +1,4 @@
-use owo_colors::{OwoColorize, Rgb};
+use owo_colors::{AnsiColors, DynColors, OwoColorize, Rgb};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
@@ -31,6 +31,14 @@ impl fmt::Display for Cents {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub(crate) struct Percentage(f64);
+
+impl std::ops::Sub for Percentage {
+	type Output = Percentage;
+
+	fn sub(self, rhs: Self) -> Percentage {
+		Percentage(self.0 - rhs.0)
+	}
+}
 
 impl Percentage {
 	pub(crate) fn color(self) -> Rgb {
@@ -90,7 +98,7 @@ impl PartialOrd for Percentage {
 
 impl fmt::Display for Percentage {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-		write!(f, "{}%", self.0)
+		write!(f, "{:.0}%", self.0)
 	}
 }
 
@@ -107,12 +115,29 @@ impl fmt::Display for ColoredPercentage {
 	}
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+	Clone, Copy, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+)]
 pub(crate) struct Tokens(u64);
 
 impl From<u64> for Tokens {
 	fn from(value: u64) -> Self {
 		Self(value)
+	}
+}
+
+impl Tokens {
+	pub(crate) fn as_u64(self) -> u64 {
+		self.0
+	}
+
+	#[allow(clippy::cast_precision_loss)]
+	pub(crate) fn ratio_of(self, total: Tokens) -> f64 {
+		if total.0 == 0 {
+			0.0
+		} else {
+			(self.0 as f64 / total.0 as f64) * 100.0
+		}
 	}
 }
 
@@ -133,6 +158,77 @@ impl fmt::Display for Tokens {
 		} else {
 			write!(f, "{}", self.0)
 		}
+	}
+}
+
+pub(crate) fn format_duration_secs(total_secs: u64) -> String {
+	let days = total_secs / 86400;
+	let hours = (total_secs % 86400) / 3600;
+	let mins = (total_secs % 3600) / 60;
+	let secs = total_secs % 60;
+
+	if days > 0 {
+		format!("{days}d{hours}h")
+	} else if hours > 0 {
+		format!("{hours}h{mins}m")
+	} else if mins > 0 {
+		if secs > 0 {
+			format!("{mins}m{secs}s")
+		} else {
+			format!("{mins}m")
+		}
+	} else {
+		format!("{secs}s")
+	}
+}
+
+pub(crate) fn parse_color(s: &str) -> Option<DynColors> {
+	use AnsiColors::*;
+
+	if let Some(hex) = s.strip_prefix('#') {
+		return parse_hex_color(hex);
+	}
+
+	if let Some(inner) = s.strip_prefix("rgb(").and_then(|s| s.strip_suffix(')')) {
+		let mut parts = inner.split(',');
+		let r = parts.next()?.trim().parse().ok()?;
+		let g = parts.next()?.trim().parse().ok()?;
+		let b = parts.next()?.trim().parse().ok()?;
+
+		return Some(DynColors::Rgb(r, g, b));
+	}
+
+	match s.to_ascii_lowercase().as_str() {
+		"red" => Some(DynColors::Ansi(Red)),
+		"green" => Some(DynColors::Ansi(Green)),
+		"yellow" => Some(DynColors::Ansi(Yellow)),
+		"blue" => Some(DynColors::Ansi(Blue)),
+		"purple" => Some(DynColors::Ansi(Magenta)),
+		"cyan" => Some(DynColors::Ansi(Cyan)),
+		"orange" => Some(DynColors::Rgb(255, 140, 50)),
+		"white" => Some(DynColors::Ansi(White)),
+		"gray" | "grey" => Some(DynColors::Ansi(BrightBlack)),
+		_ => None,
+	}
+}
+
+fn parse_hex_color(hex: &str) -> Option<DynColors> {
+	match hex.len() {
+		6 => {
+			let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+			let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+			let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+
+			Some(DynColors::Rgb(r, g, b))
+		}
+		3 => {
+			let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
+			let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
+			let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
+
+			Some(DynColors::Rgb(r, g, b))
+		}
+		_ => None,
 	}
 }
 
@@ -218,7 +314,7 @@ mod tests {
 
 	#[test]
 	fn percentage_display_fractional() {
-		assert_eq!(Percentage::from(99.5).to_string(), "99.5%");
+		assert_eq!(Percentage::from(99.5).to_string(), "100%");
 	}
 
 	#[test]
@@ -254,7 +350,7 @@ mod tests {
 
 	#[test]
 	fn percentage_fromstr_display_roundtrip() {
-		let original = Percentage::from(42.5);
+		let original = Percentage::from(42.0);
 		let displayed = original.to_string();
 		let parsed: Percentage = displayed.parse().unwrap();
 		assert_eq!(parsed, original);
@@ -305,5 +401,40 @@ mod tests {
 			Cents::from(10000.0).as_percentage_of(Cents::from(10000.0)),
 			Percentage::from(100.0),
 		);
+	}
+
+	#[test]
+	fn parse_color_named() {
+		assert_eq!(parse_color("red"), Some(DynColors::Ansi(AnsiColors::Red)));
+		assert_eq!(parse_color("cyan"), Some(DynColors::Ansi(AnsiColors::Cyan)));
+		assert_eq!(parse_color("CYAN"), Some(DynColors::Ansi(AnsiColors::Cyan)));
+	}
+
+	#[test]
+	fn parse_color_hex_6() {
+		assert_eq!(parse_color("#64C8DC"), Some(DynColors::Rgb(100, 200, 220)));
+		assert_eq!(parse_color("#FF5050"), Some(DynColors::Rgb(255, 80, 80)));
+	}
+
+	#[test]
+	fn parse_color_hex_3() {
+		assert_eq!(parse_color("#FFF"), Some(DynColors::Rgb(255, 255, 255)));
+		assert_eq!(parse_color("#000"), Some(DynColors::Rgb(0, 0, 0)));
+	}
+
+	#[test]
+	fn parse_color_rgb() {
+		assert_eq!(
+			parse_color("rgb(100, 200, 220)"),
+			Some(DynColors::Rgb(100, 200, 220))
+		);
+		assert_eq!(parse_color("rgb(255,0,0)"), Some(DynColors::Rgb(255, 0, 0)));
+	}
+
+	#[test]
+	fn parse_color_invalid() {
+		assert_eq!(parse_color("not_a_color"), None);
+		assert_eq!(parse_color("#GG0000"), None);
+		assert_eq!(parse_color("rgb(256, 0, 0)"), None);
 	}
 }
