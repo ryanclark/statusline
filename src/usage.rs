@@ -1,6 +1,5 @@
 use crate::browser::Browser;
 use crate::format::Cents;
-use eyre::{Context, Result};
 use owo_colors::OwoColorize;
 use owo_colors::XtermColors;
 use serde::Deserialize;
@@ -10,8 +9,22 @@ use std::time::Duration;
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(crate) fn fetch_usage(org_id: &str, browser: Browser) -> Result<UsageResponse> {
-	let session_key = browser.load_session_key()?;
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum UsageError {
+	#[error("not logged in to claude.ai")]
+	NotLoggedIn,
+	#[error("{0}")]
+	Other(String),
+}
+
+pub(crate) fn fetch_usage(org_id: &str, browser: Browser) -> Result<UsageResponse, UsageError> {
+	let session_key = browser.load_session_key().map_err(|e| {
+		if e.to_string().contains("sessionKey cookie not found") {
+			UsageError::NotLoggedIn
+		} else {
+			UsageError::Other(e.to_string())
+		}
+	})?;
 
 	let url = format!("https://claude.ai/api/organizations/{org_id}/usage");
 
@@ -23,14 +36,15 @@ pub(crate) fn fetch_usage(org_id: &str, browser: Browser) -> Result<UsageRespons
 		.timeout_global(Some(FETCH_TIMEOUT))
 		.build()
 		.call()
-		.context("fetching usage data")?;
+		.map_err(|e| UsageError::Other(format!("fetching usage data: {e}")))?;
 
 	let body = response
 		.into_body()
 		.read_to_string()
-		.context("reading response body")?;
+		.map_err(|e| UsageError::Other(format!("reading response body: {e}")))?;
 
-	serde_json::from_str(&body).context("parsing usage response JSON")
+	serde_json::from_str(&body)
+		.map_err(|e| UsageError::Other(format!("parsing usage response: {e}")))
 }
 
 #[derive(Debug, Deserialize)]

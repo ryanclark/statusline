@@ -1,4 +1,5 @@
-use crate::constants::{FIVE_HOUR_ICON, GRAY, SEVEN_DAY_ICON};
+use crate::constants::{FIVE_HOUR_ICON, GRAY, RED, SEVEN_DAY_ICON, YELLOW};
+use crate::usage::UsageError;
 use crate::format::{ColoredPercentage, Percentage};
 use crate::input::RateLimitPeriod;
 use chrono::Utc;
@@ -65,12 +66,35 @@ pub(super) fn seven_day(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Opt
 }
 
 pub(super) fn extra_usage(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
-	let extra = ctx.usage.and_then(|u| u.extra_usage.as_ref())?;
-	let text = if segment.colors() {
-		extra.to_string()
-	} else {
-		format!("{}/{}", extra.used_credits, extra.monthly_limit)
-	};
+	let result = ctx.usage?;
 
-	Some(apply_style(&text, segment.style()))
+	match result {
+		Ok(resp) => {
+			let extra = resp.extra_usage.as_ref()?;
+			let text = if segment.colors() {
+				extra.to_string()
+			} else {
+				format!("{}/{}", extra.used_credits, extra.monthly_limit)
+			};
+			Some(apply_style(&text, segment.style()))
+		}
+		Err(e) => {
+			let (icon, color, msg) = match e {
+				UsageError::NotLoggedIn => {
+					let icon = if ctx.nerd_font { "\u{f023}" } else { "\u{2205}" };
+					(icon, YELLOW, "log in to claude.ai")
+				}
+				UsageError::Other(msg) => {
+					let icon = if ctx.nerd_font { "\u{f071}" } else { "\u{2a2f}" };
+					(icon, RED, msg.as_str())
+				}
+			};
+			let text = if segment.colors() {
+				format!("{} {}", icon.color(color), msg.color(color))
+			} else {
+				format!("{icon} {msg}")
+			};
+			Some(apply_style(&text, segment.style()))
+		}
+	}
 }

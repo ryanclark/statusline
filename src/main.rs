@@ -97,17 +97,15 @@ fn main() {
 			let segments = settings.segments.unwrap_or_else(default_segments);
 
 			let needs_api = segments.iter().any(SegmentConfig::is_extra_usage);
-			let usage_response = if needs_api {
+			let usage_result = if needs_api {
 				let browser = settings.browser.unwrap_or_else(|| {
 					browser::Browser::detect_or_cached().unwrap_or(browser::Browser::Chrome)
 				});
-				match fetch_usage(&settings.org_id, browser) {
-					Ok(resp) => Some(resp),
-					Err(e) => {
-						eprintln!("{}", format_args!("usage error: {e}").color(RED).dimmed());
-						None
-					}
+				let result = fetch_usage(&settings.org_id, browser);
+				if let Err(e) = &result {
+					eprintln!("{}", format_args!("usage error: {e}").color(RED).dimmed());
 				}
+				Some(result)
 			} else {
 				None
 			};
@@ -119,7 +117,7 @@ fn main() {
 				segments: &segments,
 				ctx: RenderContext {
 					input: &input,
-					usage: usage_response.as_ref(),
+					usage: usage_result.as_ref().map(|r| r.as_ref()),
 					git: git_cache.as_ref(),
 					five_threshold: five,
 					seven_threshold: seven,

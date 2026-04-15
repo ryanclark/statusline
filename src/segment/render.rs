@@ -214,6 +214,28 @@ mod tests {
 	}
 
 	#[test]
+	fn render_extra_usage_not_logged_in_shows_login() {
+		let input = default_input();
+		let err = crate::usage::UsageError::NotLoggedIn;
+		let mut ctx = default_ctx(&input);
+		ctx.usage = Some(Err(&err));
+		let seg = SegmentConfig::Simple(SegmentType::ExtraUsage);
+		let output = strip_ansi(&render_segment(&seg, &ctx).unwrap());
+		assert_eq!(output, "\u{2205} log in to claude.ai");
+	}
+
+	#[test]
+	fn render_extra_usage_other_error_shows_message() {
+		let input = default_input();
+		let err = crate::usage::UsageError::Other("network timeout".to_owned());
+		let mut ctx = default_ctx(&input);
+		ctx.usage = Some(Err(&err));
+		let seg = SegmentConfig::Simple(SegmentType::ExtraUsage);
+		let output = strip_ansi(&render_segment(&seg, &ctx).unwrap());
+		assert_eq!(output, "\u{2a2f} network timeout");
+	}
+
+	#[test]
 	fn render_cost() {
 		let mut input = default_input();
 		input.cost = CostInfo {

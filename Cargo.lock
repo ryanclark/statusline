@@ -792,6 +792,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "strip-ansi-escapes",
+ "thiserror",
  "ureq",
 ]
 

@@ -7,7 +7,7 @@ mod render;
 
 use crate::format::{Percentage, parse_color};
 use crate::input::InputData;
-use crate::usage::UsageResponse;
+use crate::usage::{UsageError, UsageResponse};
 use owo_colors::{DynColors, OwoColorize};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -197,7 +197,7 @@ pub(crate) fn default_segments() -> Vec<SegmentConfig> {
 
 pub(crate) struct RenderContext<'a> {
 	pub(crate) input: &'a InputData,
-	pub(crate) usage: Option<&'a UsageResponse>,
+	pub(crate) usage: Option<Result<&'a UsageResponse, &'a UsageError>>,
 	pub(crate) git: Option<&'a GitCache>,
 	pub(crate) five_threshold: Percentage,
 	pub(crate) seven_threshold: Percentage,

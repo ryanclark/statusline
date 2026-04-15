@@ -10,6 +10,7 @@ license = "MIT"
 [dependencies]
 clap = { version = "4.6.0", features = ["derive"] }
 eyre = "0.6.12"
+thiserror = "2"
 owo-colors = "4.3.0"
 security-framework = "3"
 rusqlite = "0.31"
