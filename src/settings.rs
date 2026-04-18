@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct Settings {
-	pub(crate) org_id: String,
 	pub(crate) five_hour_reset_threshold: Percentage,
 	pub(crate) seven_day_reset_threshold: Percentage,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -30,12 +29,10 @@ impl Settings {
 	}
 
 	pub(crate) fn ensure(
-		org_id: &str,
 		five_hour_reset_threshold: Percentage,
 		seven_day_reset_threshold: Percentage,
 	) -> Result<Self> {
 		let settings = Self {
-			org_id: org_id.to_owned(),
 			five_hour_reset_threshold,
 			seven_day_reset_threshold,
 			segments: None,
@@ -68,7 +65,6 @@ mod tests {
 	#[test]
 	fn settings_roundtrip_serde() {
 		let settings = Settings {
-			org_id: "org-abc123".to_owned(),
 			five_hour_reset_threshold: 70.0.into(),
 			seven_day_reset_threshold: 100.0.into(),
 			segments: None,
@@ -81,7 +77,6 @@ mod tests {
 		let json = serde_json::to_string(&settings).unwrap();
 		let loaded: Settings = serde_json::from_str(&json).unwrap();
 
-		assert_eq!(loaded.org_id, "org-abc123");
 		assert_eq!(loaded.five_hour_reset_threshold, 70.0.into());
 		assert_eq!(loaded.seven_day_reset_threshold, 100.0.into());
 		assert!(!loaded.skip_update_check);
@@ -90,20 +85,29 @@ mod tests {
 	#[test]
 	fn settings_deserializes_pretty_json() {
 		let json = r#"{
-			"org_id": "org-test",
 			"five_hour_reset_threshold": 50,
 			"seven_day_reset_threshold": 80
 		}"#;
 
 		let loaded: Settings = serde_json::from_str(json).unwrap();
-		assert_eq!(loaded.org_id, "org-test");
 		assert_eq!(loaded.five_hour_reset_threshold, 50.0.into());
 		assert_eq!(loaded.seven_day_reset_threshold, 80.0.into());
 	}
 
 	#[test]
-	fn settings_rejects_missing_fields() {
-		let json = r#"{"org_id": "org-test"}"#;
+	fn settings_ignores_legacy_org_id() {
+		let json = r#"{
+			"org_id": "legacy-value",
+			"five_hour_reset_threshold": 70,
+			"seven_day_reset_threshold": 100
+		}"#;
+		let loaded: Settings = serde_json::from_str(json).unwrap();
+		assert_eq!(loaded.five_hour_reset_threshold, 70.0.into());
+	}
+
+	#[test]
+	fn settings_rejects_missing_required_fields() {
+		let json = r#"{}"#;
 		let err = serde_json::from_str::<Settings>(json).unwrap_err();
 		let msg = err.to_string();
 		assert!(
@@ -115,7 +119,6 @@ mod tests {
 	#[test]
 	fn settings_backward_compat_no_segments() {
 		let json = r#"{
-			"org_id": "org-test",
 			"five_hour_reset_threshold": 70,
 			"seven_day_reset_threshold": 100
 		}"#;
@@ -127,7 +130,6 @@ mod tests {
 	#[test]
 	fn settings_with_segments() {
 		let json = r#"{
-			"org_id": "org-test",
 			"five_hour_reset_threshold": 70,
 			"seven_day_reset_threshold": 100,
 			"segments": ["context_percentage", "divider", "model"],
@@ -141,7 +143,6 @@ mod tests {
 	#[test]
 	fn settings_segments_not_serialized_when_none() {
 		let settings = Settings {
-			org_id: "org-test".to_owned(),
 			five_hour_reset_threshold: 70.0.into(),
 			seven_day_reset_threshold: 100.0.into(),
 			segments: None,
@@ -159,7 +160,6 @@ mod tests {
 	#[test]
 	fn settings_skip_update_check_default_false() {
 		let json = r#"{
-			"org_id": "org-test",
 			"five_hour_reset_threshold": 70,
 			"seven_day_reset_threshold": 100
 		}"#;
@@ -170,7 +170,6 @@ mod tests {
 	#[test]
 	fn settings_skip_update_check_explicit_true() {
 		let json = r#"{
-			"org_id": "org-test",
 			"five_hour_reset_threshold": 70,
 			"seven_day_reset_threshold": 100,
 			"skip_update_check": true
@@ -182,7 +181,6 @@ mod tests {
 	#[test]
 	fn settings_with_browser() {
 		let json = r#"{
-			"org_id": "org-test",
 			"five_hour_reset_threshold": 70,
 			"seven_day_reset_threshold": 100,
 			"browser": "brave"
@@ -194,7 +192,6 @@ mod tests {
 	#[test]
 	fn settings_backward_compat_no_browser() {
 		let json = r#"{
-			"org_id": "org-test",
 			"five_hour_reset_threshold": 70,
 			"seven_day_reset_threshold": 100
 		}"#;
