@@ -71,11 +71,7 @@ pub(super) fn extra_usage(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> O
 	match result {
 		Ok(resp) => {
 			let extra = resp.extra_usage.as_ref()?;
-			let text = if segment.colors() {
-				extra.to_string()
-			} else {
-				format!("{}/{}", extra.used_credits, extra.monthly_limit)
-			};
+			let text = extra.format(segment.colors())?;
 			Some(apply_style(&text, segment.style()))
 		}
 		Err(e) => {

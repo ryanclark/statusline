@@ -3,8 +3,6 @@ use crate::format::Cents;
 use owo_colors::OwoColorize;
 use owo_colors::XtermColors;
 use serde::Deserialize;
-use std::fmt;
-use std::fmt::Formatter;
 use std::time::Duration;
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -58,28 +56,27 @@ pub(crate) struct UsageResponse {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ExtraUsage {
-	pub(crate) monthly_limit: Cents,
-	pub(crate) used_credits: Cents,
+	#[serde(default)]
+	pub(crate) monthly_limit: Option<Cents>,
+	#[serde(default)]
+	pub(crate) used_credits: Option<Cents>,
 }
 
-impl fmt::Display for ExtraUsage {
-	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-		let percentage = self.used_credits.as_percentage_of(self.monthly_limit);
+impl ExtraUsage {
+	pub(crate) fn format(&self, colored: bool) -> Option<String> {
+		let monthly_limit = self.monthly_limit?;
+		let used_credits = self.used_credits?;
 
-		write!(
-			f,
-			"{}",
-			format_args!("{}", self.used_credits)
-				.color(percentage.color())
-				.bold()
-		)?;
-		write!(
-			f,
-			"{}",
-			format_args!("/{}", self.monthly_limit).color(XtermColors::LightGray)
-		)?;
-
-		Ok(())
+		if colored {
+			let percentage = used_credits.as_percentage_of(monthly_limit);
+			Some(format!(
+				"{}{}",
+				format_args!("{used_credits}").color(percentage.color()).bold(),
+				format_args!("/{monthly_limit}").color(XtermColors::LightGray),
+			))
+		} else {
+			Some(format!("{used_credits}/{monthly_limit}"))
+		}
 	}
 }
 
@@ -125,10 +122,10 @@ mod tests {
 	#[test]
 	fn extra_usage_zero_limit_shows_dollar_amounts() {
 		let extra = ExtraUsage {
-			monthly_limit: 0.0.into(),
-			used_credits: 500.0.into(),
+			monthly_limit: Some(0.0.into()),
+			used_credits: Some(500.0.into()),
 		};
-		let output = strip_ansi(format!("{extra}"));
+		let output = strip_ansi(extra.format(true).unwrap());
 		assert!(
 			output.contains("$5"),
 			"should show used credits, got: {output}"
@@ -142,10 +139,29 @@ mod tests {
 	#[test]
 	fn extra_usage_normal_display() {
 		let extra = ExtraUsage {
-			monthly_limit: 10000.0.into(),
-			used_credits: 2500.0.into(),
+			monthly_limit: Some(10000.0.into()),
+			used_credits: Some(2500.0.into()),
 		};
-		let output = strip_ansi(format!("{extra}"));
+		let output = strip_ansi(extra.format(true).unwrap());
 		assert_eq!(output, "$25/$100");
+	}
+
+	#[test]
+	fn extra_usage_null_fields_format_returns_none() {
+		let extra = ExtraUsage {
+			monthly_limit: None,
+			used_credits: None,
+		};
+		assert!(extra.format(true).is_none());
+		assert!(extra.format(false).is_none());
+	}
+
+	#[test]
+	fn usage_response_deserializes_null_extra_fields() {
+		let json = r#"{"extra_usage": {"monthly_limit": null, "used_credits": null}}"#;
+		let resp: UsageResponse = serde_json::from_str(json).unwrap();
+		let extra = resp.extra_usage.unwrap();
+		assert!(extra.monthly_limit.is_none());
+		assert!(extra.used_credits.is_none());
 	}
 }
