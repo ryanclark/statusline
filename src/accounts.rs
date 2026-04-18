@@ -20,13 +20,10 @@ pub(crate) struct AccountEntry {
 	#[serde(default)]
 	pub(crate) color: Option<String>,
 	#[serde(default)]
-	#[allow(dead_code)]
 	pub(crate) browser: Option<Browser>,
 	#[serde(default)]
-	#[allow(dead_code)]
 	pub(crate) profile: Option<String>,
 	#[serde(default)]
-	#[allow(dead_code)]
 	pub(crate) segments: Option<Vec<SegmentConfig>>,
 }
 

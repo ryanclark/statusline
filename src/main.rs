@@ -36,9 +36,6 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
 	Install {
-		#[arg(short, long)]
-		org_id: String,
-
 		#[arg(short, default_value = "70", value_name = "N")]
 		five_hour_reset_threshold: Percentage,
 
@@ -52,15 +49,10 @@ fn main() {
 
 	match cli.command {
 		Some(Commands::Install {
-			org_id,
 			five_hour_reset_threshold,
 			seven_day_reset_threshold,
 		}) => {
-			if let Err(e) = install(
-				&org_id,
-				five_hour_reset_threshold,
-				seven_day_reset_threshold,
-			) {
+			if let Err(e) = install(five_hour_reset_threshold, seven_day_reset_threshold) {
 				eprintln!("{} {e:?}", "Installation failed:".red().bold());
 			}
 		}
@@ -102,18 +94,42 @@ fn main() {
 				None
 			};
 
-			let segments = settings.segments.unwrap_or_else(default_segments);
+			let accounts_file = accounts::load();
+			let identity = accounts::live_identity();
+			let account = match (&identity, &accounts_file) {
+				(Some((email, org)), Some(file)) => accounts::find_for_identity(file, email, org),
+				_ => None,
+			};
+
+			let segments = account
+				.and_then(|a| a.segments.clone())
+				.or(settings.segments)
+				.unwrap_or_else(default_segments);
 
 			let needs_api = segments.iter().any(SegmentConfig::is_extra_usage);
 			let usage_result = if needs_api {
-				let browser = settings.browser.unwrap_or_else(|| {
-					browser::Browser::detect_or_cached().unwrap_or(browser::Browser::Chrome)
-				});
-				let result = fetch_usage(&settings.org_id, browser, None);
-				if let Err(e) = &result {
-					eprintln!("{}", format_args!("usage error: {e}").color(RED).dimmed());
+				match &identity {
+					Some((_, org_uuid)) => {
+						let browser = account
+							.and_then(|a| a.browser)
+							.or(settings.browser)
+							.unwrap_or_else(|| {
+								browser::Browser::detect_or_cached()
+									.unwrap_or(browser::Browser::Chrome)
+							});
+						let profile = account.and_then(|a| a.profile.as_deref());
+						let result = fetch_usage(org_uuid, browser, profile);
+						if let Err(e) = &result {
+							eprintln!("{}", format_args!("usage error: {e}").color(RED).dimmed());
+						}
+						Some(result)
+					}
+					None => {
+						let err = usage::UsageError::Other("no active Claude account".to_owned());
+						eprintln!("{}", format_args!("usage error: {err}").color(RED).dimmed());
+						Some(Err(err))
+					}
 				}
-				Some(result)
 			} else {
 				None
 			};

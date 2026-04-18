@@ -6,11 +6,10 @@ use owo_colors::OwoColorize;
 use std::fs;
 
 pub(crate) fn install(
-	org_id: &str,
 	five_hour_reset_threshold: Percentage,
 	seven_day_reset_threshold: Percentage,
 ) -> Result<()> {
-	Settings::ensure(org_id, five_hour_reset_threshold, seven_day_reset_threshold)?;
+	Settings::ensure(five_hour_reset_threshold, seven_day_reset_threshold)?;
 
 	println!("{} Saved settings", "✓".green());
 
