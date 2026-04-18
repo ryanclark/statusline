@@ -14,7 +14,7 @@ pub(crate) enum Browser {
 }
 
 struct ChromiumConfig {
-	db_rel_path: &'static str,
+	cookies_base_dir: &'static str,
 	keychain_service: &'static str,
 	keychain_user: &'static str,
 	#[cfg(not(feature = "codesigned"))]
@@ -22,7 +22,7 @@ struct ChromiumConfig {
 }
 
 const CHROME_CONFIG: ChromiumConfig = ChromiumConfig {
-	db_rel_path: "Library/Application Support/Google/Chrome/Default/Cookies",
+	cookies_base_dir: "Library/Application Support/Google/Chrome",
 	keychain_service: "Chrome Safe Storage",
 	keychain_user: "Chrome",
 	#[cfg(not(feature = "codesigned"))]
@@ -30,7 +30,7 @@ const CHROME_CONFIG: ChromiumConfig = ChromiumConfig {
 };
 
 const BRAVE_CONFIG: ChromiumConfig = ChromiumConfig {
-	db_rel_path: "Library/Application Support/BraveSoftware/Brave-Browser/Default/Cookies",
+	cookies_base_dir: "Library/Application Support/BraveSoftware/Brave-Browser",
 	keychain_service: "Brave Safe Storage",
 	keychain_user: "Brave",
 	#[cfg(not(feature = "codesigned"))]
@@ -98,11 +98,11 @@ impl Browser {
 		Ok(Self::Chrome)
 	}
 
-	pub(crate) fn load_session_key(self) -> Result<String> {
+	pub(crate) fn load_session_key(self, profile: Option<&str>) -> Result<String> {
 		match self {
-			Self::Chrome => chromium_session_key(&CHROME_CONFIG),
-			Self::Brave => chromium_session_key(&BRAVE_CONFIG),
-			Self::Firefox => firefox_session_key(),
+			Self::Chrome => chromium_session_key(&CHROME_CONFIG, profile),
+			Self::Brave => chromium_session_key(&BRAVE_CONFIG, profile),
+			Self::Firefox => firefox_session_key(profile),
 		}
 	}
 }
@@ -133,10 +133,13 @@ fn parse_bundle_id(block: &str) -> Option<Browser> {
 	None
 }
 
-fn chromium_session_key(config: &ChromiumConfig) -> Result<String> {
+fn chromium_session_key(config: &ChromiumConfig, profile: Option<&str>) -> Result<String> {
 	let home = home_dir()?;
-
-	let db_path = home.join(config.db_rel_path);
+	let profile_dir = profile.unwrap_or("Default");
+	let db_path = home
+		.join(config.cookies_base_dir)
+		.join(profile_dir)
+		.join("Cookies");
 	let conn = rusqlite::Connection::open_with_flags(
 		&db_path,
 		rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -157,13 +160,18 @@ fn chromium_session_key(config: &ChromiumConfig) -> Result<String> {
 	decrypt_cookie(&password, &encrypted_value)
 }
 
-fn firefox_session_key() -> Result<String> {
+fn firefox_session_key(profile: Option<&str>) -> Result<String> {
 	let home = home_dir()?;
 	let firefox_dir = home.join("Library/Application Support/Firefox");
-	let profiles_ini = firefox_dir.join("profiles.ini");
 
-	let profile_path = default_firefox_profile(&profiles_ini)?;
-	let db_path = firefox_dir.join(profile_path).join("cookies.sqlite");
+	let profile_path = match profile {
+		Some(p) => p.to_owned(),
+		None => {
+			let profiles_ini = firefox_dir.join("profiles.ini");
+			default_firefox_profile(&profiles_ini)?
+		}
+	};
+	let db_path = firefox_dir.join(&profile_path).join("cookies.sqlite");
 
 	let conn = rusqlite::Connection::open_with_flags(
 		&db_path,
@@ -318,6 +326,28 @@ fn decrypt_cookie(password: &[u8], encrypted_value: &[u8]) -> Result<String> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn chromium_default_profile_path() {
+		let path = std::path::Path::new(CHROME_CONFIG.cookies_base_dir)
+			.join("Default")
+			.join("Cookies");
+		assert_eq!(
+			path.to_str().unwrap(),
+			"Library/Application Support/Google/Chrome/Default/Cookies"
+		);
+	}
+
+	#[test]
+	fn chromium_named_profile_path() {
+		let path = std::path::Path::new(CHROME_CONFIG.cookies_base_dir)
+			.join("Profile 2")
+			.join("Cookies");
+		assert_eq!(
+			path.to_str().unwrap(),
+			"Library/Application Support/Google/Chrome/Profile 2/Cookies"
+		);
+	}
 
 	#[test]
 	fn decrypt_cookie_rejects_too_short() {
