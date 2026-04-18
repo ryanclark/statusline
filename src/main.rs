@@ -96,7 +96,11 @@ fn main() {
 				})
 			};
 			let is_fresh = input.context_window.used_percentage == 0.0.into();
-			let update = if is_fresh { update::check() } else { None };
+			let update = if is_fresh && !settings.skip_update_check {
+				update::check()
+			} else {
+				None
+			};
 
 			let segments = settings.segments.unwrap_or_else(default_segments);
 
