@@ -1,3 +1,4 @@
+mod accounts;
 mod browser;
 mod constants;
 mod context_window;
@@ -6,10 +7,11 @@ mod input;
 mod install;
 mod segment;
 mod settings;
+mod update;
 mod usage;
 mod util;
 
-use crate::constants::{DIVIDER, RED};
+use crate::constants::{DIVIDER, GRAY, GREEN, RED};
 use crate::input::InputData;
 use crate::install::install;
 use crate::segment::{RenderContext, SegmentConfig, SegmentLine, default_segments, load_git_cache};
@@ -84,15 +86,17 @@ fn main() {
 				.unwrap_or(settings.seven_day_reset_threshold);
 
 			let stdin = std::io::stdin();
-			let input = if std::io::IsTerminal::is_terminal(&stdin) {
+			let is_tty = std::io::IsTerminal::is_terminal(&stdin);
+			let input = if is_tty {
 				InputData::default()
 			} else {
 				InputData::from_reader(stdin.lock()).unwrap_or_else(|e| {
 					eprintln!("{} {e}", "failed to parse input".red().bold());
-
 					InputData::default()
 				})
 			};
+			let is_fresh = input.context_window.used_percentage == 0.0.into();
+			let update = if is_fresh { update::check() } else { None };
 
 			let segments = settings.segments.unwrap_or_else(default_segments);
 
@@ -126,7 +130,25 @@ fn main() {
 				},
 			};
 
-			print!("{line}");
+			if let Some(update) = update {
+				let update_msg = format!(
+					"{} {} {}",
+					format_args!("v{} available", update.version).color(GREEN),
+					divider.color(GRAY),
+					"brew upgrade statusline".dimmed()
+				);
+				let rendered = format!("{line}");
+				if rendered.is_empty() {
+					print!("{update_msg}");
+				} else {
+					print!(
+						"{rendered} {} {update_msg}",
+						divider.color(GRAY)
+					);
+				}
+			} else {
+				print!("{line}");
+			}
 		}
 	}
 }
