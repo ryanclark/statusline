@@ -5,6 +5,7 @@ mod context_window;
 mod format;
 mod input;
 mod install;
+mod profiles;
 mod segment;
 mod settings;
 mod update;
@@ -42,6 +43,10 @@ enum Commands {
 		#[arg(short, default_value = "100", value_name = "N")]
 		seven_day_reset_threshold: Percentage,
 	},
+	Profiles {
+		#[arg(short, long)]
+		browser: Option<browser::Browser>,
+	},
 }
 
 fn main() {
@@ -54,6 +59,18 @@ fn main() {
 		}) => {
 			if let Err(e) = install(five_hour_reset_threshold, seven_day_reset_threshold) {
 				eprintln!("{} {e:?}", "Installation failed:".red().bold());
+			}
+		}
+		Some(Commands::Profiles { browser }) => {
+			let browser = browser.unwrap_or_else(|| {
+				browser::Browser::detect_or_cached().unwrap_or(browser::Browser::Chrome)
+			});
+			match profiles::list(browser) {
+				Ok(rows) => profiles::print(&rows),
+				Err(e) => {
+					eprintln!("{} {e:?}", "Listing profiles failed:".red().bold());
+					std::process::exit(1);
+				}
 			}
 		}
 		None => {

@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
+#[clap(rename_all = "lowercase")]
 pub(crate) enum Browser {
 	Chrome,
 	Brave,
