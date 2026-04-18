@@ -109,7 +109,7 @@ fn main() {
 				let browser = settings.browser.unwrap_or_else(|| {
 					browser::Browser::detect_or_cached().unwrap_or(browser::Browser::Chrome)
 				});
-				let result = fetch_usage(&settings.org_id, browser);
+				let result = fetch_usage(&settings.org_id, browser, None);
 				if let Err(e) = &result {
 					eprintln!("{}", format_args!("usage error: {e}").color(RED).dimmed());
 				}
