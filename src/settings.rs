@@ -18,6 +18,8 @@ pub(crate) struct Settings {
 	pub(crate) nerd_font: bool,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) browser: Option<Browser>,
+	#[serde(default)]
+	pub(crate) skip_update_check: bool,
 }
 
 impl Settings {
@@ -40,6 +42,7 @@ impl Settings {
 			divider: None,
 			nerd_font: false,
 			browser: None,
+			skip_update_check: false,
 		};
 
 		let path = settings_path()?;
@@ -72,6 +75,7 @@ mod tests {
 			divider: None,
 			nerd_font: false,
 			browser: None,
+			skip_update_check: false,
 		};
 
 		let json = serde_json::to_string(&settings).unwrap();
@@ -80,6 +84,7 @@ mod tests {
 		assert_eq!(loaded.org_id, "org-abc123");
 		assert_eq!(loaded.five_hour_reset_threshold, 70.0.into());
 		assert_eq!(loaded.seven_day_reset_threshold, 100.0.into());
+		assert!(!loaded.skip_update_check);
 	}
 
 	#[test]
@@ -143,11 +148,35 @@ mod tests {
 			divider: None,
 			nerd_font: false,
 			browser: None,
+			skip_update_check: false,
 		};
 		let json = serde_json::to_string(&settings).unwrap();
 		assert!(!json.contains("segments"));
 		assert!(!json.contains("divider"));
 		assert!(!json.contains("browser"));
+	}
+
+	#[test]
+	fn settings_skip_update_check_default_false() {
+		let json = r#"{
+			"org_id": "org-test",
+			"five_hour_reset_threshold": 70,
+			"seven_day_reset_threshold": 100
+		}"#;
+		let loaded: Settings = serde_json::from_str(json).unwrap();
+		assert!(!loaded.skip_update_check);
+	}
+
+	#[test]
+	fn settings_skip_update_check_explicit_true() {
+		let json = r#"{
+			"org_id": "org-test",
+			"five_hour_reset_threshold": 70,
+			"seven_day_reset_threshold": 100,
+			"skip_update_check": true
+		}"#;
+		let loaded: Settings = serde_json::from_str(json).unwrap();
+		assert!(loaded.skip_update_check);
 	}
 
 	#[test]
