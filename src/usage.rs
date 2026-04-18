@@ -18,7 +18,7 @@ pub(crate) enum UsageError {
 }
 
 pub(crate) fn fetch_usage(org_id: &str, browser: Browser) -> Result<UsageResponse, UsageError> {
-	let session_key = browser.load_session_key().map_err(|e| {
+	let session_key = browser.load_session_key(None).map_err(|e| {
 		if e.to_string().contains("sessionKey cookie not found") {
 			UsageError::NotLoggedIn
 		} else {
