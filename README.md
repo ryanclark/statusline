@@ -55,13 +55,11 @@ make install
 
 ## Setup
 
-Find your organization ID from [claude.ai/settings](https://claude.ai/settings) (it's in the URL), then run:
-
 ```
-statusline install -o <org-id>
+statusline install
 ```
 
-This saves your org ID and configures Claude Code's `settings.json` to use statusline.
+This saves default settings and wires up Claude Code's `settings.json` to call `statusline`. The organization shown in the `extra_usage` segment is read from Claude Code's own `~/.claude.json` at runtime, so it always matches the currently-active account.
 
 ### Keychain access (extra_usage only)
 
@@ -84,7 +82,6 @@ Add a `segments` array to `~/.statusline/settings.json` to control what's shown 
 
 ```json
 {
-  "org_id": "...",
   "five_hour_reset_threshold": 70,
   "seven_day_reset_threshold": 100,
   "segments": [
@@ -163,6 +160,7 @@ If `segments` is not set, the default layout is used: `context_percentage`, `tot
 | `vim_mode` | Vim mode (NORMAL, INSERT, etc.) |
 | `agent_name` | Active agent name |
 | `worktree` | Worktree name |
+| `account` | Current Claude account nickname (from `~/.statusline/accounts.json`, colored per entry) |
 
 #### Layout
 
@@ -202,6 +200,12 @@ Colors can be specified as named colors (`red`, `cyan`, `yellow`, `green`, `blue
 | `dirty` | bool or string | `false` | Show dirty indicator. `true` for default `*`, or a custom string |
 | `dirty_color` | string | `red` | Color of the dirty indicator |
 
+#### account options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `capitalize` | bool | `true` | Capitalise the first letter of the nickname |
+
 ### Nerd Font icons
 
 If you use a [Nerd Font](https://www.nerdfonts.com/), enable richer icons by setting `nerd_font` in `~/.statusline/settings.json`:
@@ -228,6 +232,50 @@ Set the `divider` field in settings to change the default divider character:
 }
 ```
 
+### Per-account overrides
+
+If you keep multiple Claude Code accounts, you can point each one at its own browser profile and even its own layout. Create `~/.statusline/accounts.json`:
+
+```json
+{
+  "accounts": [
+    {
+      "nickname": "work",
+      "email": "ryan@work.com",
+      "organization_uuid": "work-org-uuid",
+      "color": "cyan",
+      "browser": "chrome",
+      "profile": "Profile 2",
+      "segments": ["context_percentage", "divider", "extra_usage"]
+    },
+    {
+      "nickname": "personal",
+      "email": "ryan@home.com",
+      "organization_uuid": "personal-org-uuid"
+    }
+  ]
+}
+```
+
+When the active Claude Code account matches an entry, statusline uses that entry's `browser` and `profile` to read cookies. When `segments` is present on the entry, it replaces the global layout for that account. Missing fields fall back to global settings.
+
+To list the browser profiles available on your machine:
+
+```
+statusline profiles
+statusline profiles --browser chrome
+```
+
+### Disabling the update check
+
+Set `skip_update_check` in `~/.statusline/settings.json` to suppress the once-a-day update check and the update banner:
+
+```json
+{
+  "skip_update_check": true
+}
+```
+
 ### Data sources
 
 Most segments read from the JSON that Claude Code pipes via stdin — no external calls needed. The exceptions:
@@ -248,7 +296,7 @@ statusline -f 50 -s 80
 Or set them permanently during install:
 
 ```
-statusline install -o <org-id> -f 50 -s 80
+statusline install -f 50 -s 80
 ```
 
 The defaults are `-f 70` (show 5-hour reset countdown above 70%) and `-s 100` (never show 7-day reset countdown). Setting a threshold to `100` effectively disables the countdown for that period.
