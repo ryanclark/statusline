@@ -54,8 +54,7 @@ mod tests {
 
 	#[test]
 	fn total_input_tokens_from_json() {
-		let cw = new(
-			r#"{
+		let cw = new(r#"{
 			"context_window": {
 				"used_percentage": 42.0,
 				"total_input_tokens": 600,
@@ -66,8 +65,7 @@ mod tests {
 					"cache_read_input_tokens": 300
 				}
 			}
-		}"#,
-		);
+		}"#);
 		assert_eq!(cw.total_input_tokens, 600.into());
 	}
 

@@ -133,7 +133,8 @@ fn main() {
 							.and_then(|a| a.browser)
 							.or(settings.browser)
 							.unwrap_or_else(|| {
-								browser::Browser::detect_or_cached().unwrap_or(browser::Browser::Chrome)
+								browser::Browser::detect_or_cached()
+									.unwrap_or(browser::Browser::Chrome)
 							});
 						let profile = account.and_then(|a| a.profile.as_deref());
 						Some((org_uuid.as_str(), browser, profile))
@@ -164,7 +165,8 @@ fn main() {
 			};
 
 			let credits_result = if needs_credits {
-				resolved.map(|(org_uuid, browser, profile)| fetch_credits(org_uuid, browser, profile))
+				resolved
+					.map(|(org_uuid, browser, profile)| fetch_credits(org_uuid, browser, profile))
 			} else {
 				None
 			};

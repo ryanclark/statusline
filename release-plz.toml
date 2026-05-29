@@ -3,3 +3,6 @@ publish = false
 git_tag_name = "v{{ version }}"
 git_only = true
 release_always = false
+# Only cut a release when there's a user-facing change. ci/chore/docs/etc.
+# alone won't trigger a version bump or a release PR.
+release_commits = "^(feat|fix)"

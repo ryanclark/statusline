@@ -53,12 +53,10 @@ impl Browser {
 				.and_then(|m| SystemTime::now().duration_since(m).ok())
 				.is_some_and(|age| age < CACHE_TTL);
 
-			if fresh {
-				if let Ok(cached) = std::fs::read_to_string(&cache_path) {
-					let cached = cached.trim();
-					if let Ok(browser) = serde_json::from_str::<Self>(&format!("\"{cached}\"")) {
-						return Ok(browser);
-					}
+			if fresh && let Ok(cached) = std::fs::read_to_string(&cache_path) {
+				let cached = cached.trim();
+				if let Ok(browser) = serde_json::from_str::<Self>(&format!("\"{cached}\"")) {
+					return Ok(browser);
 				}
 			}
 		}
@@ -76,8 +74,8 @@ impl Browser {
 
 	fn detect() -> Result<Self> {
 		let home = home_dir()?;
-		let plist_path =
-			home.join("Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure");
+		let plist_path = home
+			.join("Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure");
 
 		let output = std::process::Command::new("defaults")
 			.args(["read", &plist_path.to_string_lossy(), "LSHandlers"])
@@ -203,14 +201,14 @@ fn default_firefox_profile(profiles_ini: &Path) -> Result<String> {
 		let line = line.trim();
 
 		if line.starts_with('[') && line.ends_with(']') {
-			if current_section.starts_with("Profile") {
-				if let Some(ref path) = section_path {
-					if first_profile_path.is_none() {
-						first_profile_path = Some(path.clone());
-					}
-					if section_is_default {
-						default_profile_path = Some(path.clone());
-					}
+			if current_section.starts_with("Profile")
+				&& let Some(ref path) = section_path
+			{
+				if first_profile_path.is_none() {
+					first_profile_path = Some(path.clone());
+				}
+				if section_is_default {
+					default_profile_path = Some(path.clone());
 				}
 			}
 
@@ -237,14 +235,14 @@ fn default_firefox_profile(profiles_ini: &Path) -> Result<String> {
 		}
 	}
 
-	if current_section.starts_with("Profile") {
-		if let Some(ref path) = section_path {
-			if first_profile_path.is_none() {
-				first_profile_path = Some(path.clone());
-			}
-			if section_is_default {
-				default_profile_path = Some(path.clone());
-			}
+	if current_section.starts_with("Profile")
+		&& let Some(ref path) = section_path
+	{
+		if first_profile_path.is_none() {
+			first_profile_path = Some(path.clone());
+		}
+		if section_is_default {
+			default_profile_path = Some(path.clone());
 		}
 	}
 
@@ -319,9 +317,8 @@ fn decrypt_cookie(password: &[u8], encrypted_value: &[u8]) -> Result<String> {
 
 			match String::from_utf8(plaintext.to_vec()) {
 				Ok(s) => Ok(s),
-				Err(_) if plaintext.len() > 32 => {
-					String::from_utf8(plaintext[32..].to_vec()).context("decrypted cookie is not valid UTF-8")
-				}
+				Err(_) if plaintext.len() > 32 => String::from_utf8(plaintext[32..].to_vec())
+					.context("decrypted cookie is not valid UTF-8"),
 				Err(e) => Err(e).context("decrypted cookie is not valid UTF-8"),
 			}
 		}
@@ -338,7 +335,7 @@ mod tests {
 
 	#[test]
 	fn chromium_default_profile_path() {
-		let path = std::path::Path::new(CHROME_CONFIG.cookies_base_dir)
+		let path = Path::new(CHROME_CONFIG.cookies_base_dir)
 			.join("Default")
 			.join("Cookies");
 		assert_eq!(
@@ -349,7 +346,7 @@ mod tests {
 
 	#[test]
 	fn chromium_named_profile_path() {
-		let path = std::path::Path::new(CHROME_CONFIG.cookies_base_dir)
+		let path = Path::new(CHROME_CONFIG.cookies_base_dir)
 			.join("Profile 2")
 			.join("Cookies");
 		assert_eq!(

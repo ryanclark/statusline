@@ -2,7 +2,7 @@
 name = "statusline"
 version = "0.1.4"
 edition = "2024"
-rust-version = "1.85.0"
+rust-version = "1.91"
 description = "Claude Code status line with context window and usage tracking"
 repository = "https://github.com/ryanclark/statusline"
 license = "MIT"
@@ -28,17 +28,28 @@ dirs = "6.0.0"
 [features]
 codesigned = []
 
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.release]
-lto = true
+lto = "thin"
 codegen-units = 1
 strip = true
 
 [dev-dependencies]
 strip-ansi-escapes = "0.2.1"
 
+# Canonical lint set shared across these tools (keep in sync with clankerbox).
 [lints.rust]
+# Lint groups need a lower priority than individual lints so the latter can
+# override the group (clippy::lint_groups_priority).
+rust_2018_idioms = { level = "warn", priority = -1 }
 unsafe_code = "forbid"
 unused_must_use = "deny"
+unused_qualifications = "warn"
 
 [lints.clippy]
 # Correctness & safety
@@ -70,6 +81,14 @@ ref_option_ref = "warn"
 semicolon_if_nothing_returned = "warn"
 unnested_or_patterns = "warn"
 unused_self = "warn"
+
+# Debugging leftovers & stubs
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+
+# Imports
+wildcard_imports = "warn"
 
 # Strings & allocations
 inefficient_to_string = "warn"

@@ -1,0 +1,47 @@
+# cargo-deny configuration — supply-chain checks for the dependency tree.
+# Run locally with `cargo deny check`; CI runs the same in .github/workflows/ci.yml.
+
+[graph]
+# Only evaluate the platforms we actually build/ship — keeps windows-only crates
+# (and their licenses / duplicate versions) out of the graph.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]
+
+[advisories]
+version = 2
+# Add an entry here only with a comment + link justifying why it's silenced.
+ignore = []
+
+[licenses]
+version = 2
+# Permissive licenses present in the dependency tree. `cargo deny check
+# licenses` fails if a new dependency introduces one not listed here.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",
+    # Mozilla CA root bundle shipped via rustls/webpki-roots.
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Duplicate versions are common in transitive trees; warn rather than fail.
+multiple-versions = "warn"
+wildcards = "deny"
+# First-party path deps have no version requirement and would otherwise trip
+# the wildcard check.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

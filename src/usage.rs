@@ -23,7 +23,8 @@ pub(crate) fn fetch_usage(
 ) -> Result<UsageResponse, UsageError> {
 	let url = format!("https://claude.ai/api/organizations/{org_id}/usage");
 	let body = fetch_authenticated(&url, browser, profile)?;
-	serde_json::from_str(&body).map_err(|e| UsageError::Other(format!("parsing usage response: {e}")))
+	serde_json::from_str(&body)
+		.map_err(|e| UsageError::Other(format!("parsing usage response: {e}")))
 }
 
 pub(crate) fn fetch_credits(

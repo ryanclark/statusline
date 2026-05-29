@@ -1,5 +1,6 @@
 use super::{
-	RenderContext, SegmentConfig, SegmentType, account, context, cost, credits, env, git, rate_limit,
+	RenderContext, SegmentConfig, SegmentType, account, context, cost, credits, env, git,
+	rate_limit,
 };
 
 pub(crate) fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {

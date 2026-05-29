@@ -357,10 +357,7 @@ mod tests {
 	#[test]
 	fn default_segments_match_current_layout() {
 		let segs = default_segments();
-		let types: Vec<&SegmentType> = segs
-			.iter()
-			.map(super::SegmentConfig::segment_type)
-			.collect();
+		let types: Vec<&SegmentType> = segs.iter().map(SegmentConfig::segment_type).collect();
 		assert_eq!(
 			types,
 			vec![

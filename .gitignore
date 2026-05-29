@@ -4,3 +4,8 @@ target
 **/mutants.out*/
 .idea/
 devid.*
+
+# local tooling / OS cruft (not part of the project)
+.DS_Store
+.claude/
+docs/superpowers/
