@@ -14,9 +14,7 @@ pub(crate) struct ProfileRow {
 pub(crate) fn list(browser: Browser) -> Result<Vec<ProfileRow>> {
 	match browser {
 		Browser::Chrome => chromium_profiles("Library/Application Support/Google/Chrome"),
-		Browser::Brave => {
-			chromium_profiles("Library/Application Support/BraveSoftware/Brave-Browser")
-		}
+		Browser::Brave => chromium_profiles("Library/Application Support/BraveSoftware/Brave-Browser"),
 		Browser::Firefox => firefox_profiles(),
 	}
 }

@@ -31,8 +31,7 @@ fn git_cache_path(cwd: &str) -> Option<std::path::PathBuf> {
 fn is_cache_fresh(path: &std::path::Path) -> bool {
 	std::fs::metadata(path)
 		.and_then(|m| m.modified())
-		.map(|t| t.elapsed().unwrap_or(std::time::Duration::MAX) < GIT_CACHE_MAX_AGE)
-		.unwrap_or(false)
+		.is_ok_and(|t| t.elapsed().unwrap_or(std::time::Duration::MAX) < GIT_CACHE_MAX_AGE)
 }
 
 pub(crate) fn load_git_cache(cwd: &str) -> Option<GitCache> {
