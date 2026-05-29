@@ -6,6 +6,7 @@ use serde::Deserialize;
 use std::time::Duration;
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36";
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum UsageError {
@@ -20,6 +21,27 @@ pub(crate) fn fetch_usage(
 	browser: Browser,
 	profile: Option<&str>,
 ) -> Result<UsageResponse, UsageError> {
+	let url = format!("https://claude.ai/api/organizations/{org_id}/usage");
+	let body = fetch_authenticated(&url, browser, profile)?;
+	serde_json::from_str(&body).map_err(|e| UsageError::Other(format!("parsing usage response: {e}")))
+}
+
+pub(crate) fn fetch_credits(
+	org_id: &str,
+	browser: Browser,
+	profile: Option<&str>,
+) -> Result<PrepaidCredits, UsageError> {
+	let url = format!("https://claude.ai/api/organizations/{org_id}/prepaid/credits");
+	let body = fetch_authenticated(&url, browser, profile)?;
+	serde_json::from_str(&body)
+		.map_err(|e| UsageError::Other(format!("parsing credits response: {e}")))
+}
+
+fn fetch_authenticated(
+	url: &str,
+	browser: Browser,
+	profile: Option<&str>,
+) -> Result<String, UsageError> {
 	let session_key = browser.load_session_key(profile).map_err(|e| {
 		if e.to_string().contains("sessionKey cookie not found") {
 			UsageError::NotLoggedIn
@@ -28,25 +50,20 @@ pub(crate) fn fetch_usage(
 		}
 	})?;
 
-	let url = format!("https://claude.ai/api/organizations/{org_id}/usage");
-
-	let response = ureq::get(&url)
+	let response = ureq::get(url)
 		.header("Cookie", &format!("sessionKey={session_key}"))
-		.header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36")
+		.header("User-Agent", USER_AGENT)
 		.header("Accept", "application/json")
 		.config()
 		.timeout_global(Some(FETCH_TIMEOUT))
 		.build()
 		.call()
-		.map_err(|e| UsageError::Other(format!("fetching usage data: {e}")))?;
+		.map_err(|e| UsageError::Other(format!("fetching {url}: {e}")))?;
 
-	let body = response
+	response
 		.into_body()
 		.read_to_string()
-		.map_err(|e| UsageError::Other(format!("reading response body: {e}")))?;
-
-	serde_json::from_str(&body)
-		.map_err(|e| UsageError::Other(format!("parsing usage response: {e}")))
+		.map_err(|e| UsageError::Other(format!("reading response body: {e}")))
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,12 +88,25 @@ impl ExtraUsage {
 			let percentage = used_credits.as_percentage_of(monthly_limit);
 			Some(format!(
 				"{}{}",
-				format_args!("{used_credits}").color(percentage.color()).bold(),
+				format_args!("{used_credits}")
+					.color(percentage.color())
+					.bold(),
 				format_args!("/{monthly_limit}").color(XtermColors::LightGray),
 			))
 		} else {
 			Some(format!("{used_credits}/{monthly_limit}"))
 		}
+	}
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct PrepaidCredits {
+	pub(crate) amount: Cents,
+}
+
+impl PrepaidCredits {
+	pub(crate) fn balance(&self) -> Cents {
+		self.amount
 	}
 }
 
@@ -163,5 +193,27 @@ mod tests {
 		let extra = resp.extra_usage.unwrap();
 		assert!(extra.monthly_limit.is_none());
 		assert!(extra.used_credits.is_none());
+	}
+
+	#[test]
+	fn prepaid_credits_deserializes() {
+		// The real API includes extra fields (currency, auto_reload_settings, …)
+		// that we deliberately ignore — balance always renders in dollars.
+		let json = r#"{
+			"amount": 3304,
+			"currency": "EUR",
+			"auto_reload_settings": null,
+			"pending_invoice_amount_cents": null,
+			"last_paid_purchase_cents": null
+		}"#;
+		let credits: PrepaidCredits = serde_json::from_str(json).unwrap();
+		assert_eq!(credits.balance().to_string(), "$33");
+	}
+
+	#[test]
+	fn prepaid_credits_minimal() {
+		let json = r#"{"amount": 1500}"#;
+		let credits: PrepaidCredits = serde_json::from_str(json).unwrap();
+		assert_eq!(credits.balance().to_string(), "$15");
 	}
 }

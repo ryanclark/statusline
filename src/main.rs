@@ -17,7 +17,7 @@ use crate::input::InputData;
 use crate::install::install;
 use crate::segment::{RenderContext, SegmentConfig, SegmentLine, default_segments, load_git_cache};
 use crate::settings::Settings;
-use crate::usage::fetch_usage;
+use crate::usage::{fetch_credits, fetch_usage};
 use clap::{Parser, Subcommand};
 use format::Percentage;
 use owo_colors::OwoColorize;
@@ -123,18 +123,30 @@ fn main() {
 				.or(settings.segments)
 				.unwrap_or_else(default_segments);
 
-			let needs_api = segments.iter().any(SegmentConfig::is_extra_usage);
-			let usage_result = if needs_api {
+			let needs_usage = segments.iter().any(SegmentConfig::is_extra_usage);
+			let needs_credits = segments.iter().any(SegmentConfig::is_credits);
+
+			let resolved = if needs_usage || needs_credits {
 				match &identity {
 					Some((_, org_uuid)) => {
 						let browser = account
 							.and_then(|a| a.browser)
 							.or(settings.browser)
 							.unwrap_or_else(|| {
-								browser::Browser::detect_or_cached()
-									.unwrap_or(browser::Browser::Chrome)
+								browser::Browser::detect_or_cached().unwrap_or(browser::Browser::Chrome)
 							});
 						let profile = account.and_then(|a| a.profile.as_deref());
+						Some((org_uuid.as_str(), browser, profile))
+					}
+					None => None,
+				}
+			} else {
+				None
+			};
+
+			let usage_result = if needs_usage {
+				match resolved {
+					Some((org_uuid, browser, profile)) => {
 						let result = fetch_usage(org_uuid, browser, profile);
 						if let Err(e) = &result {
 							eprintln!("{}", format_args!("usage error: {e}").color(RED).dimmed());
@@ -151,6 +163,12 @@ fn main() {
 				None
 			};
 
+			let credits_result = if needs_credits {
+				resolved.map(|(org_uuid, browser, profile)| fetch_credits(org_uuid, browser, profile))
+			} else {
+				None
+			};
+
 			let divider = settings.divider.as_deref().unwrap_or(DIVIDER);
 			let git_cache = load_git_cache(&input.cwd);
 
@@ -159,6 +177,7 @@ fn main() {
 				ctx: RenderContext {
 					input: &input,
 					usage: usage_result.as_ref().map(|r| r.as_ref()),
+					credits: credits_result.as_ref().map(|r| r.as_ref()),
 					git: git_cache.as_ref(),
 					five_threshold: five,
 					seven_threshold: seven,
@@ -178,10 +197,7 @@ fn main() {
 				if rendered.is_empty() {
 					print!("{update_msg}");
 				} else {
-					print!(
-						"{rendered} {} {update_msg}",
-						divider.color(GRAY)
-					);
+					print!("{rendered} {} {update_msg}", divider.color(GRAY));
 				}
 			} else {
 				print!("{line}");

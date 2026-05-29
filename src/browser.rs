@@ -254,9 +254,17 @@ fn default_firefox_profile(profiles_ini: &Path) -> Result<String> {
 		.ok_or_else(|| eyre::eyre!("no Firefox profile found in profiles.ini"))
 }
 
+#[cfg(target_os = "macos")]
 fn password_from_keychain(service: &str, user: &str) -> Result<Vec<u8>> {
 	security_framework::passwords::get_generic_password(service, user)
 		.context(format!("reading {service} from Keychain"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn password_from_keychain(service: &str, _user: &str) -> Result<Vec<u8>> {
+	Err(eyre::eyre!(
+		"no keychain on this platform — pre-populate the cached key for {service} on the macOS host before running here"
+	))
 }
 
 #[cfg(feature = "codesigned")]
