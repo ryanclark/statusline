@@ -83,7 +83,8 @@ pub(crate) fn find_for_identity<'a>(
 	email: &str,
 	org_uuid: &str,
 ) -> Option<&'a AccountEntry> {
-	file.accounts
+	file
+		.accounts
 		.iter()
 		.find(|a| a.email == email && a.organization_uuid == org_uuid)
 }
@@ -137,7 +138,8 @@ mod tests {
 
 	#[test]
 	fn parses_claude_config_oauth() {
-		let raw = r#"{"oauthAccount": {"emailAddress": "ryan@example.com", "organizationUuid": "abc"}}"#;
+		let raw =
+			r#"{"oauthAccount": {"emailAddress": "ryan@example.com", "organizationUuid": "abc"}}"#;
 		let cfg: ClaudeConfig = serde_json::from_str(raw).unwrap();
 		let oauth = cfg.oauth_account.unwrap();
 		assert_eq!(oauth.email_address, "ryan@example.com");

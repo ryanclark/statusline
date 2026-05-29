@@ -1,7 +1,7 @@
 use crate::constants::{FIVE_HOUR_ICON, GRAY, RED, SEVEN_DAY_ICON, YELLOW};
-use crate::usage::UsageError;
 use crate::format::{ColoredPercentage, Percentage};
 use crate::input::RateLimitPeriod;
+use crate::usage::UsageError;
 use chrono::Utc;
 use owo_colors::OwoColorize;
 
@@ -77,11 +77,19 @@ pub(super) fn extra_usage(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> O
 		Err(e) => {
 			let (icon, color, msg) = match e {
 				UsageError::NotLoggedIn => {
-					let icon = if ctx.nerd_font { "\u{f023}" } else { "\u{2205}" };
+					let icon = if ctx.nerd_font {
+						"\u{f023}"
+					} else {
+						"\u{2205}"
+					};
 					(icon, YELLOW, "log in to claude.ai")
 				}
 				UsageError::Other(msg) => {
-					let icon = if ctx.nerd_font { "\u{f071}" } else { "\u{2a2f}" };
+					let icon = if ctx.nerd_font {
+						"\u{f071}"
+					} else {
+						"\u{2a2f}"
+					};
 					(icon, RED, msg.as_str())
 				}
 			};
