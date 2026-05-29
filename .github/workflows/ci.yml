@@ -6,54 +6,12 @@ on:
   push:
     branches: [main]
 
-permissions:
-  contents: read
-
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  check:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
-
-      - uses: actions/cache/restore@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-
-
-      - name: Check formatting
-        run: cargo fmt --check
-
-      - name: Lint
-        run: cargo clippy --locked --tests -- -D warnings
-
-      - name: Lint (codesigned)
-        run: cargo clippy --locked --tests --features codesigned -- -D warnings
-
-      - name: Test
-        run: cargo test --locked
-
-      - name: Save cache
-        if: github.event_name == 'push'
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+  ci:
+    uses: ryanclark/workflows/.github/workflows/rust-ci.yml@v1
+    with:
+      codesigned-clippy: true
