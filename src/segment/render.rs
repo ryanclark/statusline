@@ -1,4 +1,6 @@
-use super::{RenderContext, SegmentConfig, SegmentType, context, cost, env, git, rate_limit};
+use super::{
+	RenderContext, SegmentConfig, SegmentType, account, context, cost, credits, env, git, rate_limit,
+};
 
 pub(crate) fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
 	let result = match segment.segment_type() {
@@ -15,6 +17,7 @@ pub(crate) fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -
 		SegmentType::FiveHour => rate_limit::five_hour(segment, ctx),
 		SegmentType::SevenDay => rate_limit::seven_day(segment, ctx),
 		SegmentType::ExtraUsage => rate_limit::extra_usage(segment, ctx),
+		SegmentType::Credits => credits::credits(segment, ctx),
 
 		SegmentType::Cost => cost::cost(segment, ctx),
 		SegmentType::CostRate => cost::cost_rate(segment, ctx),
@@ -38,6 +41,8 @@ pub(crate) fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -
 		SegmentType::VimMode => env::vim_mode(segment, ctx),
 		SegmentType::AgentName => env::agent_name(segment, ctx),
 		SegmentType::Worktree => env::worktree(segment, ctx),
+
+		SegmentType::Account => account::account(segment, ctx),
 	};
 
 	result.filter(|s| !s.is_empty())
@@ -60,6 +65,7 @@ mod tests {
 		RenderContext {
 			input,
 			usage: None,
+			credits: None,
 			git: None,
 			five_threshold: 70.0.into(),
 			seven_threshold: 100.0.into(),

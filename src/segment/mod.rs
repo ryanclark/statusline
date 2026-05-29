@@ -1,5 +1,7 @@
+mod account;
 mod context;
 mod cost;
+mod credits;
 mod env;
 mod git;
 mod rate_limit;
@@ -7,7 +9,7 @@ mod render;
 
 use crate::format::{Percentage, parse_color};
 use crate::input::InputData;
-use crate::usage::{UsageError, UsageResponse};
+use crate::usage::{PrepaidCredits, UsageError, UsageResponse};
 use owo_colors::{DynColors, OwoColorize};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -25,6 +27,7 @@ pub(crate) enum SegmentType {
 	FiveHour,
 	SevenDay,
 	ExtraUsage,
+	Credits,
 	Divider,
 	Cwd,
 	ProjectDir,
@@ -37,6 +40,7 @@ pub(crate) enum SegmentType {
 	VimMode,
 	AgentName,
 	Worktree,
+	Account,
 	LinesAdded,
 	LinesRemoved,
 	Duration,
@@ -74,6 +78,8 @@ pub(crate) struct SegmentOptions {
 	pub(crate) dirty: DirtyConfig,
 	#[serde(default)]
 	pub(crate) dirty_color: Option<String>,
+	#[serde(default)]
+	pub(crate) capitalize: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -177,8 +183,19 @@ impl SegmentConfig {
 		}
 	}
 
+	pub(crate) fn capitalize(&self) -> bool {
+		match self {
+			Self::Simple(_) => true,
+			Self::Advanced(opts) => opts.capitalize.unwrap_or(true),
+		}
+	}
+
 	pub(crate) fn is_extra_usage(&self) -> bool {
 		*self.segment_type() == SegmentType::ExtraUsage
+	}
+
+	pub(crate) fn is_credits(&self) -> bool {
+		*self.segment_type() == SegmentType::Credits
 	}
 }
 
@@ -198,6 +215,7 @@ pub(crate) fn default_segments() -> Vec<SegmentConfig> {
 pub(crate) struct RenderContext<'a> {
 	pub(crate) input: &'a InputData,
 	pub(crate) usage: Option<Result<&'a UsageResponse, &'a UsageError>>,
+	pub(crate) credits: Option<Result<&'a PrepaidCredits, &'a UsageError>>,
 	pub(crate) git: Option<&'a GitCache>,
 	pub(crate) five_threshold: Percentage,
 	pub(crate) seven_threshold: Percentage,
