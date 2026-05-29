@@ -115,9 +115,17 @@ jobs:
             --pattern 'statusline-*.tar.gz' \
             --dir dist
 
+      - uses: actions/create-github-app-token@v1
+        id: tap-token
+        with:
+          app-id: 3903999
+          private-key: ${{ secrets.RELEASE_PLZ_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: homebrew-tap
+
       - name: Update Homebrew tap
         env:
-          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+          GH_TOKEN: ${{ steps.tap-token.outputs.token }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           REPO="${GITHUB_REPOSITORY}"
