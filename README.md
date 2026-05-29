@@ -41,9 +41,10 @@ A fast, native statusline for [Claude Code](https://docs.anthropic.com/en/docs/c
 ## Install
 
 ```
-brew tap ryanclark/statusline
-brew install statusline
+brew install ryanclark/tap/statusline
 ```
+
+macOS (Apple Silicon) and Linux (arm64/amd64) are supported.
 > [!NOTE]
 > Keychain access to "Chrome Safe Storage" is only needed if you use the `extra_usage` segment (see below).
 
