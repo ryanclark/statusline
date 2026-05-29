@@ -13,6 +13,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: 3903999
+          private-key: ${{ secrets.RELEASE_PLZ_APP_KEY }}
+
       - uses: actions/cache@v5
         with:
           path: |
@@ -35,12 +41,10 @@ jobs:
 
       - name: Create or update release PR
         env:
-          RELEASE_PLZ_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_TARGET_DIR: /tmp/release-plz-target
-        run: release-plz release-pr --git-token "$RELEASE_PLZ_TOKEN"
+        run: release-plz release-pr --git-token "${{ steps.app-token.outputs.token }}"
 
       - name: Tag and release if PR was merged
         env:
-          RELEASE_PLZ_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_TARGET_DIR: /tmp/release-plz-target
-        run: release-plz release --git-token "$RELEASE_PLZ_TOKEN"
+        run: release-plz release --git-token "${{ steps.app-token.outputs.token }}"
