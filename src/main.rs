@@ -191,7 +191,7 @@ fn main() {
 					"{} {} {}",
 					format_args!("v{} available", update.version).color(GREEN),
 					divider.color(GRAY),
-					"brew upgrade statusline".dimmed()
+					"brew upgrade ryanclark/tap/statusline".dimmed()
 				);
 				let rendered = format!("{line}");
 				if rendered.is_empty() {
