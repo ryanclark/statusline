@@ -2,22 +2,21 @@ use crate::format::{Percentage, Tokens};
 use serde::Deserialize;
 
 #[derive(Default, Debug, Deserialize)]
-pub(crate) struct ContextWindow {
-	pub(crate) used_percentage: Percentage,
+pub struct ContextWindow {
+	pub used_percentage: Percentage,
 	#[serde(default)]
-	pub(crate) remaining_percentage: Percentage,
+	pub remaining_percentage: Percentage,
 	#[serde(default)]
-	pub(crate) total_input_tokens: Tokens,
-	pub(crate) total_output_tokens: Tokens,
+	pub total_input_tokens: Tokens,
+	pub total_output_tokens: Tokens,
 	#[serde(default)]
-	pub(crate) context_window_size: Tokens,
+	pub context_window_size: Tokens,
 	#[serde(default)]
-	pub(crate) current_usage: CurrentUsage,
+	pub current_usage: CurrentUsage,
 }
 
-#[cfg(test)]
 impl ContextWindow {
-	pub(crate) fn from_reader(
+	pub fn from_reader(
 		reader: impl std::io::Read,
 	) -> Result<ContextWindowWrapper, serde_json::Error> {
 		serde_json::from_reader(reader)
@@ -26,20 +25,19 @@ impl ContextWindow {
 
 #[derive(Debug, Default, Deserialize)]
 #[allow(dead_code)]
-pub(crate) struct CurrentUsage {
+pub struct CurrentUsage {
 	#[serde(default)]
-	pub(crate) input_tokens: Tokens,
+	pub input_tokens: Tokens,
 	#[serde(default)]
-	pub(crate) cache_creation_input_tokens: Tokens,
+	pub cache_creation_input_tokens: Tokens,
 	#[serde(default)]
-	pub(crate) cache_read_input_tokens: Tokens,
+	pub cache_read_input_tokens: Tokens,
 }
 
-#[cfg(test)]
 #[derive(Debug, Default, Deserialize)]
-pub(crate) struct ContextWindowWrapper {
+pub struct ContextWindowWrapper {
 	#[serde(default)]
-	pub(crate) context_window: ContextWindow,
+	pub context_window: ContextWindow,
 }
 
 #[cfg(test)]

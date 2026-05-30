@@ -1,0 +1,22 @@
+[package]
+name = "statusline-configure"
+version = "0.1.4"
+edition = "2024"
+rust-version = "1.91"
+description = "Inline live-preview editor for statusline segments"
+repository = "https://github.com/ryanclark/statusline"
+license = "MIT"
+
+[dependencies]
+statusline-core.workspace = true
+crossterm = "0.29"
+serde_json.workspace = true
+# Flattens colored examples onto the selection bar / no-color path.
+strip-ansi-escapes.workspace = true
+thiserror.workspace = true
+# Terminal display width (wide CJK / nerd-font glyphs are 2 cells) so the inline
+# repaint never miscounts a row's width and wraps, which would desync MoveUp().
+unicode-width = "0.2"
+
+[lints]
+workspace = true

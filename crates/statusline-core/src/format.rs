@@ -5,10 +5,11 @@ use std::fmt;
 use std::fmt::Formatter;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
-pub(crate) struct Cents(f64);
+pub struct Cents(f64);
 
 impl Cents {
-	pub(crate) fn as_percentage_of(self, limit: Cents) -> Percentage {
+	#[must_use]
+	pub fn as_percentage_of(self, limit: Cents) -> Percentage {
 		if limit.0 > 0.0 {
 			Percentage((self.0 / limit.0) * 100.0)
 		} else {
@@ -30,7 +31,7 @@ impl fmt::Display for Cents {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
-pub(crate) struct Percentage(f64);
+pub struct Percentage(f64);
 
 impl std::ops::Sub for Percentage {
 	type Output = Percentage;
@@ -41,7 +42,13 @@ impl std::ops::Sub for Percentage {
 }
 
 impl Percentage {
-	pub(crate) fn color(self) -> Rgb {
+	#[must_use]
+	pub fn value(self) -> f64 {
+		self.0
+	}
+
+	#[must_use]
+	pub fn color(self) -> Rgb {
 		let p = self.0.clamp(0.0, 100.0);
 
 		if p < 50.0 {
@@ -70,7 +77,6 @@ impl Percentage {
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn lerp_channel(from: u8, to: u8, t: f64, range: f64) -> u8 {
-	// Safe: v is always in [min(from,to)..=max(from,to)] ⊆ [0, 255]
 	let v = f64::from(from) + (f64::from(to) - f64::from(from)) * t / range;
 	v.round() as u8
 }
@@ -81,12 +87,25 @@ impl From<f64> for Percentage {
 	}
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ParsePercentageError {
+	#[error(transparent)]
+	Invalid(#[from] std::num::ParseFloatError),
+	#[error("percentage must be a finite number")]
+	NonFinite,
+}
+
 impl std::str::FromStr for Percentage {
-	type Err = std::num::ParseFloatError;
+	type Err = ParsePercentageError;
 
 	fn from_str(s: &str) -> Result<Self, Self::Err> {
 		let s = s.strip_suffix('%').unwrap_or(s);
-		s.parse::<f64>().map(Self)
+		let v = s.parse::<f64>()?;
+		if v.is_finite() {
+			Ok(Self(v))
+		} else {
+			Err(ParsePercentageError::NonFinite)
+		}
 	}
 }
 
@@ -103,7 +122,7 @@ impl fmt::Display for Percentage {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ColoredPercentage(pub(crate) Percentage);
+pub struct ColoredPercentage(pub Percentage);
 
 impl fmt::Display for ColoredPercentage {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -118,7 +137,7 @@ impl fmt::Display for ColoredPercentage {
 #[derive(
 	Clone, Copy, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
 )]
-pub(crate) struct Tokens(u64);
+pub struct Tokens(u64);
 
 impl From<u64> for Tokens {
 	fn from(value: u64) -> Self {
@@ -127,12 +146,14 @@ impl From<u64> for Tokens {
 }
 
 impl Tokens {
-	pub(crate) fn as_u64(self) -> u64 {
+	#[must_use]
+	pub fn as_u64(self) -> u64 {
 		self.0
 	}
 
+	#[must_use]
 	#[allow(clippy::cast_precision_loss)]
-	pub(crate) fn ratio_of(self, total: Tokens) -> f64 {
+	pub fn ratio_of(self, total: Tokens) -> f64 {
 		if total.0 == 0 {
 			0.0
 		} else {
@@ -161,7 +182,8 @@ impl fmt::Display for Tokens {
 	}
 }
 
-pub(crate) fn format_duration_secs(total_secs: u64) -> String {
+#[must_use]
+pub fn format_duration_secs(total_secs: u64) -> String {
 	let days = total_secs / 86400;
 	let hours = (total_secs % 86400) / 3600;
 	let mins = (total_secs % 3600) / 60;
@@ -182,9 +204,20 @@ pub(crate) fn format_duration_secs(total_secs: u64) -> String {
 	}
 }
 
-pub(crate) fn parse_color(s: &str) -> Option<DynColors> {
-	use AnsiColors::*;
+pub const NAMED_COLORS: &[(&str, DynColors)] = &[
+	("red", DynColors::Ansi(AnsiColors::Red)),
+	("green", DynColors::Ansi(AnsiColors::Green)),
+	("yellow", DynColors::Ansi(AnsiColors::Yellow)),
+	("blue", DynColors::Ansi(AnsiColors::Blue)),
+	("purple", DynColors::Ansi(AnsiColors::Magenta)),
+	("cyan", DynColors::Ansi(AnsiColors::Cyan)),
+	("orange", DynColors::Rgb(255, 140, 50)),
+	("white", DynColors::Ansi(AnsiColors::White)),
+	("gray", DynColors::Ansi(AnsiColors::BrightBlack)),
+];
 
+#[must_use]
+pub fn parse_color(s: &str) -> Option<DynColors> {
 	if let Some(hex) = s.strip_prefix('#') {
 		return parse_hex_color(hex);
 	}
@@ -198,21 +231,18 @@ pub(crate) fn parse_color(s: &str) -> Option<DynColors> {
 		return Some(DynColors::Rgb(r, g, b));
 	}
 
-	match s.to_ascii_lowercase().as_str() {
-		"red" => Some(DynColors::Ansi(Red)),
-		"green" => Some(DynColors::Ansi(Green)),
-		"yellow" => Some(DynColors::Ansi(Yellow)),
-		"blue" => Some(DynColors::Ansi(Blue)),
-		"purple" => Some(DynColors::Ansi(Magenta)),
-		"cyan" => Some(DynColors::Ansi(Cyan)),
-		"orange" => Some(DynColors::Rgb(255, 140, 50)),
-		"white" => Some(DynColors::Ansi(White)),
-		"gray" | "grey" => Some(DynColors::Ansi(BrightBlack)),
-		_ => None,
-	}
+	let lower = s.to_ascii_lowercase();
+	let name = if lower == "grey" { "gray" } else { &lower };
+	NAMED_COLORS
+		.iter()
+		.find(|(n, _)| *n == name)
+		.map(|(_, c)| *c)
 }
 
 fn parse_hex_color(hex: &str) -> Option<DynColors> {
+	if !hex.is_ascii() {
+		return None;
+	}
 	match hex.len() {
 		6 => {
 			let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
@@ -349,6 +379,20 @@ mod tests {
 	}
 
 	#[test]
+	fn percentage_from_str_rejects_non_finite() {
+		assert!("nan".parse::<Percentage>().is_err());
+		assert!("inf".parse::<Percentage>().is_err());
+		assert!("-inf".parse::<Percentage>().is_err());
+		assert!("1e999".parse::<Percentage>().is_err());
+	}
+
+	#[test]
+	fn percentage_value_preserves_fraction() {
+		assert!((Percentage::from(72.5).value() - 72.5).abs() < f64::EPSILON);
+		assert!((Percentage::from(0.0).value() - 0.0).abs() < f64::EPSILON);
+	}
+
+	#[test]
 	fn percentage_fromstr_display_roundtrip() {
 		let original = Percentage::from(42.0);
 		let displayed = original.to_string();
@@ -404,6 +448,14 @@ mod tests {
 	}
 
 	#[test]
+	fn named_colors_drive_parse_color() {
+		for (name, color) in NAMED_COLORS {
+			assert_eq!(parse_color(name), Some(*color), "{name}");
+		}
+		assert_eq!(parse_color("grey"), parse_color("gray"));
+	}
+
+	#[test]
 	fn parse_color_named() {
 		assert_eq!(parse_color("red"), Some(DynColors::Ansi(AnsiColors::Red)));
 		assert_eq!(parse_color("cyan"), Some(DynColors::Ansi(AnsiColors::Cyan)));
@@ -436,5 +488,11 @@ mod tests {
 		assert_eq!(parse_color("not_a_color"), None);
 		assert_eq!(parse_color("#GG0000"), None);
 		assert_eq!(parse_color("rgb(256, 0, 0)"), None);
+	}
+
+	#[test]
+	fn parse_color_hex_multibyte_returns_none() {
+		assert_eq!(parse_color("#caf\u{e9}2"), None);
+		assert_eq!(parse_color("#\u{e9}a"), None);
 	}
 }

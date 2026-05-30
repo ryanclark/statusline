@@ -1,16 +1,14 @@
 mod accounts;
 mod browser;
-mod constants;
-mod context_window;
-mod format;
-mod input;
 mod install;
 mod profiles;
-mod segment;
-mod settings;
 mod update;
 mod usage;
-mod util;
+
+#[allow(unused_imports)]
+pub(crate) use statusline_core::{
+	constants, context_window, format, input, segment, settings, util,
+};
 
 use crate::constants::{DIVIDER, GRAY, GREEN, RED};
 use crate::input::InputData;
@@ -37,16 +35,17 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
 	Install {
-		#[arg(short, default_value = "70", value_name = "N")]
+		#[arg(short, default_value_t = settings::DEFAULT_FIVE_HOUR_RESET.into(), value_name = "N")]
 		five_hour_reset_threshold: Percentage,
 
-		#[arg(short, default_value = "100", value_name = "N")]
+		#[arg(short, default_value_t = settings::DEFAULT_SEVEN_DAY_RESET.into(), value_name = "N")]
 		seven_day_reset_threshold: Percentage,
 	},
 	Profiles {
 		#[arg(short, long)]
 		browser: Option<browser::Browser>,
 	},
+	Configure,
 }
 
 fn main() {
@@ -62,13 +61,47 @@ fn main() {
 			}
 		}
 		Some(Commands::Profiles { browser }) => {
-			let browser = browser.unwrap_or_else(|| {
-				browser::Browser::detect_or_cached().unwrap_or(browser::Browser::Chrome)
-			});
+			let browser = browser
+				.unwrap_or_else(|| browser::detect_or_cached().unwrap_or(browser::Browser::Chrome));
 			match profiles::list(browser) {
 				Ok(rows) => profiles::print(&rows),
 				Err(e) => {
 					eprintln!("{} {e:?}", "Listing profiles failed:".red().bold());
+					std::process::exit(1);
+				}
+			}
+		}
+		Some(Commands::Configure) => {
+			let path = match Settings::settings_path() {
+				Ok(p) => p,
+				Err(e) => {
+					eprintln!("{} {e:?}", "error:".red().bold());
+					std::process::exit(1);
+				}
+			};
+
+			if let Some((email, org)) = accounts::live_identity()
+				&& let Some(file) = accounts::load()
+				&& let Some(account) = accounts::find_for_identity(&file, &email, &org)
+				&& account.segments.is_some()
+			{
+				eprintln!(
+					"{} account '{}' has its own `segments` in accounts.json; that override wins over settings.json when this account is active",
+					"note:".yellow().bold(),
+					account.nickname
+				);
+			}
+
+			match statusline_configure::run(statusline_configure::Options {
+				settings_path: path,
+				sample: None,
+			}) {
+				Ok(statusline_configure::Outcome::Saved(p)) => {
+					println!("{} {}", "saved".green().bold(), p.display());
+				}
+				Ok(statusline_configure::Outcome::Cancelled) => {}
+				Err(e) => {
+					eprintln!("{} {e}", "configure failed:".red().bold());
 					std::process::exit(1);
 				}
 			}
@@ -133,8 +166,7 @@ fn main() {
 							.and_then(|a| a.browser)
 							.or(settings.browser)
 							.unwrap_or_else(|| {
-								browser::Browser::detect_or_cached()
-									.unwrap_or(browser::Browser::Chrome)
+								browser::detect_or_cached().unwrap_or(browser::Browser::Chrome)
 							});
 						let profile = account.and_then(|a| a.profile.as_deref());
 						Some((org_uuid.as_str(), browser, profile))
@@ -174,6 +206,11 @@ fn main() {
 			let divider = settings.divider.as_deref().unwrap_or(DIVIDER);
 			let git_cache = load_git_cache(&input.cwd);
 
+			let account_display = account.map(|a| segment::AccountDisplay {
+				nickname: a.nickname.clone(),
+				color: a.color.clone(),
+			});
+
 			let line = SegmentLine {
 				segments: &segments,
 				ctx: RenderContext {
@@ -185,6 +222,7 @@ fn main() {
 					seven_threshold: seven,
 					divider,
 					nerd_font: settings.nerd_font,
+					account: account_display,
 				},
 			};
 

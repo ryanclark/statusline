@@ -1,92 +1,38 @@
-use crate::browser::Browser;
 use crate::format::Cents;
 use owo_colors::OwoColorize;
 use owo_colors::XtermColors;
 use serde::Deserialize;
-use std::time::Duration;
-
-const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
-const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36";
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum UsageError {
+pub enum UsageError {
 	#[error("not logged in to claude.ai")]
 	NotLoggedIn,
 	#[error("{0}")]
 	Other(String),
 }
 
-pub(crate) fn fetch_usage(
-	org_id: &str,
-	browser: Browser,
-	profile: Option<&str>,
-) -> Result<UsageResponse, UsageError> {
-	let url = format!("https://claude.ai/api/organizations/{org_id}/usage");
-	let body = fetch_authenticated(&url, browser, profile)?;
-	serde_json::from_str(&body)
-		.map_err(|e| UsageError::Other(format!("parsing usage response: {e}")))
-}
-
-pub(crate) fn fetch_credits(
-	org_id: &str,
-	browser: Browser,
-	profile: Option<&str>,
-) -> Result<PrepaidCredits, UsageError> {
-	let url = format!("https://claude.ai/api/organizations/{org_id}/prepaid/credits");
-	let body = fetch_authenticated(&url, browser, profile)?;
-	serde_json::from_str(&body)
-		.map_err(|e| UsageError::Other(format!("parsing credits response: {e}")))
-}
-
-fn fetch_authenticated(
-	url: &str,
-	browser: Browser,
-	profile: Option<&str>,
-) -> Result<String, UsageError> {
-	let session_key = browser.load_session_key(profile).map_err(|e| {
-		if e.to_string().contains("sessionKey cookie not found") {
-			UsageError::NotLoggedIn
-		} else {
-			UsageError::Other(e.to_string())
-		}
-	})?;
-
-	let response = ureq::get(url)
-		.header("Cookie", &format!("sessionKey={session_key}"))
-		.header("User-Agent", USER_AGENT)
-		.header("Accept", "application/json")
-		.config()
-		.timeout_global(Some(FETCH_TIMEOUT))
-		.build()
-		.call()
-		.map_err(|e| UsageError::Other(format!("fetching {url}: {e}")))?;
-
-	response
-		.into_body()
-		.read_to_string()
-		.map_err(|e| UsageError::Other(format!("reading response body: {e}")))
+#[derive(Debug, Deserialize)]
+pub struct UsageResponse {
+	pub extra_usage: Option<ExtraUsage>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct UsageResponse {
-	pub(crate) extra_usage: Option<ExtraUsage>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct ExtraUsage {
+pub struct ExtraUsage {
 	#[serde(default)]
-	pub(crate) monthly_limit: Option<Cents>,
+	pub monthly_limit: Option<Cents>,
 	#[serde(default)]
-	pub(crate) used_credits: Option<Cents>,
+	pub used_credits: Option<Cents>,
 }
 
 impl ExtraUsage {
-	pub(crate) fn format(&self, colored: bool) -> Option<String> {
+	#[must_use]
+	pub fn format(&self, colored: bool) -> Option<String> {
 		let monthly_limit = self.monthly_limit?;
 		let used_credits = self.used_credits?;
 
 		if colored {
 			let percentage = used_credits.as_percentage_of(monthly_limit);
+
 			Some(format!(
 				"{}{}",
 				format_args!("{used_credits}")
@@ -101,12 +47,13 @@ impl ExtraUsage {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct PrepaidCredits {
-	pub(crate) amount: Cents,
+pub struct PrepaidCredits {
+	pub amount: Cents,
 }
 
 impl PrepaidCredits {
-	pub(crate) fn balance(&self) -> Cents {
+	#[must_use]
+	pub fn balance(&self) -> Cents {
 		self.amount
 	}
 }
@@ -198,8 +145,6 @@ mod tests {
 
 	#[test]
 	fn prepaid_credits_deserializes() {
-		// The real API includes extra fields (currency, auto_reload_settings, …)
-		// that we deliberately ignore — balance always renders in dollars.
 		let json = r#"{
 			"amount": 3304,
 			"currency": "EUR",

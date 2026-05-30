@@ -1,32 +1,17 @@
-[package]
-name = "statusline"
-version = "0.1.4"
-edition = "2024"
-rust-version = "1.91"
-description = "Claude Code status line with context window and usage tracking"
-repository = "https://github.com/ryanclark/statusline"
-license = "MIT"
+[workspace]
+resolver = "3"
+members = ["crates/*"]
 
-[dependencies]
+[workspace.dependencies]
+statusline-core = { path = "crates/statusline-core" }
+chrono = { version = "0.4.44", features = ["serde"] }
 clap = { version = "4.6.0", features = ["derive"] }
-eyre = "0.6.12"
-thiserror = "2"
+dirs = "6.0.0"
 owo-colors = "4.3.0"
-security-framework = "3"
-rusqlite = { version = "0.31", features = ["bundled"] }
-aes = "0.8"
-cbc = "0.1"
-pbkdf2 = "0.12"
-sha1 = "0.10"
-semver = "1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
-chrono = { version = "0.4.44", features = ["serde"] }
-ureq = "3.3.0"
-dirs = "6.0.0"
-
-[features]
-codesigned = []
+strip-ansi-escapes = "0.2.1"
+thiserror = "2"
 
 [profile.dev]
 debug = "line-tables-only"
@@ -39,11 +24,8 @@ lto = "thin"
 codegen-units = 1
 strip = true
 
-[dev-dependencies]
-strip-ansi-escapes = "0.2.1"
-
 # Canonical lint set shared across these tools (keep in sync with clankerbox).
-[lints.rust]
+[workspace.lints.rust]
 # Lint groups need a lower priority than individual lints so the latter can
 # override the group (clippy::lint_groups_priority).
 rust_2018_idioms = { level = "warn", priority = -1 }
@@ -51,7 +33,7 @@ unsafe_code = "forbid"
 unused_must_use = "deny"
 unused_qualifications = "warn"
 
-[lints.clippy]
+[workspace.lints.clippy]
 # Correctness & safety
 cast_lossless = "warn"
 cast_possible_truncation = "warn"

@@ -3,7 +3,8 @@ use super::{
 	rate_limit,
 };
 
-pub(crate) fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
+#[must_use]
+pub fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
 	let result = match segment.segment_type() {
 		SegmentType::ContextPercentage => context::context_percentage(segment, ctx),
 		SegmentType::TotalInputTokens => context::total_input_tokens(segment, ctx),
@@ -72,6 +73,7 @@ mod tests {
 			seven_threshold: 100.0.into(),
 			divider: DIVIDER,
 			nerd_font: false,
+			account: None,
 		}
 	}
 

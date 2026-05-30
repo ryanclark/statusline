@@ -7,12 +7,12 @@ use super::{Icon, RenderContext, SegmentConfig, apply_style, format_icon};
 const GIT_CACHE_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub(crate) struct GitCache {
-	pub(crate) branch: Option<String>,
-	pub(crate) dirty: bool,
-	pub(crate) ahead: u64,
-	pub(crate) behind: u64,
-	pub(crate) stash_count: u64,
+pub struct GitCache {
+	pub branch: Option<String>,
+	pub dirty: bool,
+	pub ahead: u64,
+	pub behind: u64,
+	pub stash_count: u64,
 }
 
 fn git_cache_path(cwd: &str) -> Option<std::path::PathBuf> {
@@ -34,7 +34,8 @@ fn is_cache_fresh(path: &std::path::Path) -> bool {
 		.is_ok_and(|t| t.elapsed().unwrap_or(std::time::Duration::MAX) < GIT_CACHE_MAX_AGE)
 }
 
-pub(crate) fn load_git_cache(cwd: &str) -> Option<GitCache> {
+#[must_use]
+pub fn load_git_cache(cwd: &str) -> Option<GitCache> {
 	if cwd.is_empty() {
 		return None;
 	}

@@ -8,85 +8,86 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 #[derive(Debug, Default, Deserialize)]
-pub(crate) struct InputData {
+pub struct InputData {
 	#[serde(default)]
-	pub(crate) cwd: String,
+	pub cwd: String,
 	#[serde(default)]
-	pub(crate) session_id: String,
+	pub session_id: String,
 	#[serde(default)]
-	pub(crate) model: ModelInfo,
+	pub model: ModelInfo,
 	#[serde(default)]
-	pub(crate) workspace: Workspace,
+	pub workspace: Workspace,
 	#[serde(default)]
-	pub(crate) version: String,
+	pub version: String,
 	#[serde(default)]
-	pub(crate) cost: CostInfo,
+	pub cost: CostInfo,
 	#[serde(default)]
-	pub(crate) context_window: ContextWindow,
+	pub context_window: ContextWindow,
 	#[serde(default)]
-	pub(crate) rate_limits: RateLimits,
+	pub rate_limits: RateLimits,
 	#[serde(default)]
-	pub(crate) vim: VimInfo,
+	pub vim: VimInfo,
 	#[serde(default)]
-	pub(crate) agent: AgentInfo,
+	pub agent: AgentInfo,
 	#[serde(default)]
-	pub(crate) worktree: WorktreeInfo,
+	pub worktree: WorktreeInfo,
 	#[serde(default)]
-	pub(crate) exceeds_200k_tokens: bool,
+	pub exceeds_200k_tokens: bool,
 }
 
 impl InputData {
-	pub(crate) fn from_reader(reader: impl std::io::Read) -> Result<Self, serde_json::Error> {
+	pub fn from_reader(reader: impl std::io::Read) -> Result<Self, serde_json::Error> {
 		serde_json::from_reader(reader)
 	}
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub(crate) struct ModelInfo {
+pub struct ModelInfo {
 	#[serde(default)]
-	pub(crate) id: String,
+	pub id: String,
 	#[serde(default)]
-	pub(crate) display_name: String,
+	pub display_name: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub(crate) struct Workspace {
+pub struct Workspace {
 	#[serde(default)]
-	pub(crate) current_dir: String,
+	pub current_dir: String,
 	#[serde(default)]
-	pub(crate) project_dir: String,
+	pub project_dir: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub(crate) struct CostInfo {
+pub struct CostInfo {
 	#[serde(default)]
-	pub(crate) total_cost_usd: f64,
+	pub total_cost_usd: f64,
 	#[serde(default)]
-	pub(crate) total_duration_ms: u64,
+	pub total_duration_ms: u64,
 	#[serde(default)]
-	pub(crate) total_api_duration_ms: u64,
+	pub total_api_duration_ms: u64,
 	#[serde(default)]
-	pub(crate) total_lines_added: u64,
+	pub total_lines_added: u64,
 	#[serde(default)]
-	pub(crate) total_lines_removed: u64,
+	pub total_lines_removed: u64,
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub(crate) struct RateLimits {
+pub struct RateLimits {
 	#[serde(default)]
-	pub(crate) five_hour: Option<RateLimitPeriod>,
+	pub five_hour: Option<RateLimitPeriod>,
 	#[serde(default)]
-	pub(crate) seven_day: Option<RateLimitPeriod>,
+	pub seven_day: Option<RateLimitPeriod>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RateLimitPeriod {
-	pub(crate) used_percentage: Percentage,
-	pub(crate) resets_at: i64,
+pub struct RateLimitPeriod {
+	pub used_percentage: Percentage,
+	pub resets_at: i64,
 }
 
 impl RateLimitPeriod {
-	pub(crate) fn countdown(&self, now: DateTime<Utc>) -> Option<String> {
+	#[must_use]
+	pub fn countdown(&self, now: DateTime<Utc>) -> Option<String> {
 		let reset_time = DateTime::from_timestamp(self.resets_at, 0)?;
 		let total_secs = reset_time.signed_duration_since(now).num_seconds();
 		if total_secs <= 0 {
@@ -99,25 +100,25 @@ impl RateLimitPeriod {
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub(crate) struct VimInfo {
+pub struct VimInfo {
 	#[serde(default)]
-	pub(crate) mode: String,
+	pub mode: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub(crate) struct AgentInfo {
+pub struct AgentInfo {
 	#[serde(default)]
-	pub(crate) name: String,
+	pub name: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub(crate) struct WorktreeInfo {
+pub struct WorktreeInfo {
 	#[serde(default)]
-	pub(crate) name: String,
+	pub name: String,
 	#[serde(default)]
-	pub(crate) branch: String,
+	pub branch: String,
 	#[serde(default)]
-	pub(crate) original_branch: String,
+	pub original_branch: String,
 }
 
 #[cfg(test)]

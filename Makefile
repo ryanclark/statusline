@@ -4,7 +4,7 @@ TEAM_ID ?=
 .PHONY: build build-signed install install-signed dev cert-request cert-import cert-clean
 
 build:
-	cargo build --release
+	cargo build --workspace --release
 
 build-signed:
 ifndef DEVELOPER_NAME
@@ -13,7 +13,7 @@ endif
 ifndef TEAM_ID
 	$(error TEAM_ID is required)
 endif
-	cargo build --release --features codesigned
+	cargo build --workspace --release --features codesigned
 	codesign --force --options runtime --sign "Developer ID Application: $(DEVELOPER_NAME) ($(TEAM_ID))" target/release/statusline
 	codesign --verify --verbose target/release/statusline
 

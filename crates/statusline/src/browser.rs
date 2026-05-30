@@ -1,18 +1,9 @@
 use crate::util::home_dir;
 use cbc::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
 use eyre::{Context, Result};
-use serde::{Deserialize, Serialize};
-use std::fmt;
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
-#[serde(rename_all = "lowercase")]
-#[clap(rename_all = "lowercase")]
-pub(crate) enum Browser {
-	Chrome,
-	Brave,
-	Firefox,
-}
+pub(crate) use statusline_core::browser::Browser;
 
 struct ChromiumConfig {
 	cookies_base_dir: &'static str,
@@ -38,81 +29,69 @@ const BRAVE_CONFIG: ChromiumConfig = ChromiumConfig {
 	cache_name: "brave_key",
 };
 
-impl Browser {
-	pub(crate) fn detect_or_cached() -> Result<Self> {
-		use std::time::{Duration, SystemTime};
+pub(crate) fn detect_or_cached() -> Result<Browser> {
+	use std::time::{Duration, SystemTime};
 
-		const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+	const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
-		let cache_path = crate::util::app_data_dir()?.join("browser");
+	let cache_path = crate::util::app_data_dir()?.join("browser");
 
-		if let Ok(meta) = std::fs::metadata(&cache_path) {
-			let fresh = meta
-				.modified()
-				.ok()
-				.and_then(|m| SystemTime::now().duration_since(m).ok())
-				.is_some_and(|age| age < CACHE_TTL);
+	if let Ok(meta) = std::fs::metadata(&cache_path) {
+		let fresh = meta
+			.modified()
+			.ok()
+			.and_then(|m| SystemTime::now().duration_since(m).ok())
+			.is_some_and(|age| age < CACHE_TTL);
 
-			if fresh && let Ok(cached) = std::fs::read_to_string(&cache_path) {
-				let cached = cached.trim();
-				if let Ok(browser) = serde_json::from_str::<Self>(&format!("\"{cached}\"")) {
-					return Ok(browser);
-				}
-			}
-		}
-
-		let browser = Self::detect()?;
-
-		if let Some(parent) = cache_path.parent() {
-			std::fs::create_dir_all(parent)?;
-		}
-
-		std::fs::write(&cache_path, format!("{browser}"))?;
-
-		Ok(browser)
-	}
-
-	fn detect() -> Result<Self> {
-		let home = home_dir()?;
-		let plist_path = home
-			.join("Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure");
-
-		let output = std::process::Command::new("defaults")
-			.args(["read", &plist_path.to_string_lossy(), "LSHandlers"])
-			.output()
-			.context("running defaults command")?;
-
-		let text = String::from_utf8_lossy(&output.stdout);
-
-		for block in text.split('{') {
-			if !block.contains("LSHandlerURLScheme = https") {
-				continue;
-			}
-
-			if let Some(browser) = parse_bundle_id(block) {
+		if fresh && let Ok(cached) = std::fs::read_to_string(&cache_path) {
+			let cached = cached.trim();
+			if let Ok(browser) = serde_json::from_str::<Browser>(&format!("\"{cached}\"")) {
 				return Ok(browser);
 			}
 		}
-
-		Ok(Self::Chrome)
 	}
 
-	pub(crate) fn load_session_key(self, profile: Option<&str>) -> Result<String> {
-		match self {
-			Self::Chrome => chromium_session_key(&CHROME_CONFIG, profile),
-			Self::Brave => chromium_session_key(&BRAVE_CONFIG, profile),
-			Self::Firefox => firefox_session_key(profile),
-		}
+	let browser = detect()?;
+
+	if let Some(parent) = cache_path.parent() {
+		std::fs::create_dir_all(parent)?;
 	}
+
+	std::fs::write(&cache_path, format!("{browser}"))?;
+
+	Ok(browser)
 }
 
-impl fmt::Display for Browser {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		match self {
-			Self::Chrome => write!(f, "Chrome"),
-			Self::Brave => write!(f, "Brave"),
-			Self::Firefox => write!(f, "Firefox"),
+fn detect() -> Result<Browser> {
+	let home = home_dir()?;
+	let plist_path =
+		home.join("Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure");
+
+	let output = std::process::Command::new("defaults")
+		.args(["read", &plist_path.to_string_lossy(), "LSHandlers"])
+		.output()
+		.context("running defaults command")?;
+
+	let text = String::from_utf8_lossy(&output.stdout);
+
+	for block in text.split('{') {
+		if !block.contains("LSHandlerURLScheme = https") {
+			continue;
 		}
+
+		if let Some(browser) = parse_bundle_id(block) {
+			return Ok(browser);
+		}
+	}
+
+	Ok(Browser::Chrome)
+}
+
+pub(crate) fn load_session_key(browser: Browser, profile: Option<&str>) -> Result<String> {
+	match browser {
+		Browser::Chrome => chromium_session_key(&CHROME_CONFIG, profile),
+		Browser::Brave => chromium_session_key(&BRAVE_CONFIG, profile),
+		Browser::Firefox => firefox_session_key(profile),
 	}
 }
 

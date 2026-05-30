@@ -104,6 +104,16 @@ Add a `segments` array to `~/.statusline/settings.json` to control what's shown 
 
 If `segments` is not set, the default layout is used: `context_percentage`, `total_input_tokens`, `output_tokens`, `divider`, `five_hour`, `seven_day`, `divider`, `extra_usage`.
 
+### Interactive editor
+
+Instead of editing the JSON by hand, run:
+
+```
+statusline configure
+```
+
+This opens an interactive editor with a live preview to add, remove, reorder and toggle segments and edit their options, writing the result to `~/.statusline/settings.json` (existing keys are preserved). Key hints: ↑↓ move, ⇧↑/⇧↓ reorder, space toggle, → options, `a` add, `s` save, `q` quit.
+
 ### Available segments
 
 #### Context window
