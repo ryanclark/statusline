@@ -48,10 +48,10 @@ macOS (Apple Silicon) and Linux (arm64/amd64) are supported.
 > [!NOTE]
 > Keychain access to "Chrome Safe Storage" is only needed if you use the `extra_usage` segment (see below).
 
-Or build from source:
+Or build from source (requires [just](https://github.com/casey/just)):
 
 ```
-make install
+just install
 ```
 
 ## Setup
@@ -317,7 +317,7 @@ The defaults are `-f 70` (show 5-hour reset countdown above 70%) and `-s 100` (n
 ### Basic build
 
 ```
-make install
+just install
 ```
 
 This builds without codesigning. The Chrome Keychain password is cached locally to `~/.statusline/chrome_key` to avoid repeated Keychain prompts during development.
@@ -331,25 +331,25 @@ Codesigning makes Keychain's "Always Allow" persist across rebuilds. You need an
 If you don't have a Developer ID Application certificate yet:
 
 ```
-make cert-request DEVELOPER_NAME="Your Name"
+just cert-request "Your Name"
 ```
 
 This generates a certificate signing request. Upload `devid.csr` at the URL shown, select **Developer ID Application**, and download the `.cer` file. Then import it:
 
 ```
-make cert-import CER=~/Downloads/developerID_application.cer
+just cert-import ~/Downloads/developerID_application.cer
 ```
 
 This installs the certificate into your Keychain and prints your signing identity. Clean up afterwards:
 
 ```
-make cert-clean
+just cert-clean
 ```
 
 #### Building
 
 ```
-make install-signed DEVELOPER_NAME="Your Name" TEAM_ID="ABC123XYZ"
+just install-signed "Your Name" "ABC123XYZ"
 ```
 
 To find your name and team ID:

@@ -9,3 +9,5 @@ devid.*
 .DS_Store
 .claude/
 docs/superpowers/
+
+justfile.local

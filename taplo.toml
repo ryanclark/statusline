@@ -1,0 +1,6 @@
+# TOML formatting via `taplo fmt` (runs as part of `just fmt`).
+exclude = ["target/**", "Cargo.lock"]
+
+[formatting]
+# Keep entries in the order they're written (no alphabetical churn).
+reorder_keys = false

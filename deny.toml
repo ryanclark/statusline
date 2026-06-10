@@ -5,9 +5,9 @@
 # Only evaluate the platforms we actually build/ship — keeps windows-only crates
 # (and their licenses / duplicate versions) out of the graph.
 targets = [
-    "aarch64-apple-darwin",
-    "x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu",
+  "aarch64-apple-darwin",
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
 ]
 
 [advisories]
@@ -20,16 +20,16 @@ version = 2
 # Permissive licenses present in the dependency tree. `cargo deny check
 # licenses` fails if a new dependency introduces one not listed here.
 allow = [
-    "MIT",
-    "Apache-2.0",
-    "BSD-2-Clause",
-    "BSD-3-Clause",
-    "ISC",
-    "Zlib",
-    "Unicode-3.0",
-    "MPL-2.0",
-    # Mozilla CA root bundle shipped via rustls/webpki-roots.
-    "CDLA-Permissive-2.0",
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "MPL-2.0",
+  # Mozilla CA root bundle shipped via rustls/webpki-roots.
+  "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 
