@@ -54,7 +54,7 @@ Or, without Homebrew, install a prebuilt binary from the latest GitHub release:
 curl -fsSL https://raw.githubusercontent.com/ryanclark/statusline/main/install.sh | sh
 ```
 
-The binary is installed to `~/.local/bin` (override with `INSTALL_DIR=...`). Append `-s -- v0.1.4` after `sh` to pin a version.
+The binary is installed to `~/.local/bin` (override with `INSTALL_DIR=...`). Append `-s -- v1.0.0` after `sh` to pin a version.
 
 Or build from source (requires [just](https://github.com/casey/just)):
 

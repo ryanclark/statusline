@@ -3,7 +3,7 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/ryanclark/statusline/main/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/ryanclark/statusline/main/install.sh | sh -s -- v0.1.4
+#   curl -fsSL https://raw.githubusercontent.com/ryanclark/statusline/main/install.sh | sh -s -- v1.0.0
 #   INSTALL_DIR=/usr/local/bin ./install.sh
 
 set -eu

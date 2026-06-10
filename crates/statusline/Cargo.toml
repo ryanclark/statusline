@@ -22,7 +22,7 @@ serde.workspace = true
 serde_json.workspace = true
 ureq = "3.3.0"
 statusline-core = { workspace = true, features = ["clap"] }
-statusline-configure = { path = "../statusline-configure" }
+statusline-configure = { path = "../statusline-configure", version = "1.0.0" }
 
 [features]
 codesigned = []
