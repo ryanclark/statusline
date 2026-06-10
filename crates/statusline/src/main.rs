@@ -4,6 +4,7 @@ mod install;
 mod profiles;
 mod update;
 mod usage;
+mod usage_cache;
 
 #[allow(unused_imports)]
 pub(crate) use statusline_core::{
@@ -15,7 +16,6 @@ use crate::input::InputData;
 use crate::install::install;
 use crate::segment::{RenderContext, SegmentConfig, SegmentLine, default_segments, load_git_cache};
 use crate::settings::Settings;
-use crate::usage::{fetch_credits, fetch_usage};
 use clap::{Parser, Subcommand};
 use format::Percentage;
 use owo_colors::OwoColorize;
@@ -46,6 +46,17 @@ enum Commands {
 		browser: Option<browser::Browser>,
 	},
 	Configure,
+	#[command(hide = true)]
+	UsageRefresh {
+		#[arg(long)]
+		org: String,
+
+		#[arg(long)]
+		browser: browser::Browser,
+
+		#[arg(long)]
+		profile: Option<String>,
+	},
 }
 
 fn main() {
@@ -106,6 +117,11 @@ fn main() {
 				}
 			}
 		}
+		Some(Commands::UsageRefresh {
+			org,
+			browser,
+			profile,
+		}) => usage_cache::run_refresh(&org, browser, profile.as_deref()),
 		None => {
 			let settings = match Settings::load() {
 				Ok(s) => s,
@@ -177,31 +193,21 @@ fn main() {
 				None
 			};
 
-			let usage_result = if needs_usage {
-				match resolved {
-					Some((org_uuid, browser, profile)) => {
-						let result = fetch_usage(org_uuid, browser, profile);
-						if let Err(e) = &result {
-							eprintln!("{}", format_args!("usage error: {e}").color(RED).dimmed());
-						}
-						Some(result)
-					}
-					None => {
-						let err = usage::UsageError::Other("no active Claude account".to_owned());
-						eprintln!("{}", format_args!("usage error: {err}").color(RED).dimmed());
-						Some(Err(err))
-					}
-				}
-			} else {
-				None
-			};
+			let cached = usage_cache::read();
+			let (mut usage_result, credits_result) =
+				usage_cache::results(cached.as_ref(), needs_usage, needs_credits);
 
-			let credits_result = if needs_credits {
-				resolved
-					.map(|(org_uuid, browser, profile)| fetch_credits(org_uuid, browser, profile))
-			} else {
-				None
-			};
+			match resolved {
+				Some((org_uuid, browser, profile)) => {
+					usage_cache::maybe_spawn_refresh(org_uuid, browser, profile);
+				}
+				None if needs_usage => {
+					let err = usage::UsageError::Other("no active Claude account".to_owned());
+					eprintln!("{}", format_args!("usage error: {err}").color(RED).dimmed());
+					usage_result = Some(Err(err));
+				}
+				None => {}
+			}
 
 			let divider = settings.divider.as_deref().unwrap_or(DIVIDER);
 			let git_cache = load_git_cache(&input.cwd);

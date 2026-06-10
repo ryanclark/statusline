@@ -8,26 +8,22 @@ pub(crate) use statusline_core::usage::{ExtraUsage, PrepaidCredits, UsageError, 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36";
 
-pub(crate) fn fetch_usage(
+pub(crate) fn fetch_usage_raw(
 	org_id: &str,
 	browser: Browser,
 	profile: Option<&str>,
-) -> Result<UsageResponse, UsageError> {
+) -> Result<String, UsageError> {
 	let url = format!("https://claude.ai/api/organizations/{org_id}/usage");
-	let body = fetch_authenticated(&url, browser, profile)?;
-	serde_json::from_str(&body)
-		.map_err(|e| UsageError::Other(format!("parsing usage response: {e}")))
+	fetch_authenticated(&url, browser, profile)
 }
 
-pub(crate) fn fetch_credits(
+pub(crate) fn fetch_credits_raw(
 	org_id: &str,
 	browser: Browser,
 	profile: Option<&str>,
-) -> Result<PrepaidCredits, UsageError> {
+) -> Result<String, UsageError> {
 	let url = format!("https://claude.ai/api/organizations/{org_id}/prepaid/credits");
-	let body = fetch_authenticated(&url, browser, profile)?;
-	serde_json::from_str(&body)
-		.map_err(|e| UsageError::Other(format!("parsing credits response: {e}")))
+	fetch_authenticated(&url, browser, profile)
 }
 
 fn fetch_authenticated(
