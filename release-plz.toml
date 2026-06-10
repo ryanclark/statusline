@@ -12,3 +12,4 @@ release_commits = "^(feat|fix)"
 name = "statusline"
 release = true
 git_tag_name = "v{{ version }}"
+changelog_path = "CHANGELOG.md"

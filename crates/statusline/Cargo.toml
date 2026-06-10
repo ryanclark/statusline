@@ -1,12 +1,11 @@
 [package]
 name = "statusline"
-version = "0.1.5"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.91"
 description = "Claude Code status line with context window and usage tracking"
 repository = "https://github.com/ryanclark/statusline"
 license = "MIT"
-publish = false
 
 [dependencies]
 clap.workspace = true
