@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0](https://github.com/ryanclark/statusline/compare/v0.1.4...v1.0.0) - 2026-06-10
+
+### Added
+
+- add usage caching and bridge
+- move to workspace, add configure TUI
+
+### Other
+
+- set versions to appease cargo deny
+- update statusline to v1.0.0
+- release v0.1.5 ([#12](https://github.com/ryanclark/statusline/pull/12))
+- Cargo.toml cleanup
+
 ## [0.1.4](https://github.com/ryanclark/statusline/compare/v0.1.3...v0.1.4) - 2026-05-29
 
 ### Added
