@@ -6,11 +6,11 @@ rust-version = "1.91"
 description = "Claude Code status line with context window and usage tracking"
 repository = "https://github.com/ryanclark/statusline"
 license = "MIT"
+publish = false
 
 [dependencies]
 clap.workspace = true
 eyre = "0.6.12"
-thiserror.workspace = true
 owo-colors.workspace = true
 security-framework = "3"
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -21,17 +21,12 @@ sha1 = "0.10"
 semver = "1"
 serde.workspace = true
 serde_json.workspace = true
-chrono.workspace = true
 ureq = "3.3.0"
-dirs.workspace = true
 statusline-core = { workspace = true, features = ["clap"] }
 statusline-configure = { path = "../statusline-configure" }
 
 [features]
 codesigned = []
-
-[dev-dependencies]
-strip-ansi-escapes.workspace = true
 
 [lints]
 workspace = true

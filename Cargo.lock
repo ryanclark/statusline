@@ -988,9 +988,7 @@ version = "0.1.4"
 dependencies = [
  "aes",
  "cbc",
- "chrono",
  "clap",
- "dirs",
  "eyre",
  "owo-colors",
  "pbkdf2",
@@ -1002,8 +1000,6 @@ dependencies = [
  "sha1",
  "statusline-configure",
  "statusline-core",
- "strip-ansi-escapes",
- "thiserror",
  "ureq",
 ]
 

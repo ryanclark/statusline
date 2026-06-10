@@ -17,7 +17,6 @@ dirs.workspace = true
 clap = { workspace = true, optional = true }
 
 [features]
-# Lets the binary keep deriving clap::ValueEnum on Browser; off for clankerbox.
 clap = ["dep:clap"]
 
 [dev-dependencies]
