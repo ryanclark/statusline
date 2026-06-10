@@ -108,7 +108,7 @@ impl EditorModel {
 				config,
 			})
 			.collect();
-		
+
 		Self {
 			rows,
 			cursor: 0,
@@ -136,7 +136,7 @@ impl EditorModel {
 				config
 			})
 			.collect();
-		
+
 		let segments = if base.segments.is_none()
 			&& segments == statusline_core::segment::default_segments()
 		{
@@ -144,7 +144,7 @@ impl EditorModel {
 		} else {
 			Some(segments)
 		};
-		
+
 		Settings {
 			segments,
 			divider: self.divider.clone(),
@@ -171,14 +171,14 @@ impl EditorModel {
 				if self.cursor > 0 {
 					self.cursor -= 1;
 				}
-				
+
 				Effect::Redraw
 			}
 			Key::Down => {
 				if self.cursor < n {
 					self.cursor += 1;
 				}
-				
+
 				Effect::Redraw
 			}
 			Key::MoveUp => self.move_row(Dir::Up),
@@ -188,30 +188,30 @@ impl EditorModel {
 					self.rows[self.cursor].enabled ^= true;
 					self.dirty = true;
 				}
-				
+
 				Effect::Redraw
 			}
 			Key::Remove => {
 				if self.cursor < n {
 					self.rows.remove(self.cursor);
 					self.dirty = true;
-					
+
 					if self.cursor > self.rows.len() {
 						self.cursor = self.rows.len();
 					}
 				}
-				
+
 				Effect::Redraw
 			}
 			Key::Add => {
 				self.enter_picker();
-				
+
 				Effect::OpenPicker
 			}
 			Key::Replace => {
 				if self.cursor < n {
 					self.enter_replace();
-					
+
 					Effect::OpenPicker
 				} else {
 					Effect::None
@@ -227,18 +227,18 @@ impl EditorModel {
 					},
 				);
 				self.dirty = true;
-				
+
 				Effect::Redraw
 			}
 			Key::Enter if self.cursor == n => {
 				self.enter_picker();
-				
+
 				Effect::OpenPicker
 			}
 			Key::EnterOptions | Key::Enter | Key::Right => {
 				if self.cursor < n {
 					self.enter_options();
-					
+
 					Effect::Redraw
 				} else {
 					Effect::None
@@ -246,7 +246,7 @@ impl EditorModel {
 			}
 			Key::Global => {
 				self.enter_global();
-				
+
 				Effect::Redraw
 			}
 			Key::Save => Effect::Save,
@@ -265,11 +265,11 @@ impl EditorModel {
 
 	fn move_row(&mut self, dir: Dir) -> Effect {
 		let n = self.rows.len();
-		
+
 		if self.cursor >= n {
 			return Effect::None;
 		}
-		
+
 		let target = match dir {
 			Dir::Up => match self.cursor.checked_sub(1) {
 				Some(t) => t,
@@ -280,15 +280,15 @@ impl EditorModel {
 				if t >= n {
 					return Effect::None;
 				}
-				
+
 				t
 			}
 		};
-		
+
 		self.rows.swap(self.cursor, target);
 		self.cursor = target;
 		self.dirty = true;
-		
+
 		Effect::Redraw
 	}
 
@@ -308,7 +308,7 @@ impl EditorModel {
 		if self.options.editing_label.is_some() {
 			return self.apply_options_label_edit(key);
 		}
-		
+
 		if self.options.editing_color.is_some() {
 			return self.apply_options_color_edit(key);
 		}
@@ -319,37 +319,37 @@ impl EditorModel {
 				if self.options.field > 0 {
 					self.options.field -= 1;
 				}
-				
+
 				Effect::Redraw
 			}
 			Key::Down => {
 				if self.options.field + 1 < fields.len() {
 					self.options.field += 1;
 				}
-				
+
 				Effect::Redraw
 			}
 			Key::Toggle | Key::Right => {
 				if let Some(&kind) = fields.get(self.options.field) {
 					self.adjust_option(kind);
 				}
-				
+
 				Effect::Redraw
 			}
 			Key::Enter => {
 				if let Some(&kind) = fields.get(self.options.field) {
 					self.start_edit(kind);
 				}
-				
+
 				Effect::Redraw
 			}
 			Key::Left | Key::Back => {
 				if let Some(row) = self.rows.get_mut(self.cursor) {
 					row.config.normalize();
 				}
-				
+
 				self.focus = Focus::List;
-				
+
 				Effect::Redraw
 			}
 			Key::Save
@@ -362,9 +362,9 @@ impl EditorModel {
 				if let Some(row) = self.rows.get_mut(self.cursor) {
 					row.config.normalize();
 				}
-				
+
 				self.focus = Focus::List;
-				
+
 				self.apply_list(key)
 			}
 			_ => Effect::None,
@@ -376,13 +376,13 @@ impl EditorModel {
 			return;
 		};
 		let opts = row.config.options_mut();
-		
+
 		match kind {
 			OptionKind::Colors => opts.colors ^= true,
 			OptionKind::Icon => opts.icon ^= true,
 			OptionKind::Capitalize => {
 				let current = opts.capitalize.unwrap_or(true);
-				
+
 				opts.capitalize = Some(!current);
 			}
 			OptionKind::Style => opts.style = next_style(opts.style.as_deref()),
@@ -395,7 +395,7 @@ impl EditorModel {
 					},
 					DirtyConfig::Custom(s) => {
 						self.options.remembered_dirty = Some(s);
-						
+
 						DirtyConfig::Off
 					}
 				};
@@ -403,13 +403,13 @@ impl EditorModel {
 			OptionKind::IconColor => {
 				let mut pick = ColorPick::from_opt(opts.icon_color.as_deref());
 				pick.cycle(1);
-				
+
 				opts.icon_color = pick.to_opt();
 			}
 			OptionKind::DirtyColor => {
 				let mut pick = ColorPick::from_opt(opts.dirty_color.as_deref());
 				pick.cycle(1);
-				
+
 				opts.dirty_color = pick.to_opt();
 			}
 			OptionKind::Label => return,
@@ -421,21 +421,21 @@ impl EditorModel {
 		let Some(row) = self.rows.get_mut(self.cursor) else {
 			return;
 		};
-		
+
 		match kind {
 			OptionKind::Label => {
 				let current = row.config.options_mut().label.clone().unwrap_or_default();
-		
+
 				self.options.editing_label = Some(LineEdit::with(&current));
 			}
 			OptionKind::IconColor => {
 				let current = row.config.options_mut().icon_color.clone();
-		
+
 				self.options.editing_color = Some(ColorPick::from_opt(current.as_deref()));
 			}
 			OptionKind::DirtyColor => {
 				let current = row.config.options_mut().dirty_color.clone();
-		
+
 				self.options.editing_color = Some(ColorPick::from_opt(current.as_deref()));
 			}
 			_ => {}
@@ -446,7 +446,7 @@ impl EditorModel {
 		let Some(editor) = self.options.editing_label.as_mut() else {
 			return Effect::None;
 		};
-		
+
 		match key {
 			Key::Char(c) => editor.insert(c),
 			Key::Backspace => editor.backspace(),
@@ -463,18 +463,18 @@ impl EditorModel {
 		let Some(editor) = self.options.editing_label.take() else {
 			return Effect::None;
 		};
-		
+
 		if let Some(row) = self.rows.get_mut(self.cursor) {
 			let value = editor.value().to_owned();
 			let new = (!value.is_empty()).then_some(value);
 			let opts = row.config.options_mut();
-			
+
 			if opts.label != new {
 				opts.label = new;
 				self.dirty = true;
 			}
 		}
-		
+
 		Effect::Redraw
 	}
 
@@ -482,7 +482,7 @@ impl EditorModel {
 		let Some(pick) = self.options.editing_color.as_mut() else {
 			return Effect::None;
 		};
-		
+
 		match key {
 			Key::Up | Key::Right => pick.cycle(1),
 			Key::Down | Key::Left => pick.cycle(-1),
@@ -506,7 +506,7 @@ impl EditorModel {
 		let value = pick.to_opt();
 		let fields = self.current_fields();
 		let kind = fields.get(self.options.field).copied();
-		
+
 		if let Some(row) = self.rows.get_mut(self.cursor) {
 			let opts = row.config.options_mut();
 			let slot = match kind {
@@ -514,7 +514,7 @@ impl EditorModel {
 				Some(OptionKind::DirtyColor) => Some(&mut opts.dirty_color),
 				_ => None,
 			};
-			
+
 			if let Some(slot) = slot
 				&& *slot != value
 			{
@@ -522,7 +522,7 @@ impl EditorModel {
 				self.dirty = true;
 			}
 		}
-		
+
 		Effect::Redraw
 	}
 
@@ -535,7 +535,7 @@ impl EditorModel {
 		if self.cursor >= self.rows.len() {
 			return;
 		}
-		
+
 		self.picker = PickerState {
 			replace_at: Some(self.cursor),
 			..PickerState::default()
@@ -548,37 +548,37 @@ impl EditorModel {
 			Key::Char(c) => {
 				self.picker.query.insert(c);
 				self.picker.selected = 0;
-				
+
 				Effect::Redraw
 			}
 			Key::Backspace => {
 				self.picker.query.backspace();
 				self.picker.selected = 0;
-				
+
 				Effect::Redraw
 			}
 			Key::Up => {
 				if self.picker.selected > 0 {
 					self.picker.selected -= 1;
 				}
-				
+
 				Effect::Redraw
 			}
 			Key::Down => {
 				let len = picker::filtered(self.picker.query.value()).len();
-				
+
 				if self.picker.selected + 1 < len {
 					self.picker.selected += 1;
 				}
-				
+
 				Effect::Redraw
 			}
 			Key::Enter => {
 				let results = picker::filtered(self.picker.query.value());
-				
+
 				if self.picker.selected < results.len() {
 					let ty = results[self.picker.selected].ty.clone();
-					
+
 					match self.picker.replace_at {
 						Some(i) if i < self.rows.len() => {
 							self.rows[i].config = SegmentConfig::Simple(ty);
@@ -595,17 +595,17 @@ impl EditorModel {
 							);
 						}
 					}
-					
+
 					self.dirty = true;
 				}
-				
+
 				self.focus = Focus::List;
-				
+
 				Effect::Redraw
 			}
 			Key::Back => {
 				self.focus = Focus::List;
-				
+
 				Effect::Redraw
 			}
 			Key::Quit => self.quit_effect(),
@@ -630,53 +630,53 @@ impl EditorModel {
 				if self.global.field > 0 {
 					self.global.field -= 1;
 				}
-				
+
 				Effect::Redraw
 			}
 			Key::Down => {
 				if self.global.field + 1 < GLOBAL_FIELDS {
 					self.global.field += 1;
 				}
-				
+
 				Effect::Redraw
 			}
 			Key::Toggle | Key::Char(' ') | Key::Left | Key::Right if self.global.field == 1 => {
 				self.global.nerd_font ^= true;
-				
+
 				Effect::Redraw
 			}
 			Key::Char(c) => {
 				if let Some(editor) = self.global_editor_mut() {
 					editor.insert(c);
 				}
-				
+
 				Effect::Redraw
 			}
 			Key::Backspace => {
 				if let Some(editor) = self.global_editor_mut() {
 					editor.backspace();
 				}
-				
+
 				Effect::Redraw
 			}
 			Key::Left => {
 				if let Some(editor) = self.global_editor_mut() {
 					editor.left();
 				}
-				
+
 				Effect::Redraw
 			}
 			Key::Right => {
 				if let Some(editor) = self.global_editor_mut() {
 					editor.right();
 				}
-				
+
 				Effect::Redraw
 			}
 			Key::Back | Key::Enter => {
 				self.commit_global();
 				self.focus = Focus::List;
-				
+
 				Effect::Redraw
 			}
 			Key::Quit => self.quit_effect(),
@@ -696,24 +696,24 @@ impl EditorModel {
 	fn commit_global(&mut self) {
 		let divider = self.global.divider.value();
 		let new_divider = (!divider.is_empty()).then(|| divider.to_owned());
-		
+
 		if new_divider != self.divider {
 			self.divider = new_divider;
 			self.dirty = true;
 		}
-		
+
 		if self.global.nerd_font != self.nerd_font {
 			self.nerd_font = self.global.nerd_font;
 			self.dirty = true;
 		}
-		
+
 		if let Ok(five) = Percentage::from_str(self.global.five.value())
 			&& five != self.five
 		{
 			self.five = five;
 			self.dirty = true;
 		}
-		
+
 		if let Ok(seven) = Percentage::from_str(self.global.seven.value())
 			&& seven != self.seven
 		{
@@ -778,9 +778,9 @@ mod tests {
 		assert_eq!(m.apply(Key::Down), Effect::Redraw);
 		assert_eq!(m.cursor, 1);
 		assert_eq!(m.apply(Key::Down), Effect::Redraw);
-		assert_eq!(m.cursor, n); 
+		assert_eq!(m.cursor, n);
 		assert_eq!(m.apply(Key::Down), Effect::Redraw);
-		assert_eq!(m.cursor, n); 
+		assert_eq!(m.cursor, n);
 		assert!(!m.dirty);
 	}
 
@@ -813,7 +813,7 @@ mod tests {
 	#[test]
 	fn move_on_add_row_is_noop() {
 		let mut m = model(&[SegmentType::Model]);
-		m.cursor = m.rows.len(); 
+		m.cursor = m.rows.len();
 		assert_eq!(m.apply(Key::MoveUp), Effect::None);
 		assert_eq!(m.apply(Key::MoveDown), Effect::None);
 		assert!(!m.dirty);
@@ -833,7 +833,7 @@ mod tests {
 	#[test]
 	fn toggle_keeps_row_and_saves_it_disabled() {
 		let mut m = model(&[SegmentType::Model, SegmentType::Cwd]);
-		m.apply(Key::Toggle); 
+		m.apply(Key::Toggle);
 		assert!(!m.rows[0].enabled);
 		assert!(m.dirty);
 		assert_eq!(m.rows.len(), 2, "toggled-off row is kept in the list");
@@ -931,9 +931,9 @@ mod tests {
 	#[test]
 	fn save_keeps_hidden_rows_as_disabled() {
 		let mut m = model(&[SegmentType::GitBranch, SegmentType::Cwd]);
-		m.rows[0].config.options_mut().dirty = DirtyConfig::On; 
+		m.rows[0].config.options_mut().dirty = DirtyConfig::On;
 		m.cursor = 0;
-		m.apply(Key::Toggle); 
+		m.apply(Key::Toggle);
 		let s = m.to_settings(&crate::default_settings());
 		let segs = s.segments.expect("explicit list saved");
 		assert_eq!(segs.len(), 2, "hidden row was deleted on save");
@@ -963,7 +963,7 @@ mod tests {
 		s.segments = None;
 		let mut m = EditorModel::from_settings(&s);
 		m.apply(Key::Global);
-		m.apply(Key::Down); 
+		m.apply(Key::Down);
 		m.apply(Key::Toggle);
 		m.apply(Key::Back);
 		let out = m.to_settings(&s);
@@ -988,14 +988,14 @@ mod tests {
 	#[test]
 	fn hex_color_is_typeable_from_default() {
 		let mut m = model(&[SegmentType::FiveHour]);
-		m.apply(Key::Enter); 
+		m.apply(Key::Enter);
 		m.apply(Key::Down);
-		m.apply(Key::Down); 
-		m.apply(Key::Enter); 
+		m.apply(Key::Down);
+		m.apply(Key::Enter);
 		for c in "#ff8800".chars() {
 			m.apply(Key::Char(c));
 		}
-		m.apply(Key::Enter); 
+		m.apply(Key::Enter);
 		let SegmentConfig::Advanced(opts) = &m.rows[0].config else {
 			panic!("editing upgrades to Advanced");
 		};
@@ -1007,7 +1007,7 @@ mod tests {
 		let mut m = model(&[SegmentType::Model]);
 		m.five = 72.5.into();
 		m.apply(Key::Global);
-		m.apply(Key::Back); 
+		m.apply(Key::Back);
 		assert_eq!(m.five, 72.5.into(), "threshold rounded by open/close");
 		assert!(!m.dirty, "untouched panel must not dirty the model");
 	}
@@ -1017,7 +1017,7 @@ mod tests {
 		let mut m = model(&[SegmentType::Model]);
 		m.apply(Key::Global);
 		m.apply(Key::Down);
-		m.apply(Key::Down); 
+		m.apply(Key::Down);
 		m.apply(Key::Backspace);
 		m.apply(Key::Backspace);
 		for c in "nan".chars() {
@@ -1033,16 +1033,16 @@ mod tests {
 		let mut m = model(&[SegmentType::FiveHour]);
 		m.apply(Key::Enter);
 		for _ in 0..3 {
-			m.apply(Key::Down); 
+			m.apply(Key::Down);
 		}
-		m.apply(Key::Enter); 
-		m.apply(Key::Enter); 
+		m.apply(Key::Enter);
+		m.apply(Key::Enter);
 		assert!(!m.dirty, "unchanged label commit must not dirty");
 
 		let mut m = model(&[SegmentType::FiveHour]);
 		m.apply(Key::Enter);
 		m.apply(Key::Down);
-		m.apply(Key::Down); 
+		m.apply(Key::Down);
 		m.apply(Key::Enter);
 		m.apply(Key::Enter);
 		assert!(!m.dirty, "unchanged color commit must not dirty");
@@ -1054,10 +1054,10 @@ mod tests {
 		m.rows[0].config.options_mut().dirty = DirtyConfig::Custom("✗".to_owned());
 		m.apply(Key::Enter);
 		m.apply(Key::Down);
-		m.apply(Key::Down); 
-		m.apply(Key::Toggle); 
-		m.apply(Key::Toggle); 
-		m.apply(Key::Toggle); 
+		m.apply(Key::Down);
+		m.apply(Key::Toggle);
+		m.apply(Key::Toggle);
+		m.apply(Key::Toggle);
 		let SegmentConfig::Advanced(opts) = &m.rows[0].config else {
 			panic!("advanced");
 		};
@@ -1093,7 +1093,7 @@ mod tests {
 	#[test]
 	fn quit_in_pane_confirms_when_dirty() {
 		let mut m = model(&[SegmentType::Model]);
-		m.apply(Key::Toggle); 
+		m.apply(Key::Toggle);
 		m.apply(Key::Add);
 		assert_eq!(m.apply(Key::Quit), Effect::ConfirmQuitUnsaved);
 	}
@@ -1119,7 +1119,7 @@ mod tests {
 		assert_eq!(m.apply(Key::Remove), Effect::Redraw);
 		assert_eq!(m.focus, Focus::List);
 		assert_eq!(m.rows.len(), 1);
-		
+
 		let mut m = model(&[SegmentType::Model]);
 		m.apply(Key::Enter);
 		assert_eq!(m.apply(Key::Add), Effect::OpenPicker);
@@ -1130,7 +1130,7 @@ mod tests {
 	fn global_nerd_font_toggles_with_space_char() {
 		let mut m = model(&[SegmentType::Model]);
 		m.apply(Key::Global);
-		m.apply(Key::Down); 
+		m.apply(Key::Down);
 		assert!(!m.global.nerd_font);
 		m.apply(Key::Char(' '));
 		assert!(m.global.nerd_font, "space should flip the nerd_font toggle");
@@ -1139,7 +1139,7 @@ mod tests {
 	#[test]
 	fn add_row_opens_picker() {
 		let mut m = model(&[SegmentType::Model]);
-		m.cursor = m.rows.len(); 
+		m.cursor = m.rows.len();
 		assert_eq!(m.apply(Key::Enter), Effect::OpenPicker);
 		assert_eq!(m.focus, Focus::Picker);
 	}
@@ -1155,7 +1155,7 @@ mod tests {
 	#[test]
 	fn add_key_on_normal_row_opens_picker() {
 		let mut m = model(&[SegmentType::Model, SegmentType::Cwd]);
-		m.cursor = 0; 
+		m.cursor = 0;
 		assert_eq!(m.apply(Key::Add), Effect::OpenPicker);
 		assert_eq!(m.focus, Focus::Picker);
 	}
@@ -1204,7 +1204,7 @@ mod tests {
 	fn first_option_edit_upgrades_to_advanced() {
 		let mut m = model(&[SegmentType::GitBranch]);
 		m.cursor = 0;
-		m.apply(Key::Enter); 
+		m.apply(Key::Enter);
 		assert_eq!(m.focus, Focus::Options);
 		m.apply(Key::Toggle);
 		assert!(matches!(m.rows[0].config, SegmentConfig::Advanced(_)));

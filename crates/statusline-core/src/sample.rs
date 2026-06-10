@@ -1,7 +1,10 @@
 use crate::constants::DIVIDER;
 use crate::context_window::{ContextWindow, CurrentUsage};
 use crate::format::{Percentage, Tokens};
-use crate::input::{AgentInfo, CostInfo, InputData, ModelInfo, RateLimitPeriod, RateLimits, VimInfo, Workspace, WorktreeInfo};
+use crate::input::{
+	AgentInfo, CostInfo, InputData, ModelInfo, RateLimitPeriod, RateLimits, VimInfo, Workspace,
+	WorktreeInfo,
+};
 use crate::segment::{AccountDisplay, GitCache, RenderContext};
 use crate::usage::{PrepaidCredits, UsageError, UsageResponse};
 

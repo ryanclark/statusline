@@ -284,18 +284,10 @@ fn list_body(model: &EditorModel) -> Vec<Body> {
 		let on_segment = i == model.cursor;
 		let expanded = on_segment && model.focus == Focus::Options;
 		let pointer = if on_segment { '\u{276f}' } else { ' ' };
-		let checkbox = if row.enabled {
-			'\u{25c9}'
-		} else {
-			'\u{25cb}'
-		};
+		let checkbox = if row.enabled { '\u{25c9}' } else { '\u{25cb}' };
 		let ty = row.config.segment_type();
 		let caret = if has_options(ty) {
-			if expanded {
-				" \u{25be}"
-			} else {
-				" \u{25b8}"
-			}
+			if expanded { " \u{25be}" } else { " \u{25b8}" }
 		} else {
 			""
 		};

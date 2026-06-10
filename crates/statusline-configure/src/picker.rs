@@ -11,7 +11,7 @@ pub struct PickerState {
 #[must_use]
 pub fn filtered(query: &str) -> Vec<&'static SegmentMeta> {
 	let q = query.to_ascii_lowercase();
-	
+
 	catalog()
 		.iter()
 		.filter(|m| {
