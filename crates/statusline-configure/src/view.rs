@@ -619,7 +619,7 @@ mod tests {
 			"preview should show a percentage: {line}"
 		);
 		assert!(
-			line.contains("Opus"),
+			line.contains("Fable"),
 			"preview should include the model name: {line}"
 		);
 
@@ -627,7 +627,7 @@ mod tests {
 		let line2 = strip_ansi(&preview_line(&m, &sample));
 		assert_ne!(line, line2);
 		assert!(
-			!line2.contains("Opus"),
+			!line2.contains("Fable"),
 			"hidden model should drop out: {line2}"
 		);
 	}
@@ -861,8 +861,8 @@ mod tests {
 			"context row carries a % example"
 		);
 		assert!(
-			example_for("model").is_some_and(|e| e.contains("Opus")),
-			"model row carries an Opus example"
+			example_for("model").is_some_and(|e| e.contains("Fable")),
+			"model row carries an Fable example"
 		);
 	}
 
@@ -882,7 +882,7 @@ mod tests {
 				.example
 				.as_deref()
 				.map(strip_ansi)
-				.is_some_and(|e| e.contains("Opus"))),
+				.is_some_and(|e| e.contains("Fable"))),
 			"a filtered picker row carries the model example"
 		);
 	}
