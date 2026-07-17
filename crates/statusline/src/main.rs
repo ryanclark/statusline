@@ -172,7 +172,9 @@ fn main() {
 				.or(settings.segments)
 				.unwrap_or_else(default_segments);
 
-			let needs_usage = segments.iter().any(SegmentConfig::is_extra_usage);
+			let needs_usage = segments
+				.iter()
+				.any(|s| s.is_extra_usage() || s.is_fable_usage());
 			let needs_credits = segments.iter().any(SegmentConfig::is_credits);
 
 			let resolved = if needs_usage || needs_credits {

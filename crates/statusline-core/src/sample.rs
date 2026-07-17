@@ -87,9 +87,16 @@ impl SampleData {
 			stash_count: 1,
 		};
 
-		let usage: UsageResponse = serde_json::from_str(
-			r#"{"extra_usage": {"monthly_limit": 10000.0, "used_credits": 2500.0}}"#,
-		)
+		let fable_reset = (chrono::Utc::now() + chrono::Duration::days(3)).to_rfc3339();
+		let usage: UsageResponse = serde_json::from_str(&format!(
+			r#"{{
+				"extra_usage": {{"monthly_limit": 10000.0, "used_credits": 2500.0}},
+				"limits": [
+					{{"kind": "weekly_scoped", "percent": 37, "resets_at": "{fable_reset}",
+					  "scope": {{"model": {{"display_name": "Fable"}}}}}}
+				]
+			}}"#
+		))
 		.expect("representative sample usage JSON should parse");
 
 		let credits: PrepaidCredits = serde_json::from_str(r#"{"amount": 3304}"#)

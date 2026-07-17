@@ -168,6 +168,14 @@ static CATALOG: &[SegmentMeta] = &[
 		options: ICON_TEXT,
 	},
 	SegmentMeta {
+		ty: SegmentType::FableUsage,
+		id: "fable_usage",
+		label: "Fable usage",
+		category: Category::RateLimits,
+		description: "Fable weekly rate limit % with reset countdown (calls the API)",
+		options: ICON_TEXT,
+	},
+	SegmentMeta {
 		ty: SegmentType::ExtraUsage,
 		id: "extra_usage",
 		label: "Extra usage",

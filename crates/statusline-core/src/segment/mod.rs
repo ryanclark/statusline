@@ -26,6 +26,7 @@ pub enum SegmentType {
 	OutputTokens,
 	FiveHour,
 	SevenDay,
+	FableUsage,
 	ExtraUsage,
 	Credits,
 	Divider,
@@ -69,7 +70,8 @@ impl SegmentType {
 				InputTokens => OutputTokens,
 				OutputTokens => FiveHour,
 				FiveHour => SevenDay,
-				SevenDay => ExtraUsage,
+				SevenDay => FableUsage,
+				FableUsage => ExtraUsage,
 				ExtraUsage => Credits,
 				Credits => Divider,
 				Divider => Cwd,
@@ -267,6 +269,11 @@ impl SegmentConfig {
 	#[must_use]
 	pub fn is_extra_usage(&self) -> bool {
 		*self.segment_type() == SegmentType::ExtraUsage
+	}
+
+	#[must_use]
+	pub fn is_fable_usage(&self) -> bool {
+		*self.segment_type() == SegmentType::FableUsage
 	}
 
 	#[must_use]

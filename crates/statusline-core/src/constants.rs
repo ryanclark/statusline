@@ -5,6 +5,7 @@ pub const DOWN_ARROW: &str = "\u{2193}";
 pub const DIVIDER: &str = "\u{2022}";
 pub const FIVE_HOUR_ICON: &str = "\u{25D4}";
 pub const SEVEN_DAY_ICON: &str = "\u{2211}";
+pub const FABLE_USAGE_ICON: &str = "\u{2726}";
 
 pub const RED: DynColors = DynColors::Rgb(255, 80, 80);
 pub const GREEN: DynColors = DynColors::Rgb(80, 200, 120);

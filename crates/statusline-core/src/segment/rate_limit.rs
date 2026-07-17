@@ -1,4 +1,4 @@
-use crate::constants::{FIVE_HOUR_ICON, GRAY, RED, SEVEN_DAY_ICON, YELLOW};
+use crate::constants::{FABLE_USAGE_ICON, FIVE_HOUR_ICON, GRAY, RED, SEVEN_DAY_ICON, YELLOW};
 use crate::format::{ColoredPercentage, Percentage};
 use crate::input::RateLimitPeriod;
 use crate::usage::UsageError;
@@ -63,6 +63,35 @@ pub(super) fn seven_day(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Opt
 		ctx.seven_threshold,
 		ctx.nerd_font,
 	)
+}
+
+pub(super) fn fable_usage(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
+	let limit = ctx.usage?.ok()?.fable()?;
+
+	let icon_str = format_icon(
+		segment,
+		Icon {
+			unicode: FABLE_USAGE_ICON,
+			nerd: "\u{f02d}",
+		},
+		GRAY,
+		ctx.nerd_font,
+	);
+
+	let pct = if segment.colors() {
+		format!("{}", ColoredPercentage(limit.percent))
+	} else {
+		format!("{}", limit.percent)
+	};
+
+	let reset = match limit.countdown(Utc::now()) {
+		Some(countdown) => format!(" {}", countdown.dimmed()),
+		None => String::new(),
+	};
+
+	let text = format!("{icon_str}{pct}{reset}");
+
+	Some(apply_style(&text, segment.style()))
 }
 
 pub(super) fn extra_usage(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {

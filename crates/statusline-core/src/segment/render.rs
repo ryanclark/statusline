@@ -18,6 +18,7 @@ pub fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Optio
 
 		SegmentType::FiveHour => rate_limit::five_hour(segment, ctx),
 		SegmentType::SevenDay => rate_limit::seven_day(segment, ctx),
+		SegmentType::FableUsage => rate_limit::fable_usage(segment, ctx),
 		SegmentType::ExtraUsage => rate_limit::extra_usage(segment, ctx),
 		SegmentType::Credits => credits::credits(segment, ctx),
 
@@ -210,6 +211,41 @@ mod tests {
 		};
 		let ctx = default_ctx(&input);
 		let seg = SegmentConfig::Simple(SegmentType::FiveHour);
+		let output = strip_ansi(&render_segment(&seg, &ctx).unwrap());
+		assert!(output.contains("42%"), "got: {output}");
+	}
+
+	#[test]
+	fn render_fable_usage_no_api_returns_none() {
+		let input = default_input();
+		let ctx = default_ctx(&input);
+		let seg = SegmentConfig::Simple(SegmentType::FableUsage);
+		assert!(render_segment(&seg, &ctx).is_none());
+	}
+
+	#[test]
+	fn render_fable_usage_absent_limit_returns_none() {
+		let input = default_input();
+		let usage: crate::usage::UsageResponse =
+			serde_json::from_str(r#"{"limits": [{"kind": "session", "percent": 5}]}"#).unwrap();
+		let mut ctx = default_ctx(&input);
+		ctx.usage = Some(Ok(&usage));
+		let seg = SegmentConfig::Simple(SegmentType::FableUsage);
+		assert!(render_segment(&seg, &ctx).is_none());
+	}
+
+	#[test]
+	fn render_fable_usage_with_data_shows_percent() {
+		let input = default_input();
+		let future = (Utc::now() + chrono::Duration::hours(5)).to_rfc3339();
+		let usage: crate::usage::UsageResponse = serde_json::from_str(&format!(
+			r#"{{"limits": [{{"kind": "weekly_scoped", "percent": 42, "resets_at": "{future}",
+				"scope": {{"model": {{"display_name": "Fable"}}}}}}]}}"#
+		))
+		.unwrap();
+		let mut ctx = default_ctx(&input);
+		ctx.usage = Some(Ok(&usage));
+		let seg = SegmentConfig::Simple(SegmentType::FableUsage);
 		let output = strip_ansi(&render_segment(&seg, &ctx).unwrap());
 		assert!(output.contains("42%"), "got: {output}");
 	}

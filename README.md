@@ -144,6 +144,7 @@ This opens an interactive editor with a live preview to add, remove, reorder and
 |---|---|
 | `five_hour` | 5-hour rate limit % with optional reset countdown |
 | `seven_day` | 7-day rate limit % with optional reset countdown |
+| `fable_usage` | Fable weekly rate limit % with reset countdown (calls the API) |
 | `extra_usage` | Extra usage $used/$limit (only segment that calls the API) |
 
 #### Cost & performance
@@ -299,10 +300,10 @@ Set `skip_update_check` in `~/.statusline/settings.json` to suppress the once-a-
 
 Most segments read from the JSON that Claude Code pipes via stdin — no external calls needed. The exceptions:
 
-- `extra_usage` — calls the claude.ai API (requires Chrome session cookie)
+- `extra_usage`, `fable_usage` — call the claude.ai API (requires Chrome session cookie)
 - `git_branch`, `git_ahead_behind`, `git_stash` — run git commands in the project directory
 
-If you don't include `extra_usage` in your segments, the API call and Chrome cookie auth are skipped entirely.
+If you don't include `extra_usage` or `fable_usage` in your segments, the API call and Chrome cookie auth are skipped entirely.
 
 ## Options
 
