@@ -6,10 +6,12 @@ use crate::input::{
 	RateLimitPeriod, RateLimits, RepoInfo, ThinkingInfo, VimInfo, Workspace, WorktreeInfo,
 };
 use crate::segment::{AccountDisplay, GitCache, RenderContext};
+use crate::subagent::{Effort, Task};
 use crate::usage::{PrepaidCredits, UsageError, UsageResponse};
 
 pub struct SampleData {
 	pub input: InputData,
+	pub tasks: Vec<Task>,
 	pub git: GitCache,
 	pub usage: Result<UsageResponse, UsageError>,
 	pub credits: Result<PrepaidCredits, UsageError>,
@@ -153,8 +155,25 @@ impl SampleData {
 			color: Some("cyan".to_owned()),
 		};
 
+		let task_started = (chrono::Utc::now().timestamp() - 95) * 1000; // -1m35s, in millis
+		let tasks = vec![Task {
+			id: "task-1".to_owned(),
+			name: "security-reviewer".to_owned(),
+			kind: "agent".to_owned(),
+			status: "running".to_owned(),
+			description: "Review the auth flow for injection risks".to_owned(),
+			label: "security-reviewer".to_owned(),
+			start_time: Some(task_started),
+			model: "claude-opus-5".to_owned(),
+			effort: Some(Effort::Level("high".to_owned())),
+			context_window_size: Some(Tokens::from(200_000)),
+			token_count: Some(Tokens::from(45_321)),
+			cwd: "/home/user/project".to_owned(),
+		}];
+
 		Self {
 			input,
+			tasks,
 			git,
 			usage: Ok(usage),
 			credits: Ok(credits),
@@ -187,6 +206,7 @@ impl SampleData {
 			divider,
 			nerd_font,
 			account: Some(self.account.clone()),
+			task: self.tasks.first(),
 		}
 	}
 }

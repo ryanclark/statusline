@@ -6,9 +6,11 @@ mod env;
 mod git;
 mod rate_limit;
 mod render;
+mod task;
 
 use crate::format::{Percentage, parse_color};
 use crate::input::InputData;
+use crate::subagent::Task;
 use crate::usage::{PrepaidCredits, UsageError, UsageResponse};
 use owo_colors::{DynColors, OwoColorize};
 use serde::{Deserialize, Serialize};
@@ -67,6 +69,11 @@ pub enum SegmentType {
 	CacheLastMiss,
 	SessionName,
 	Repo,
+	TaskName,
+	TaskStatus,
+	TaskDescription,
+	TaskElapsed,
+	TaskTokens,
 }
 
 impl SegmentType {
@@ -123,7 +130,12 @@ impl SegmentType {
 				CacheMisses => CacheLastMiss,
 				CacheLastMiss => SessionName,
 				SessionName => Repo,
-				Repo => return None,
+				Repo => TaskName,
+				TaskName => TaskStatus,
+				TaskStatus => TaskDescription,
+				TaskDescription => TaskElapsed,
+				TaskElapsed => TaskTokens,
+				TaskTokens => return None,
 			})
 		}
 
@@ -397,6 +409,8 @@ pub struct RenderContext<'a> {
 	pub divider: &'a str,
 	pub nerd_font: bool,
 	pub account: Option<AccountDisplay>,
+	/// The subagent task behind this row, when rendering the agent panel.
+	pub task: Option<&'a Task>,
 }
 
 pub const STYLES: &[&str] = &["bold", "dim", "italic", "underline"];

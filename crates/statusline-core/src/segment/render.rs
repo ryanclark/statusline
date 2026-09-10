@@ -1,6 +1,6 @@
 use super::{
 	RenderContext, SegmentConfig, SegmentType, account, context, cost, credits, env, git,
-	rate_limit,
+	rate_limit, task,
 };
 
 #[must_use]
@@ -58,6 +58,12 @@ pub fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Optio
 		SegmentType::FastMode => env::fast_mode(segment, ctx),
 
 		SegmentType::Account => account::account(segment, ctx),
+
+		SegmentType::TaskName => task::task_name(segment, ctx),
+		SegmentType::TaskStatus => task::task_status(segment, ctx),
+		SegmentType::TaskDescription => task::task_description(segment, ctx),
+		SegmentType::TaskElapsed => task::task_elapsed(segment, ctx),
+		SegmentType::TaskTokens => task::task_tokens(segment, ctx),
 	};
 
 	result.filter(|s| !s.is_empty())
@@ -87,6 +93,7 @@ mod tests {
 			divider: DIVIDER,
 			nerd_font: false,
 			account: None,
+			task: None,
 		}
 	}
 
@@ -643,6 +650,68 @@ mod tests {
 			"icon_color wins for the icon: {out:?}"
 		);
 		assert!(out.contains("\u{1b}[38;2;0;0;255mwarm"), "{out:?}");
+	}
+
+	fn sample_task() -> crate::subagent::Task {
+		let input = crate::subagent::SubagentInput::from_reader(
+			include_str!("../../tests/fixtures/subagent.json").as_bytes(),
+		)
+		.unwrap();
+		input.tasks.into_iter().next().unwrap()
+	}
+
+	#[test]
+	fn render_task_segments_need_a_task() {
+		let input = default_input();
+		for ty in [
+			SegmentType::TaskName,
+			SegmentType::TaskStatus,
+			SegmentType::TaskDescription,
+			SegmentType::TaskElapsed,
+			SegmentType::TaskTokens,
+		] {
+			assert!(rendered(ty.clone(), &input).is_none(), "{ty:?}");
+		}
+	}
+
+	#[test]
+	fn render_task_segments_from_the_task() {
+		let mut task = sample_task();
+		task.start_time = Some((Utc::now().timestamp() - 90) * 1000);
+		let input = task.to_input();
+		let mut ctx = default_ctx(&input);
+		ctx.task = Some(&task);
+		let render = |ty: SegmentType| {
+			render_segment(&SegmentConfig::Simple(ty), &ctx).map(|s| strip_ansi(&s))
+		};
+		assert_eq!(
+			render(SegmentType::TaskName).as_deref(),
+			Some("security-reviewer")
+		);
+		assert_eq!(render(SegmentType::TaskStatus).as_deref(), Some("running"));
+		assert_eq!(
+			render(SegmentType::TaskDescription).as_deref(),
+			Some("Review the auth flow for injection risks")
+		);
+		assert_eq!(render(SegmentType::TaskTokens).as_deref(), Some("45.3k"));
+		let elapsed = render(SegmentType::TaskElapsed).unwrap();
+		assert!(
+			elapsed.starts_with("1m3"),
+			"millisecond start times count as elapsed: {elapsed}"
+		);
+	}
+
+	#[test]
+	fn render_task_status_colors_known_states() {
+		let task = sample_task();
+		let input = task.to_input();
+		let mut ctx = default_ctx(&input);
+		ctx.task = Some(&task);
+		let out = render_segment(&SegmentConfig::Simple(SegmentType::TaskStatus), &ctx).unwrap();
+		assert!(
+			out.contains("\u{1b}[38;2;100;200;220mrunning"),
+			"running is cyan: {out:?}"
+		);
 	}
 
 	#[test]

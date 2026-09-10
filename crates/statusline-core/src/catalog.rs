@@ -9,6 +9,7 @@ pub enum Category {
 	Environment,
 	Account,
 	Layout,
+	Subagent,
 }
 
 impl Category {
@@ -22,6 +23,7 @@ impl Category {
 			Self::Environment => "Environment",
 			Self::Account => "Account",
 			Self::Layout => "Layout",
+			Self::Subagent => "Subagent",
 		}
 	}
 }
@@ -496,6 +498,46 @@ static CATALOG: &[SegmentMeta] = &[
 		category: Category::Layout,
 		description: "Line break: segments after it render on the next row",
 		options: NO_OPTIONS,
+	},
+	SegmentMeta {
+		ty: SegmentType::TaskName,
+		id: "task_name",
+		label: "Task name",
+		category: Category::Subagent,
+		description: "Subagent name",
+		options: STYLED_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::TaskStatus,
+		id: "task_status",
+		label: "Task status",
+		category: Category::Subagent,
+		description: "Task status (running, completed, failed, pending), colored",
+		options: COLORED_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::TaskDescription,
+		id: "task_description",
+		label: "Task description",
+		category: Category::Subagent,
+		description: "Task description, dimmed",
+		options: COLORED_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::TaskElapsed,
+		id: "task_elapsed",
+		label: "Task elapsed",
+		category: Category::Subagent,
+		description: "Time since the task started",
+		options: STYLED_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::TaskTokens,
+		id: "task_tokens",
+		label: "Task tokens",
+		category: Category::Subagent,
+		description: "Tokens the task has used",
+		options: STYLED_TEXT,
 	},
 ];
 

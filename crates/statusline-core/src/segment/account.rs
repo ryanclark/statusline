@@ -66,6 +66,7 @@ mod tests {
 			seven_threshold: 100.0.into(),
 			divider: "·",
 			nerd_font: false,
+			task: None,
 			account: Some(AccountDisplay {
 				nickname: "work".into(),
 				color: Some("cyan".into()),

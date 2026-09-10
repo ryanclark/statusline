@@ -327,6 +327,33 @@ Most segments read from the JSON that Claude Code pipes via stdin — no externa
 
 If you don't include `extra_usage`, `fable_usage`, or `credits` in your segments, the API call and Chrome cookie auth are skipped entirely.
 
+## Subagent status line
+
+Claude Code can also hand the agent panel's rows to a command through `subagentStatusLine` in
+`~/.claude/settings.json`. `statusline subagent` reads the task list on stdin and prints one row per
+task, built from the `subagent_segments` list in `~/.statusline/settings.json`:
+
+```json
+"subagentStatusLine": {"type": "command", "command": "statusline subagent"}
+```
+
+The default layout is `task_name`, `task_status`, `divider`, `model`, `task_tokens`, `divider`,
+`task_description`. Every task carries its own model, effort, cwd, and token counts, so `model`,
+`model_id`, `effort`, `cwd`, `context_percentage`, `context_window_size`, and `total_input_tokens`
+work per task next to the task segments below. A task whose row renders empty keeps Claude Code's
+default row.
+
+#### Subagent
+
+| Segment | Description |
+|---|---|
+| `task_name` | Subagent name |
+| `task_status` | Task status (`running`, `completed`, `failed`, `pending`), colored |
+| `task_description` | Task description, dimmed |
+| `task_elapsed` | Time since the task started |
+| `task_tokens` | Tokens the task has used |
+
+
 ## Options
 
 Override the thresholds for showing reset countdowns:

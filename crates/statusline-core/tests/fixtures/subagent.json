@@ -1,0 +1,41 @@
+{
+  "session_id": "abc123",
+  "cwd": "/home/user/project",
+  "transcript_path": "/home/user/.claude/projects/project/abc123.jsonl",
+  "hook_event_name": "SubagentStatusLine",
+  "columns": 100,
+  "tasks": [
+    {
+      "id": "task-1",
+      "name": "security-reviewer",
+      "type": "agent",
+      "status": "running",
+      "description": "Review the auth flow for injection risks",
+      "label": "security-reviewer",
+      "startTime": 1738425600000,
+      "model": "claude-opus-5",
+      "effort": "high",
+      "contextWindowSize": 200000,
+      "tokenCount": 45321,
+      "tokenSamples": [[1738425600000, 1200], [1738425660000, 45321]],
+      "cwd": "/home/user/project"
+    },
+    {
+      "id": "task-2",
+      "name": "Explore",
+      "type": "agent",
+      "status": "completed",
+      "description": "Find call sites of parse_color",
+      "tokenCount": 8000,
+      "cwd": "/home/user/project"
+    },
+    {
+      "id": "task-3",
+      "name": "worker",
+      "status": "pending",
+      "effort": 12000,
+      "description": null,
+      "model": null
+    }
+  ]
+}

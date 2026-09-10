@@ -73,6 +73,7 @@ pub(crate) fn default_settings() -> Settings {
 		five_hour_reset_threshold: DEFAULT_FIVE_HOUR_RESET.into(),
 		seven_day_reset_threshold: DEFAULT_SEVEN_DAY_RESET.into(),
 		segments: None,
+		subagent_segments: None,
 		divider: None,
 		nerd_font: false,
 		browser: None,

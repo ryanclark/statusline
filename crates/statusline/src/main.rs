@@ -2,6 +2,7 @@ mod accounts;
 mod browser;
 mod install;
 mod profiles;
+mod subagent;
 mod update;
 mod usage;
 mod usage_cache;
@@ -46,6 +47,8 @@ enum Commands {
 		browser: Option<browser::Browser>,
 	},
 	Configure,
+	/// Render the agent panel rows for Claude Code's subagentStatusLine (reads JSON on stdin).
+	Subagent,
 	#[command(hide = true)]
 	UsageRefresh {
 		#[arg(long)]
@@ -82,6 +85,7 @@ fn main() {
 				}
 			}
 		}
+		Some(Commands::Subagent) => subagent::run(),
 		Some(Commands::Configure) => {
 			let path = match Settings::settings_path() {
 				Ok(p) => p,
@@ -231,6 +235,7 @@ fn main() {
 					divider,
 					nerd_font: settings.nerd_font,
 					account: account_display,
+					task: None,
 				},
 			};
 

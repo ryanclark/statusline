@@ -23,6 +23,9 @@ pub struct Settings {
 	pub seven_day_reset_threshold: Percentage,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub segments: Option<Vec<SegmentConfig>>,
+	/// Layout for the agent panel rows (`statusline subagent`); absent means not set up.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub subagent_segments: Option<Vec<SegmentConfig>>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub divider: Option<String>,
 	#[serde(default)]
@@ -54,6 +57,7 @@ impl Settings {
 			five_hour_reset_threshold,
 			seven_day_reset_threshold,
 			segments: None,
+			subagent_segments: None,
 			divider: None,
 			nerd_font: false,
 			browser: None,
@@ -93,11 +97,35 @@ mod tests {
 	use super::*;
 
 	#[test]
+	fn subagent_segments_round_trip_and_stay_absent_by_default() {
+		let json = r#"{"five_hour_reset_threshold": 70, "seven_day_reset_threshold": 100, "subagent_segments": ["task_name", "divider", "model"]}"#;
+		let settings: Settings = serde_json::from_str(json).unwrap();
+		assert_eq!(settings.subagent_segments.as_ref().map(Vec::len), Some(3));
+		let back = serde_json::to_string(&settings).unwrap();
+		assert!(
+			back.contains(r#""subagent_segments":["task_name","divider","model"]"#),
+			"{back}"
+		);
+
+		let plain: Settings = serde_json::from_str(
+			r#"{"five_hour_reset_threshold": 70, "seven_day_reset_threshold": 100}"#,
+		)
+		.unwrap();
+		assert!(plain.subagent_segments.is_none());
+		assert!(
+			!serde_json::to_string(&plain)
+				.unwrap()
+				.contains("subagent_segments")
+		);
+	}
+
+	#[test]
 	fn settings_roundtrip_serde() {
 		let settings = Settings {
 			five_hour_reset_threshold: 70.0.into(),
 			seven_day_reset_threshold: 100.0.into(),
 			segments: None,
+			subagent_segments: None,
 			divider: None,
 			nerd_font: false,
 			browser: None,
@@ -177,6 +205,7 @@ mod tests {
 			five_hour_reset_threshold: 70.0.into(),
 			seven_day_reset_threshold: 100.0.into(),
 			segments: None,
+			subagent_segments: None,
 			divider: None,
 			nerd_font: false,
 			browser: None,
