@@ -1,4 +1,5 @@
 use crate::format::{Cents, Percentage};
+use crate::util::null_as_default;
 use chrono::{DateTime, Utc};
 use owo_colors::OwoColorize;
 use owo_colors::XtermColors;
@@ -15,7 +16,7 @@ pub enum UsageError {
 #[derive(Debug, Deserialize)]
 pub struct UsageResponse {
 	pub extra_usage: Option<ExtraUsage>,
-	#[serde(default)]
+	#[serde(default, deserialize_with = "null_as_default")]
 	pub limits: Vec<Limit>,
 }
 
@@ -39,9 +40,9 @@ impl UsageResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct Limit {
-	#[serde(default)]
+	#[serde(default, deserialize_with = "null_as_default")]
 	pub kind: String,
-	#[serde(default)]
+	#[serde(default, deserialize_with = "null_as_default")]
 	pub percent: Percentage,
 	#[serde(default)]
 	pub resets_at: Option<String>,
@@ -94,7 +95,7 @@ pub struct LimitScope {
 
 #[derive(Debug, Deserialize)]
 pub struct ScopeModel {
-	#[serde(default)]
+	#[serde(default, deserialize_with = "null_as_default")]
 	pub display_name: String,
 }
 
@@ -239,6 +240,30 @@ mod tests {
 		let fable = resp.fable().expect("Fable-scoped limit should be found");
 		assert_eq!(fable.percent, Percentage::from(37.0));
 		assert!(fable.resets_at.is_none());
+	}
+
+	#[test]
+	fn null_limit_fields_do_not_break_the_response() {
+		// extra_usage is a default segment: one odd entry in `limits` must not take it down.
+		let json = r#"{
+			"extra_usage": {"monthly_limit": 10000.0, "used_credits": 2500.0},
+			"limits": [
+				{"kind": null, "percent": null, "resets_at": null, "scope": {"model": {"display_name": null}}},
+				{"kind": "weekly_scoped", "percent": 37, "scope": {"model": {"display_name": "Fable"}}}
+			]
+		}"#;
+		let resp: UsageResponse = serde_json::from_str(json).unwrap();
+		assert!(resp.extra_usage.is_some());
+		assert_eq!(resp.fable().unwrap().percent, Percentage::from(37.0));
+		assert_eq!(resp.limits[0].kind, "");
+		assert_eq!(resp.limits[0].percent, Percentage::from(0.0));
+	}
+
+	#[test]
+	fn null_limits_array_parses_as_empty() {
+		let resp: UsageResponse =
+			serde_json::from_str(r#"{"extra_usage": null, "limits": null}"#).unwrap();
+		assert!(resp.limits.is_empty());
 	}
 
 	#[test]

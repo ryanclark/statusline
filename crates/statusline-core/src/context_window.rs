@@ -1,18 +1,31 @@
 use crate::format::{Percentage, Tokens};
+use crate::util::null_as_default;
 use serde::Deserialize;
 
 #[derive(Default, Debug, Deserialize)]
 pub struct ContextWindow {
+	#[serde(default, deserialize_with = "null_as_default")]
 	pub used_percentage: Percentage,
-	#[serde(default)]
+	// Nothing used means everything is still available, so an unreported value reads as full rather
+	// than as an alarming 0% remaining.
+	#[serde(default = "full", deserialize_with = "null_as_full")]
 	pub remaining_percentage: Percentage,
-	#[serde(default)]
+	#[serde(default, deserialize_with = "null_as_default")]
 	pub total_input_tokens: Tokens,
+	#[serde(default, deserialize_with = "null_as_default")]
 	pub total_output_tokens: Tokens,
-	#[serde(default)]
+	#[serde(default, deserialize_with = "null_as_default")]
 	pub context_window_size: Tokens,
-	#[serde(default)]
+	#[serde(default, deserialize_with = "null_as_default")]
 	pub current_usage: CurrentUsage,
+}
+
+fn full() -> Percentage {
+	Percentage::from(100.0)
+}
+
+fn null_as_full<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Percentage, D::Error> {
+	Option::<Percentage>::deserialize(deserializer).map(|p| p.unwrap_or_else(full))
 }
 
 impl ContextWindow {
@@ -65,6 +78,25 @@ mod tests {
 			}
 		}"#);
 		assert_eq!(cw.total_input_tokens, 600.into());
+	}
+
+	#[test]
+	fn null_current_usage_parses_as_empty() {
+		// Claude Code sends null before the first API call and again right after /compact.
+		let cw = new(
+			r#"{"context_window": {"used_percentage": 3, "total_output_tokens": 0, "current_usage": null}}"#,
+		);
+		assert_eq!(cw.current_usage.input_tokens, 0.into());
+		assert_eq!(cw.used_percentage, 3.0.into());
+	}
+
+	#[test]
+	fn null_percentages_read_as_nothing_used() {
+		let cw = new(
+			r#"{"context_window": {"used_percentage": null, "remaining_percentage": null, "total_output_tokens": 0, "current_usage": null}}"#,
+		);
+		assert_eq!(cw.used_percentage, 0.0.into());
+		assert_eq!(cw.remaining_percentage, 100.0.into());
 	}
 
 	#[test]

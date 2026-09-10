@@ -193,6 +193,17 @@ mod tests {
 	}
 
 	#[test]
+	fn null_context_usage_does_not_fail_the_whole_parse() {
+		let json = r#"{"cwd": "/tmp/x", "context_window": {"used_percentage": null, "remaining_percentage": null, "total_input_tokens": 0, "total_output_tokens": 0, "context_window_size": 200000, "current_usage": null}}"#;
+		let input = InputData::from_reader(json.as_bytes()).unwrap();
+		assert_eq!(input.cwd, "/tmp/x");
+		assert_eq!(
+			input.context_window.current_usage.cache_read_input_tokens,
+			0.into()
+		);
+	}
+
+	#[test]
 	fn parse_empty_json() {
 		let input = InputData::from_reader(b"{}" as &[u8]).unwrap();
 		assert_eq!(input.cwd, "");
