@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use owo_colors::{AnsiColors, DynColors, OwoColorize, Rgb};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -202,6 +203,32 @@ pub fn format_duration_secs(total_secs: u64) -> String {
 	} else {
 		format!("{secs}s")
 	}
+}
+
+/// Time left until the epoch second `at`, or `None` once it has passed.
+#[must_use]
+pub fn countdown_to(at: i64, now: DateTime<Utc>) -> Option<String> {
+	let at = DateTime::from_timestamp(at, 0)?;
+	let total_secs = at.signed_duration_since(now).num_seconds();
+	if total_secs <= 0 {
+		return None;
+	}
+
+	#[allow(clippy::cast_sign_loss)] // guarded by total_secs > 0 above
+	Some(format_duration_secs(total_secs as u64))
+}
+
+/// Time elapsed since the epoch second `at`, or `None` if it lies in the future.
+#[must_use]
+pub fn elapsed_since(at: i64, now: DateTime<Utc>) -> Option<String> {
+	let at = DateTime::from_timestamp(at, 0)?;
+	let total_secs = now.signed_duration_since(at).num_seconds();
+	if total_secs < 0 {
+		return None;
+	}
+
+	#[allow(clippy::cast_sign_loss)] // guarded by total_secs >= 0 above
+	Some(format_duration_secs(total_secs as u64))
 }
 
 pub const NAMED_COLORS: &[(&str, DynColors)] = &[

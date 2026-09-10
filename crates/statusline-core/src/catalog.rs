@@ -34,6 +34,8 @@ pub struct OptionSet {
 	pub style: bool,
 	pub dirty: bool,
 	pub capitalize: bool,
+	/// Warm and cold colour options, only meaningful for the prompt cache state segment.
+	pub cache_state: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +55,7 @@ const ICON_TEXT: OptionSet = OptionSet {
 	style: true,
 	dirty: false,
 	capitalize: false,
+	cache_state: false,
 };
 
 const COLORED_TEXT: OptionSet = OptionSet {
@@ -62,6 +65,7 @@ const COLORED_TEXT: OptionSet = OptionSet {
 	style: true,
 	dirty: false,
 	capitalize: false,
+	cache_state: false,
 };
 
 const NO_OPTIONS: OptionSet = OptionSet {
@@ -71,6 +75,7 @@ const NO_OPTIONS: OptionSet = OptionSet {
 	style: false,
 	dirty: false,
 	capitalize: false,
+	cache_state: false,
 };
 
 const STYLED_TEXT: OptionSet = OptionSet {
@@ -80,6 +85,7 @@ const STYLED_TEXT: OptionSet = OptionSet {
 	style: true,
 	dirty: false,
 	capitalize: false,
+	cache_state: false,
 };
 
 #[must_use]
@@ -151,6 +157,41 @@ static CATALOG: &[SegmentMeta] = &[
 		category: Category::Context,
 		description: "Cache read as % of total input",
 		options: STYLED_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::CacheWarm,
+		id: "cache_warm",
+		label: "Cache warm",
+		category: Category::Context,
+		description: "Prompt cache state (warm with time until cold, or cold)",
+		options: OptionSet {
+			cache_state: true,
+			..ICON_TEXT
+		},
+	},
+	SegmentMeta {
+		ty: SegmentType::SessionCacheHitRatio,
+		id: "session_cache_hit_ratio",
+		label: "Session cache hit ratio",
+		category: Category::Context,
+		description: "Cache reads as % of all input tokens this session",
+		options: STYLED_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::CacheMisses,
+		id: "cache_misses",
+		label: "Cache misses",
+		category: Category::Context,
+		description: "Prompt cache misses this session",
+		options: COLORED_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::CacheLastMiss,
+		id: "cache_last_miss",
+		label: "Last cache miss",
+		category: Category::Context,
+		description: "Cause of the last prompt cache miss (or `miss` when undiagnosed) and how long ago",
+		options: COLORED_TEXT,
 	},
 	SegmentMeta {
 		ty: SegmentType::Exceeds200k,
@@ -277,6 +318,7 @@ static CATALOG: &[SegmentMeta] = &[
 			style: true,
 			dirty: true,
 			capitalize: false,
+			cache_state: false,
 		},
 	},
 	SegmentMeta {
@@ -294,6 +336,22 @@ static CATALOG: &[SegmentMeta] = &[
 		category: Category::Git,
 		description: "Stash count with ⚑ icon",
 		options: ICON_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::Pr,
+		id: "pr",
+		label: "Pull request",
+		category: Category::Git,
+		description: "Open PR number (! for merge requests), colored by review state; linked to the PR when colors are on",
+		options: ICON_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::Repo,
+		id: "repo",
+		label: "Repository",
+		category: Category::Git,
+		description: "Repository owner/name from the origin remote; linked to its web page when colors are on",
+		options: COLORED_TEXT,
 	},
 	SegmentMeta {
 		ty: SegmentType::Cwd,
@@ -344,6 +402,14 @@ static CATALOG: &[SegmentMeta] = &[
 		options: STYLED_TEXT,
 	},
 	SegmentMeta {
+		ty: SegmentType::SessionName,
+		id: "session_name",
+		label: "Session name",
+		category: Category::Environment,
+		description: "Session name set with --name or /rename, else the generated title",
+		options: STYLED_TEXT,
+	},
+	SegmentMeta {
 		ty: SegmentType::VimMode,
 		id: "vim_mode",
 		label: "Vim mode",
@@ -360,11 +426,35 @@ static CATALOG: &[SegmentMeta] = &[
 		options: STYLED_TEXT,
 	},
 	SegmentMeta {
+		ty: SegmentType::Effort,
+		id: "effort",
+		label: "Effort",
+		category: Category::Environment,
+		description: "Reasoning effort level (low, medium, high, xhigh, max), colored by level",
+		options: COLORED_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::Thinking,
+		id: "thinking",
+		label: "Thinking",
+		category: Category::Environment,
+		description: "Indicator when extended thinking is enabled",
+		options: COLORED_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::FastMode,
+		id: "fast_mode",
+		label: "Fast mode",
+		category: Category::Environment,
+		description: "Indicator when fast mode is on",
+		options: COLORED_TEXT,
+	},
+	SegmentMeta {
 		ty: SegmentType::Worktree,
 		id: "worktree",
 		label: "Worktree",
 		category: Category::Environment,
-		description: "Worktree name",
+		description: "Worktree name (worktree session, or any linked git worktree)",
 		options: STYLED_TEXT,
 	},
 	SegmentMeta {
@@ -380,6 +470,7 @@ static CATALOG: &[SegmentMeta] = &[
 			style: true,
 			dirty: false,
 			capitalize: true,
+			cache_state: false,
 		},
 	},
 	SegmentMeta {
@@ -395,6 +486,7 @@ static CATALOG: &[SegmentMeta] = &[
 			style: false,
 			dirty: false,
 			capitalize: false,
+			cache_state: false,
 		},
 	},
 	SegmentMeta {
@@ -482,6 +574,16 @@ mod tests {
 	#[test]
 	fn newline_has_no_options() {
 		assert_eq!(meta(&SegmentType::Newline).options, OptionSet::default());
+	}
+
+	#[test]
+	fn cache_warm_is_the_only_cache_state_segment() {
+		let with: Vec<&'static str> = catalog()
+			.iter()
+			.filter(|m| m.options.cache_state)
+			.map(|m| m.id)
+			.collect();
+		assert_eq!(with, vec!["cache_warm"]);
 	}
 
 	#[test]

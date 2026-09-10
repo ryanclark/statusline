@@ -136,11 +136,32 @@ fn visible_truncate(s: &str, max: usize) -> String {
 	let mut out = String::new();
 	let mut visible = 0usize;
 	let mut truncated = false;
+	let mut in_link = false;
 	let mut chars = s.chars().peekable();
 
 	while let Some(c) = chars.next() {
 		if c == '\u{1b}' {
 			out.push(c);
+
+			if chars.peek() == Some(&']') {
+				// An OSC runs to BEL or ST rather than to 'm', and an OSC 8 with a target opens a
+				// hyperlink that a cut inside its text would otherwise leave open.
+				let mut body = String::new();
+				for e in chars.by_ref() {
+					out.push(e);
+					if e == '\u{07}' || (e == '\\' && body.ends_with('\u{1b}')) {
+						break;
+					}
+					body.push(e);
+				}
+				if let Some(params) = body.trim_end_matches('\u{1b}').strip_prefix("]8;") {
+					in_link = params
+						.split_once(';')
+						.is_some_and(|(_, url)| !url.is_empty());
+				}
+
+				continue;
+			}
 
 			while let Some(&e) = chars.peek() {
 				out.push(e);
@@ -166,6 +187,9 @@ fn visible_truncate(s: &str, max: usize) -> String {
 
 	if truncated {
 		out.push_str("\u{1b}[0m");
+		if in_link {
+			out.push_str("\u{1b}]8;;\u{07}");
+		}
 	}
 	out
 }
@@ -733,6 +757,21 @@ mod tests {
 			out
 		};
 		assert_eq!(visible, "hel");
+	}
+
+	#[test]
+	fn visible_truncate_skips_osc8_links_and_closes_them_on_cut() {
+		let link = "\u{1b}]8;;https://github.com/a/b\u{07}anthropics/claude-code\u{1b}]8;;\u{07}";
+		assert_eq!(
+			visible_truncate(link, 40),
+			link,
+			"a link narrower than max is untouched"
+		);
+		assert_eq!(
+			visible_truncate(link, 9),
+			"\u{1b}]8;;https://github.com/a/b\u{07}anthropic\u{1b}[0m\u{1b}]8;;\u{07}",
+			"the cut must land inside the link text and the link must be closed"
+		);
 	}
 
 	#[test]

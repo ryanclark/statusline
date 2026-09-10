@@ -1,8 +1,10 @@
-use crate::constants::{CYAN, DOWN_ARROW, ORANGE, PURPLE, UP_ARROW};
-use crate::format::{ColoredPercentage, Percentage};
+use crate::constants::{CYAN, DOWN_ARROW, GRAY, GREEN, ORANGE, PURPLE, UP_ARROW, YELLOW};
+use crate::format::{ColoredPercentage, Percentage, countdown_to, elapsed_since};
+use crate::input::PromptCache;
+use chrono::Utc;
 use owo_colors::OwoColorize;
 
-use super::{Icon, RenderContext, SegmentConfig, apply_style, format_icon};
+use super::{Icon, RenderContext, SegmentConfig, apply_style, format_icon, paint};
 
 pub(super) fn context_percentage(
 	segment: &SegmentConfig,
@@ -159,4 +161,95 @@ pub(super) fn exceeds_200k(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> 
 	};
 
 	Some(apply_style(&text, segment.style()))
+}
+
+/// Prompt cache segments stay silent until the session has seen a cache-reporting response, so a
+/// provider that never reports cache tokens does not show a permanently cold cache.
+fn observed_cache<'a>(ctx: &'a RenderContext<'_>) -> Option<&'a PromptCache> {
+	ctx.input
+		.prompt_cache
+		.as_ref()
+		.filter(|c| c.caching_observed)
+}
+
+fn dim_suffix(segment: &SegmentConfig, text: &str) -> String {
+	if segment.colors() {
+		format!(" {}", text.dimmed())
+	} else {
+		format!(" {text}")
+	}
+}
+
+pub(super) fn cache_warm(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
+	let cache = observed_cache(ctx)?;
+
+	// The state colour covers the icon too, so a glance at either tells the story; an explicit
+	// icon_color still wins inside format_icon.
+	let (state, color) = if cache.warm {
+		("warm", segment.warm_color().unwrap_or(GREEN))
+	} else {
+		("cold", segment.cold_color().unwrap_or(YELLOW))
+	};
+	let icon_str = format_icon(
+		segment,
+		Icon {
+			unicode: "\u{2668}",
+			nerd: "\u{f2c7}",
+		},
+		color,
+		ctx.nerd_font,
+	);
+	let state = paint(segment, state, color);
+	let until_cold = cache
+		.expires_at
+		.filter(|_| cache.warm)
+		.and_then(|at| countdown_to(at, Utc::now()))
+		.map(|left| dim_suffix(segment, &left))
+		.unwrap_or_default();
+
+	Some(apply_style(
+		&format!("{icon_str}{state}{until_cold}"),
+		segment.style(),
+	))
+}
+
+pub(super) fn session_cache_hit_ratio(
+	segment: &SegmentConfig,
+	ctx: &RenderContext<'_>,
+) -> Option<String> {
+	let ratio = observed_cache(ctx)?.hit_ratio?;
+	let text = format!("{}", Percentage::from(ratio * 100.0));
+
+	Some(apply_style(&text, segment.style()))
+}
+
+pub(super) fn cache_misses(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
+	let misses = observed_cache(ctx)?.misses;
+	let noun = if misses == 1 { "miss" } else { "misses" };
+	let color = if misses == 0 { GRAY } else { YELLOW };
+	let text = paint(segment, &format!("{misses} {noun}"), color);
+
+	Some(apply_style(&text, segment.style()))
+}
+
+pub(super) fn cache_last_miss(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
+	let cache = observed_cache(ctx)?;
+	let cause = cache
+		.last_miss_cause
+		.as_ref()
+		.map(|c| c.causes.join("+"))
+		.filter(|c| !c.is_empty());
+	if cause.is_none() && cache.last_miss_at.is_none() {
+		return None;
+	}
+
+	// Claude Code reports a miss it could not diagnose with a null cause; it is still a miss.
+	let label = paint(segment, cause.as_deref().unwrap_or("miss"), ORANGE);
+	let age = cache
+		.last_miss_at
+		.and_then(|at| elapsed_since(at, Utc::now()))
+		.map(|ago| dim_suffix(segment, &format!("{ago} ago")))
+		.unwrap_or_default();
+
+	Some(apply_style(&format!("{label}{age}"), segment.style()))
 }

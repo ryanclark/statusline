@@ -417,6 +417,18 @@ impl EditorModel {
 
 				opts.dirty_color = pick.to_opt();
 			}
+			OptionKind::WarmColor => {
+				let mut pick = ColorPick::from_opt(opts.warm_color.as_deref());
+				pick.cycle(1);
+
+				opts.warm_color = pick.to_opt();
+			}
+			OptionKind::ColdColor => {
+				let mut pick = ColorPick::from_opt(opts.cold_color.as_deref());
+				pick.cycle(1);
+
+				opts.cold_color = pick.to_opt();
+			}
 			OptionKind::Label => return,
 		}
 		self.dirty = true;
@@ -440,6 +452,16 @@ impl EditorModel {
 			}
 			OptionKind::DirtyColor => {
 				let current = row.config.options_mut().dirty_color.clone();
+
+				self.options.editing_color = Some(ColorPick::from_opt(current.as_deref()));
+			}
+			OptionKind::WarmColor => {
+				let current = row.config.options_mut().warm_color.clone();
+
+				self.options.editing_color = Some(ColorPick::from_opt(current.as_deref()));
+			}
+			OptionKind::ColdColor => {
+				let current = row.config.options_mut().cold_color.clone();
 
 				self.options.editing_color = Some(ColorPick::from_opt(current.as_deref()));
 			}
@@ -517,6 +539,8 @@ impl EditorModel {
 			let slot = match kind {
 				Some(OptionKind::IconColor) => Some(&mut opts.icon_color),
 				Some(OptionKind::DirtyColor) => Some(&mut opts.dirty_color),
+				Some(OptionKind::WarmColor) => Some(&mut opts.warm_color),
+				Some(OptionKind::ColdColor) => Some(&mut opts.cold_color),
 				_ => None,
 			};
 
@@ -1260,6 +1284,22 @@ mod tests {
 			m.rows[0].config.clone().options_mut().icon_color.as_deref(),
 			Some("red")
 		);
+		assert!(m.dirty);
+	}
+
+	#[test]
+	fn color_cycle_writes_warm_and_cold_colors() {
+		let mut m = model(&[SegmentType::CacheWarm]);
+		m.cursor = 0;
+		m.apply(Key::Enter);
+		m.options.field = 5;
+		m.apply(Key::Toggle);
+		m.options.field = 6;
+		m.apply(Key::Toggle);
+		let opts = m.rows[0].config.clone();
+		let opts = opts.clone().options_mut().clone();
+		assert_eq!(opts.warm_color.as_deref(), Some("red"));
+		assert_eq!(opts.cold_color.as_deref(), Some("red"));
 		assert!(m.dirty);
 	}
 

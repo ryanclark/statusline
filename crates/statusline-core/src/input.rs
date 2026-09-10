@@ -3,9 +3,11 @@
 #![allow(dead_code)]
 
 use crate::context_window::ContextWindow;
-use crate::format::Percentage;
+use crate::format::{Percentage, Tokens, countdown_to};
+use crate::util::null_as_default;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Default, Deserialize)]
 pub struct InputData {
@@ -13,6 +15,8 @@ pub struct InputData {
 	pub cwd: String,
 	#[serde(default)]
 	pub session_id: String,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub session_name: String,
 	#[serde(default)]
 	pub model: ModelInfo,
 	#[serde(default)]
@@ -33,6 +37,17 @@ pub struct InputData {
 	pub worktree: WorktreeInfo,
 	#[serde(default)]
 	pub exceeds_200k_tokens: bool,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub fast_mode: bool,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub effort: EffortInfo,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub thinking: ThinkingInfo,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub pr: PrInfo,
+	/// Absent until the main conversation's first API response.
+	#[serde(default)]
+	pub prompt_cache: Option<PromptCache>,
 }
 
 impl InputData {
@@ -55,6 +70,23 @@ pub struct Workspace {
 	pub current_dir: String,
 	#[serde(default)]
 	pub project_dir: String,
+	/// Set for any linked git worktree, unlike `worktree.*`, which only exists in a worktree session.
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub git_worktree: String,
+	#[serde(default)]
+	pub repo: Option<RepoInfo>,
+}
+
+/// Repository identity parsed from the `origin` remote. `owner` may contain slashes for nested
+/// GitLab groups.
+#[derive(Debug, Default, Deserialize)]
+pub struct RepoInfo {
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub host: String,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub owner: String,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub name: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -90,14 +122,7 @@ pub struct RateLimitPeriod {
 impl RateLimitPeriod {
 	#[must_use]
 	pub fn countdown(&self, now: DateTime<Utc>) -> Option<String> {
-		let reset_time = DateTime::from_timestamp(self.resets_at, 0)?;
-		let total_secs = reset_time.signed_duration_since(now).num_seconds();
-		if total_secs <= 0 {
-			return None;
-		}
-
-		#[allow(clippy::cast_sign_loss)] // guarded by total_secs > 0 above
-		Some(crate::format::format_duration_secs(total_secs as u64))
+		countdown_to(self.resets_at, now)
 	}
 }
 
@@ -111,6 +136,77 @@ pub struct VimInfo {
 pub struct AgentInfo {
 	#[serde(default)]
 	pub name: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct EffortInfo {
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub level: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct ThinkingInfo {
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub enabled: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct PrInfo {
+	#[serde(default)]
+	pub number: Option<u64>,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub url: String,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub review_state: String,
+	/// `mr` when the entry describes a GitLab merge request; absent for GitHub pull requests.
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub kind: String,
+}
+
+/// The session's prompt cache statistics, as documented under Claude Code's status line
+/// `prompt_cache` object. Timestamps are epoch seconds.
+#[derive(Debug, Default, Deserialize)]
+pub struct PromptCache {
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub warm: bool,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub caching_observed: bool,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub ttl: String,
+	#[serde(default)]
+	pub expires_at: Option<i64>,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub requests: u64,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub misses: u64,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub expected_rebuilds: u64,
+	#[serde(default)]
+	pub hit_ratio: Option<f64>,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub cache_write_tokens: Tokens,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub miss_recache_tokens: Tokens,
+	#[serde(default)]
+	pub last_miss_at: Option<i64>,
+	#[serde(default)]
+	pub last_miss_cause: Option<MissCause>,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub miss_causes: BTreeMap<String, u64>,
+	#[serde(default)]
+	pub recache_tokens_if_cold: Option<Tokens>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct MissCause {
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub causes: Vec<String>,
+	#[serde(default)]
+	pub tools_added: Option<u64>,
+	#[serde(default)]
+	pub tools_removed: Option<u64>,
+	#[serde(default)]
+	pub system_char_delta: Option<i64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -156,6 +252,9 @@ mod tests {
 				"five_hour": {"used_percentage": 23.5, "resets_at": 1738425600},
 				"seven_day": {"used_percentage": 41.2, "resets_at": 1738857600}
 			},
+			"fast_mode": true,
+			"effort": {"level": "high"},
+			"thinking": {"enabled": true},
 			"vim": {"mode": "NORMAL"},
 			"agent": {"name": "security-reviewer"},
 			"worktree": {"name": "my-feature", "branch": "worktree-my-feature", "original_branch": "main"}
@@ -175,6 +274,9 @@ mod tests {
 		assert_eq!(five.used_percentage, 23.5.into());
 		assert_eq!(five.resets_at, 1738425600);
 		assert_eq!(input.vim.mode, "NORMAL");
+		assert!(input.fast_mode);
+		assert_eq!(input.effort.level, "high");
+		assert!(input.thinking.enabled);
 		assert_eq!(input.agent.name, "security-reviewer");
 		assert_eq!(input.worktree.name, "my-feature");
 	}
@@ -204,12 +306,111 @@ mod tests {
 	}
 
 	#[test]
+	fn parse_pull_request() {
+		let json = r#"{"pr": {"number": 1234, "url": "https://github.com/anthropics/claude-code/pull/1234", "review_state": "pending"}}"#;
+		let input = InputData::from_reader(json.as_bytes()).unwrap();
+		assert_eq!(input.pr.number, Some(1234));
+		assert_eq!(
+			input.pr.url,
+			"https://github.com/anthropics/claude-code/pull/1234"
+		);
+		assert_eq!(input.pr.review_state, "pending");
+		assert_eq!(input.pr.kind, "");
+
+		let mr =
+			InputData::from_reader(r#"{"pr": {"number": 12, "kind": "mr"}}"#.as_bytes()).unwrap();
+		assert_eq!(mr.pr.number, Some(12));
+		assert_eq!(mr.pr.kind, "mr");
+
+		let none = InputData::from_reader(r#"{"pr": null}"#.as_bytes()).unwrap();
+		assert!(none.pr.number.is_none());
+	}
+
+	#[test]
+	fn parse_prompt_cache_from_the_documented_shape() {
+		let json = r#"{"prompt_cache": {
+			"warm": true, "caching_observed": true, "ttl": "1h", "expires_at": 1738429200,
+			"requests": 14, "misses": 2, "expected_rebuilds": 1, "hit_ratio": 0.91,
+			"cache_write_tokens": 352000, "miss_recache_tokens": 310200, "last_miss_at": 1738425230,
+			"last_miss_cause": {"causes": ["tools_changed"], "tools_added": 2, "tools_removed": 0},
+			"miss_causes": {"tools_changed": 2}, "recache_tokens_if_cold": 45000
+		}}"#;
+		let input = InputData::from_reader(json.as_bytes()).unwrap();
+		let cache = input.prompt_cache.expect("prompt_cache should parse");
+		assert!(cache.warm);
+		assert!(cache.caching_observed);
+		assert_eq!(cache.ttl, "1h");
+		assert_eq!(cache.expires_at, Some(1738429200));
+		assert_eq!((cache.requests, cache.misses), (14, 2));
+		assert_eq!(cache.hit_ratio, Some(0.91));
+		assert_eq!(cache.last_miss_at, Some(1738425230));
+		assert_eq!(cache.last_miss_cause.unwrap().causes, vec!["tools_changed"]);
+	}
+
+	#[test]
+	fn prompt_cache_absent_null_or_partial_still_parses() {
+		assert!(
+			InputData::from_reader(b"{}" as &[u8])
+				.unwrap()
+				.prompt_cache
+				.is_none()
+		);
+		assert!(
+			InputData::from_reader(r#"{"prompt_cache": null}"#.as_bytes())
+				.unwrap()
+				.prompt_cache
+				.is_none()
+		);
+		let json = r#"{"prompt_cache": {"warm": false, "caching_observed": true, "expires_at": null, "hit_ratio": null, "last_miss_at": null, "last_miss_cause": null, "recache_tokens_if_cold": null}}"#;
+		let cache = InputData::from_reader(json.as_bytes())
+			.unwrap()
+			.prompt_cache
+			.unwrap();
+		assert!(!cache.warm);
+		assert!(cache.hit_ratio.is_none());
+		assert!(cache.last_miss_cause.is_none());
+	}
+
+	#[test]
+	fn parse_session_name_repo_and_git_worktree() {
+		let json = r#"{"session_name": "my-session", "workspace": {"current_dir": "/x", "git_worktree": "feature-xyz", "repo": {"host": "github.com", "owner": "anthropics", "name": "claude-code"}}}"#;
+		let input = InputData::from_reader(json.as_bytes()).unwrap();
+		assert_eq!(input.session_name, "my-session");
+		assert_eq!(input.workspace.git_worktree, "feature-xyz");
+		let repo = input.workspace.repo.expect("repo should parse");
+		assert_eq!(
+			(repo.host.as_str(), repo.owner.as_str(), repo.name.as_str()),
+			("github.com", "anthropics", "claude-code")
+		);
+
+		let bare = InputData::from_reader(
+			r#"{"session_name": null, "workspace": {"repo": null, "git_worktree": null}}"#
+				.as_bytes(),
+		)
+		.unwrap();
+		assert!(bare.session_name.is_empty());
+		assert!(bare.workspace.repo.is_none());
+		assert!(bare.workspace.git_worktree.is_empty());
+	}
+
+	#[test]
+	fn null_effort_level_and_thinking_flag_parse_as_defaults() {
+		let json = r#"{"effort": {"level": null}, "thinking": {"enabled": null}}"#;
+		let input = InputData::from_reader(json.as_bytes()).unwrap();
+		assert_eq!(input.effort.level, "");
+		assert!(!input.thinking.enabled);
+	}
+
+	#[test]
 	fn parse_empty_json() {
 		let input = InputData::from_reader(b"{}" as &[u8]).unwrap();
 		assert_eq!(input.cwd, "");
 		assert_eq!(input.model.display_name, "");
 		assert!((input.cost.total_cost_usd - 0.0).abs() < f64::EPSILON);
 		assert!(input.rate_limits.five_hour.is_none());
+		assert!(!input.fast_mode);
+		assert!(!input.thinking.enabled);
+		assert_eq!(input.effort.level, "");
 	}
 
 	#[test]

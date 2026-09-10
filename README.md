@@ -136,6 +136,10 @@ This opens an interactive editor with a live preview to add, remove, reorder and
 | `output_tokens` | Total output tokens with ↓ icon |
 | `cache_read_tokens` | Cache read tokens with ↻ icon |
 | `cache_hit_ratio` | Cache read as % of total input |
+| `cache_warm` | Prompt cache state with ♨ icon: `warm` with time until it goes cold, or `cold` |
+| `session_cache_hit_ratio` | Cache reads as % of all input tokens this session |
+| `cache_misses` | Prompt cache misses this session |
+| `cache_last_miss` | Cause of the last prompt cache miss (e.g. `tools_changed`, or `miss` when undiagnosed) and how long ago |
 | `exceeds200k` | Warning indicator when context exceeds 200k tokens |
 
 #### Rate limits
@@ -167,6 +171,8 @@ This opens an interactive editor with a live preview to add, remove, reorder and
 | `git_branch` | Current git branch name |
 | `git_ahead_behind` | Commits ahead/behind upstream (e.g. `↑3 ↓1`) |
 | `git_stash` | Stash count with ⚑ icon |
+| `pr` | Open pull request number (`!` for GitLab merge requests) with ⎇ icon, colored by review state, clickable link to the PR (link needs `colors`) |
+| `repo` | Repository `owner/name` from the origin remote, clickable link to its web page (link needs `colors`) |
 
 #### Environment
 
@@ -178,9 +184,13 @@ This opens an interactive editor with a live preview to add, remove, reorder and
 | `model_id` | Full model ID |
 | `version` | Claude Code version |
 | `session_id` | Session ID |
+| `session_name` | Session name (`--name` or `/rename`, else the generated title) |
 | `vim_mode` | Vim mode (NORMAL, INSERT, etc.) |
 | `agent_name` | Active agent name |
-| `worktree` | Worktree name |
+| `effort` | Reasoning effort level (`low` to `max`), colored by level |
+| `thinking` | `thinking` when extended thinking is enabled |
+| `fast_mode` | `fast` when fast mode is on |
+| `worktree` | Worktree name (a worktree session, or any linked git worktree) |
 | `account` | Current Claude account nickname (from `~/.statusline/accounts.json`, colored per entry) |
 
 #### Layout
@@ -224,6 +234,13 @@ Colors can be specified as named colors (`red`, `cyan`, `yellow`, `green`, `blue
 |---|---|---|---|
 | `dirty` | bool or string | `false` | Show dirty indicator. `true` for default `*`, or a custom string |
 | `dirty_color` | string | `red` | Color of the dirty indicator |
+
+#### cache_warm options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `warm_color` | string | `green` | Color of the ♨ icon and the `warm` state |
+| `cold_color` | string | `yellow` | Color of the ♨ icon and the `cold` state |
 
 #### account options
 

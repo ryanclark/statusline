@@ -9,6 +9,8 @@ pub enum OptionKind {
 	Style,
 	Dirty,
 	DirtyColor,
+	WarmColor,
+	ColdColor,
 	Capitalize,
 }
 
@@ -28,6 +30,10 @@ pub fn applicable_fields(set: OptionSet) -> Vec<OptionKind> {
 	}
 	if set.style {
 		fields.push(OptionKind::Style);
+	}
+	if set.cache_state {
+		fields.push(OptionKind::WarmColor);
+		fields.push(OptionKind::ColdColor);
 	}
 	if set.dirty {
 		fields.push(OptionKind::Dirty);
@@ -72,6 +78,23 @@ mod tests {
 				OptionKind::Style,
 				OptionKind::Dirty,
 				OptionKind::DirtyColor,
+			]
+		);
+	}
+
+	#[test]
+	fn cache_warm_fields_include_state_colors() {
+		let set = meta(&SegmentType::CacheWarm).options;
+		assert_eq!(
+			applicable_fields(set),
+			vec![
+				OptionKind::Colors,
+				OptionKind::Icon,
+				OptionKind::IconColor,
+				OptionKind::Label,
+				OptionKind::Style,
+				OptionKind::WarmColor,
+				OptionKind::ColdColor,
 			]
 		);
 	}

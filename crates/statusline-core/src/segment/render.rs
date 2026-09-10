@@ -15,6 +15,10 @@ pub fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Optio
 		SegmentType::ContextRemaining => context::context_remaining(segment, ctx),
 		SegmentType::ContextWindowSize => context::context_window_size(segment, ctx),
 		SegmentType::Exceeds200k => context::exceeds_200k(segment, ctx),
+		SegmentType::CacheWarm => context::cache_warm(segment, ctx),
+		SegmentType::SessionCacheHitRatio => context::session_cache_hit_ratio(segment, ctx),
+		SegmentType::CacheMisses => context::cache_misses(segment, ctx),
+		SegmentType::CacheLastMiss => context::cache_last_miss(segment, ctx),
 
 		SegmentType::FiveHour => rate_limit::five_hour(segment, ctx),
 		SegmentType::SevenDay => rate_limit::seven_day(segment, ctx),
@@ -34,6 +38,8 @@ pub fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Optio
 		SegmentType::GitBranch => git::git_branch(segment, ctx),
 		SegmentType::GitAheadBehind => git::git_ahead_behind(segment, ctx),
 		SegmentType::GitStash => git::git_stash(segment, ctx),
+		SegmentType::Pr => git::pr(segment, ctx),
+		SegmentType::Repo => git::repo(segment, ctx),
 
 		SegmentType::Divider => env::divider(segment, ctx),
 		SegmentType::Newline => env::newline(segment, ctx),
@@ -43,9 +49,13 @@ pub fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Optio
 		SegmentType::ModelId => env::model_id(segment, ctx),
 		SegmentType::Version => env::version(segment, ctx),
 		SegmentType::SessionId => env::session_id(segment, ctx),
+		SegmentType::SessionName => env::session_name(segment, ctx),
 		SegmentType::VimMode => env::vim_mode(segment, ctx),
 		SegmentType::AgentName => env::agent_name(segment, ctx),
 		SegmentType::Worktree => env::worktree(segment, ctx),
+		SegmentType::Effort => env::effort(segment, ctx),
+		SegmentType::Thinking => env::thinking(segment, ctx),
+		SegmentType::FastMode => env::fast_mode(segment, ctx),
 
 		SegmentType::Account => account::account(segment, ctx),
 	};
@@ -274,6 +284,365 @@ mod tests {
 		let ctx = default_ctx(&input);
 		let seg = SegmentConfig::Simple(SegmentType::Newline);
 		assert_eq!(render_segment(&seg, &ctx).as_deref(), Some("\n"));
+	}
+
+	#[test]
+	fn render_effort_shows_the_level() {
+		let mut input = default_input();
+		input.effort.level = "xhigh".to_owned();
+		let ctx = default_ctx(&input);
+		let seg = SegmentConfig::Simple(SegmentType::Effort);
+		assert_eq!(strip_ansi(&render_segment(&seg, &ctx).unwrap()), "xhigh");
+	}
+
+	#[test]
+	fn render_effort_absent_returns_none() {
+		let input = default_input();
+		let ctx = default_ctx(&input);
+		let seg = SegmentConfig::Simple(SegmentType::Effort);
+		assert!(render_segment(&seg, &ctx).is_none());
+	}
+
+	#[test]
+	fn render_thinking_only_when_enabled() {
+		let mut input = default_input();
+		let seg = SegmentConfig::Simple(SegmentType::Thinking);
+		assert!(render_segment(&seg, &default_ctx(&input)).is_none());
+		input.thinking.enabled = true;
+		let ctx = default_ctx(&input);
+		assert_eq!(strip_ansi(&render_segment(&seg, &ctx).unwrap()), "thinking");
+	}
+
+	#[test]
+	fn render_fast_mode_only_when_on() {
+		let mut input = default_input();
+		let seg = SegmentConfig::Simple(SegmentType::FastMode);
+		assert!(render_segment(&seg, &default_ctx(&input)).is_none());
+		input.fast_mode = true;
+		let ctx = default_ctx(&input);
+		assert_eq!(strip_ansi(&render_segment(&seg, &ctx).unwrap()), "fast");
+	}
+
+	fn pr_input(number: u64, kind: &str, state: &str) -> InputData {
+		let mut input = default_input();
+		input.pr.number = Some(number);
+		input.pr.url = format!("https://example.com/pull/{number}");
+		input.pr.kind = kind.to_owned();
+		input.pr.review_state = state.to_owned();
+		input
+	}
+
+	#[test]
+	fn render_pr_absent_returns_none() {
+		let input = default_input();
+		let ctx = default_ctx(&input);
+		let seg = SegmentConfig::Simple(SegmentType::Pr);
+		assert!(render_segment(&seg, &ctx).is_none());
+	}
+
+	#[test]
+	fn render_pr_links_the_number_to_the_url() {
+		let input = pr_input(1234, "", "approved");
+		let ctx = default_ctx(&input);
+		let seg = SegmentConfig::Simple(SegmentType::Pr);
+		let output = render_segment(&seg, &ctx).unwrap();
+		assert!(
+			output.contains("\u{1b}]8;;https://example.com/pull/1234\u{07}"),
+			"expected an OSC 8 link, got: {output:?}"
+		);
+		assert!(strip_ansi(&output).ends_with("#1234"), "got: {output:?}");
+	}
+
+	#[test]
+	fn render_pr_merge_request_uses_bang() {
+		let input = pr_input(12, "mr", "draft");
+		let ctx = default_ctx(&input);
+		let seg = SegmentConfig::Simple(SegmentType::Pr);
+		assert!(strip_ansi(&render_segment(&seg, &ctx).unwrap()).ends_with("!12"));
+	}
+
+	#[test]
+	fn render_pr_without_colors_is_plain_text() {
+		let input = pr_input(7, "", "changes_requested");
+		let ctx = default_ctx(&input);
+		let seg: SegmentConfig =
+			serde_json::from_str(r#"{"type": "pr", "colors": false, "icon": false}"#).unwrap();
+		assert_eq!(render_segment(&seg, &ctx).unwrap(), "#7");
+	}
+
+	fn cache_input(warm: bool, observed: bool) -> InputData {
+		let mut input = default_input();
+		input.prompt_cache = Some(crate::input::PromptCache {
+			warm,
+			caching_observed: observed,
+			expires_at: warm.then(|| Utc::now().timestamp() + 2 * 3600),
+			requests: 14,
+			misses: 2,
+			hit_ratio: Some(0.91),
+			last_miss_at: Some(Utc::now().timestamp() - 180),
+			last_miss_cause: Some(crate::input::MissCause {
+				causes: vec!["tools_changed".to_owned()],
+				..Default::default()
+			}),
+			..Default::default()
+		});
+		input
+	}
+
+	fn rendered(ty: SegmentType, input: &InputData) -> Option<String> {
+		render_segment(&SegmentConfig::Simple(ty), &default_ctx(input)).map(|s| strip_ansi(&s))
+	}
+
+	#[test]
+	fn render_cache_segments_are_silent_without_prompt_cache() {
+		let input = default_input();
+		for ty in [
+			SegmentType::CacheWarm,
+			SegmentType::SessionCacheHitRatio,
+			SegmentType::CacheMisses,
+			SegmentType::CacheLastMiss,
+		] {
+			assert!(rendered(ty.clone(), &input).is_none(), "{ty:?}");
+		}
+	}
+
+	#[test]
+	fn render_cache_warm_shows_time_until_cold() {
+		let out = rendered(SegmentType::CacheWarm, &cache_input(true, true)).unwrap();
+		assert!(
+			out.ends_with("warm 2h0m") || out.ends_with("warm 1h59m"),
+			"got: {out}"
+		);
+	}
+
+	#[test]
+	fn render_cache_warm_says_cold_when_not_warm() {
+		let out = rendered(SegmentType::CacheWarm, &cache_input(false, true)).unwrap();
+		assert!(out.ends_with("cold"), "got: {out}");
+	}
+
+	#[test]
+	fn render_cache_warm_is_silent_when_caching_is_not_observed() {
+		assert!(rendered(SegmentType::CacheWarm, &cache_input(false, false)).is_none());
+	}
+
+	#[test]
+	fn render_session_cache_hit_ratio_as_percent() {
+		let input = cache_input(true, true);
+		assert_eq!(
+			rendered(SegmentType::SessionCacheHitRatio, &input).as_deref(),
+			Some("91%")
+		);
+		let mut no_ratio = cache_input(true, true);
+		no_ratio.prompt_cache.as_mut().unwrap().hit_ratio = None;
+		assert!(rendered(SegmentType::SessionCacheHitRatio, &no_ratio).is_none());
+	}
+
+	#[test]
+	fn render_cache_misses_counts_with_plural() {
+		let input = cache_input(true, true);
+		assert!(
+			rendered(SegmentType::CacheMisses, &input)
+				.unwrap()
+				.ends_with("2 misses")
+		);
+		let mut one = cache_input(true, true);
+		one.prompt_cache.as_mut().unwrap().misses = 1;
+		assert!(
+			rendered(SegmentType::CacheMisses, &one)
+				.unwrap()
+				.ends_with("1 miss")
+		);
+	}
+
+	#[test]
+	fn render_cache_last_miss_shows_cause_and_age() {
+		let out = rendered(SegmentType::CacheLastMiss, &cache_input(true, true)).unwrap();
+		assert!(
+			out.contains("tools_changed") && out.contains("3m"),
+			"got: {out}"
+		);
+	}
+
+	#[test]
+	fn render_session_name_when_present() {
+		let mut input = default_input();
+		assert!(rendered(SegmentType::SessionName, &input).is_none());
+		input.session_name = "my-session".to_owned();
+		assert_eq!(
+			rendered(SegmentType::SessionName, &input).as_deref(),
+			Some("my-session")
+		);
+	}
+
+	fn repo_input() -> InputData {
+		let mut input = default_input();
+		input.workspace.repo = Some(crate::input::RepoInfo {
+			host: "github.com".to_owned(),
+			owner: "anthropics".to_owned(),
+			name: "claude-code".to_owned(),
+		});
+		input
+	}
+
+	#[test]
+	fn render_repo_links_owner_and_name() {
+		let input = repo_input();
+		let ctx = default_ctx(&input);
+		let output = render_segment(&SegmentConfig::Simple(SegmentType::Repo), &ctx).unwrap();
+		assert!(
+			output.contains("\u{1b}]8;;https://github.com/anthropics/claude-code\u{07}"),
+			"got: {output:?}"
+		);
+		assert!(strip_ansi(&output).ends_with("anthropics/claude-code"));
+		assert!(rendered(SegmentType::Repo, &default_input()).is_none());
+	}
+
+	#[test]
+	fn render_repo_without_colors_is_plain_text() {
+		let input = repo_input();
+		let ctx = default_ctx(&input);
+		let seg: SegmentConfig =
+			serde_json::from_str(r#"{"type": "repo", "colors": false}"#).unwrap();
+		assert_eq!(
+			render_segment(&seg, &ctx).unwrap(),
+			"anthropics/claude-code"
+		);
+	}
+
+	#[test]
+	fn render_worktree_falls_back_to_any_linked_worktree() {
+		let mut input = default_input();
+		input.workspace.git_worktree = "feature-xyz".to_owned();
+		assert_eq!(
+			rendered(SegmentType::Worktree, &input).as_deref(),
+			Some("feature-xyz")
+		);
+		input.worktree.name = "my-feature".to_owned();
+		assert_eq!(
+			rendered(SegmentType::Worktree, &input).as_deref(),
+			Some("my-feature"),
+			"a worktree session wins"
+		);
+	}
+
+	#[test]
+	fn render_cache_last_miss_without_a_cause_still_shows_the_age() {
+		let mut input = cache_input(true, true);
+		input.prompt_cache.as_mut().unwrap().last_miss_cause = None;
+		let out = rendered(SegmentType::CacheLastMiss, &input).unwrap();
+		assert!(
+			out.starts_with("miss ") && out.contains("ago"),
+			"got: {out}"
+		);
+		input.prompt_cache.as_mut().unwrap().last_miss_at = None;
+		assert!(
+			rendered(SegmentType::CacheLastMiss, &input).is_none(),
+			"no miss at all"
+		);
+	}
+
+	#[test]
+	fn render_cache_last_miss_joins_multiple_causes() {
+		let mut input = cache_input(true, true);
+		input.prompt_cache.as_mut().unwrap().last_miss_cause = Some(crate::input::MissCause {
+			causes: vec![
+				"tools_changed".to_owned(),
+				"system_prompt_changed".to_owned(),
+			],
+			..Default::default()
+		});
+		let out = rendered(SegmentType::CacheLastMiss, &input).unwrap();
+		assert!(
+			out.starts_with("tools_changed+system_prompt_changed "),
+			"got: {out}"
+		);
+	}
+
+	#[test]
+	fn render_pr_colors_by_review_state() {
+		let input = pr_input(1, "", "approved");
+		let ctx = default_ctx(&input);
+		let out = render_segment(&SegmentConfig::Simple(SegmentType::Pr), &ctx).unwrap();
+		assert!(
+			out.contains("\u{1b}[38;2;80;200;120m#1"),
+			"approved should be green: {out:?}"
+		);
+	}
+
+	#[test]
+	fn render_effort_colors_by_level() {
+		let mut input = default_input();
+		input.effort.level = "xhigh".to_owned();
+		let ctx = default_ctx(&input);
+		let out = render_segment(&SegmentConfig::Simple(SegmentType::Effort), &ctx).unwrap();
+		assert!(
+			out.contains("\u{1b}[38;2;240;160;60mxhigh"),
+			"xhigh should be orange: {out:?}"
+		);
+	}
+
+	#[test]
+	fn render_repo_percent_encodes_unsafe_url_bytes() {
+		let mut input = repo_input();
+		input.workspace.repo.as_mut().unwrap().name = "a b\u{07}c".to_owned();
+		let ctx = default_ctx(&input);
+		let out = render_segment(&SegmentConfig::Simple(SegmentType::Repo), &ctx).unwrap();
+		assert!(
+			out.contains("]8;;https://github.com/anthropics/a%20b%07c\u{07}"),
+			"got: {out:?}"
+		);
+	}
+
+	#[test]
+	fn render_cache_warm_colors_icon_and_word_by_state() {
+		let warm = cache_input(true, true);
+		let seg = SegmentConfig::Simple(SegmentType::CacheWarm);
+		let out = render_segment(&seg, &default_ctx(&warm)).unwrap();
+		assert!(
+			out.contains("\u{1b}[38;2;80;200;120m\u{2668}"),
+			"green icon: {out:?}"
+		);
+		assert!(
+			out.contains("\u{1b}[38;2;80;200;120mwarm"),
+			"green word: {out:?}"
+		);
+		let cold = cache_input(false, true);
+		let out = render_segment(&seg, &default_ctx(&cold)).unwrap();
+		assert!(
+			out.contains("\u{1b}[38;2;240;200;80m\u{2668}"),
+			"yellow icon: {out:?}"
+		);
+		assert!(
+			out.contains("\u{1b}[38;2;240;200;80mcold"),
+			"yellow word: {out:?}"
+		);
+	}
+
+	#[test]
+	fn render_cache_warm_honors_configured_state_colors() {
+		let seg: SegmentConfig = serde_json::from_str(
+			r##"{"type":"cache_warm","warm_color":"#0000FF","cold_color":"#FF00FF"}"##,
+		)
+		.unwrap();
+		let warm = cache_input(true, true);
+		let out = render_segment(&seg, &default_ctx(&warm)).unwrap();
+		assert!(out.contains("\u{1b}[38;2;0;0;255m\u{2668}"), "{out:?}");
+		assert!(out.contains("\u{1b}[38;2;0;0;255mwarm"), "{out:?}");
+		let cold = cache_input(false, true);
+		let out = render_segment(&seg, &default_ctx(&cold)).unwrap();
+		assert!(out.contains("\u{1b}[38;2;255;0;255mcold"), "{out:?}");
+
+		let seg: SegmentConfig = serde_json::from_str(
+			r##"{"type":"cache_warm","warm_color":"#0000FF","icon_color":"#FF0000"}"##,
+		)
+		.unwrap();
+		let out = render_segment(&seg, &default_ctx(&warm)).unwrap();
+		assert!(
+			out.contains("\u{1b}[38;2;255;0;0m\u{2668}"),
+			"icon_color wins for the icon: {out:?}"
+		);
+		assert!(out.contains("\u{1b}[38;2;0;0;255mwarm"), "{out:?}");
 	}
 
 	#[test]

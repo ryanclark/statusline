@@ -372,6 +372,8 @@ fn option_label(kind: OptionKind) -> &'static str {
 		OptionKind::Style => "style",
 		OptionKind::Dirty => "dirty mark",
 		OptionKind::DirtyColor => "dirty color",
+		OptionKind::WarmColor => "warm color",
+		OptionKind::ColdColor => "cold color",
 		OptionKind::Capitalize => "capitalize",
 	}
 }
@@ -384,8 +386,13 @@ fn option_value(model: &EditorModel, config: &SegmentConfig, kind: OptionKind) -
 	}
 
 	if let Some(pick) = &model.options.editing_color
-		&& matches!(kind, OptionKind::IconColor | OptionKind::DirtyColor)
-	{
+		&& matches!(
+			kind,
+			OptionKind::IconColor
+				| OptionKind::DirtyColor
+				| OptionKind::WarmColor
+				| OptionKind::ColdColor
+		) {
 		return pick.to_opt().unwrap_or_else(|| "default".to_owned());
 	}
 
@@ -410,6 +417,12 @@ fn option_value(model: &EditorModel, config: &SegmentConfig, kind: OptionKind) -
 		}
 		OptionKind::DirtyColor => opts
 			.and_then(|o| o.dirty_color.clone())
+			.unwrap_or_else(|| "default".to_owned()),
+		OptionKind::WarmColor => opts
+			.and_then(|o| o.warm_color.clone())
+			.unwrap_or_else(|| "default".to_owned()),
+		OptionKind::ColdColor => opts
+			.and_then(|o| o.cold_color.clone())
 			.unwrap_or_else(|| "default".to_owned()),
 		OptionKind::Label => {
 			let value = opts

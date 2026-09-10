@@ -57,6 +57,16 @@ pub enum SegmentType {
 	GitStash,
 	TokensPerSecond,
 	CostRate,
+	Effort,
+	Thinking,
+	FastMode,
+	Pr,
+	CacheWarm,
+	SessionCacheHitRatio,
+	CacheMisses,
+	CacheLastMiss,
+	SessionName,
+	Repo,
 }
 
 impl SegmentType {
@@ -103,7 +113,17 @@ impl SegmentType {
 				GitAheadBehind => GitStash,
 				GitStash => TokensPerSecond,
 				TokensPerSecond => CostRate,
-				CostRate => return None,
+				CostRate => Effort,
+				Effort => Thinking,
+				Thinking => FastMode,
+				FastMode => Pr,
+				Pr => CacheWarm,
+				CacheWarm => SessionCacheHitRatio,
+				SessionCacheHitRatio => CacheMisses,
+				CacheMisses => CacheLastMiss,
+				CacheLastMiss => SessionName,
+				SessionName => Repo,
+				Repo => return None,
 			})
 		}
 
@@ -142,6 +162,10 @@ pub struct SegmentOptions {
 	pub dirty: DirtyConfig,
 	#[serde(default)]
 	pub dirty_color: Option<String>,
+	#[serde(default)]
+	pub warm_color: Option<String>,
+	#[serde(default)]
+	pub cold_color: Option<String>,
 	#[serde(default)]
 	pub capitalize: Option<bool>,
 	#[serde(default = "default_true", skip_serializing_if = "is_true")]
@@ -254,6 +278,20 @@ impl SegmentConfig {
 		}
 	}
 
+	fn warm_color(&self) -> Option<DynColors> {
+		match self {
+			Self::Simple(_) => None,
+			Self::Advanced(opts) => opts.warm_color.as_deref().and_then(parse_color),
+		}
+	}
+
+	fn cold_color(&self) -> Option<DynColors> {
+		match self {
+			Self::Simple(_) => None,
+			Self::Advanced(opts) => opts.cold_color.as_deref().and_then(parse_color),
+		}
+	}
+
 	#[must_use]
 	pub fn capitalize(&self) -> bool {
 		match self {
@@ -296,6 +334,8 @@ impl SegmentConfig {
 				style: None,
 				dirty: DirtyConfig::Off,
 				dirty_color: None,
+				warm_color: None,
+				cold_color: None,
 				capitalize: None,
 				enabled: true,
 				extra: serde_json::Map::new(),
@@ -315,6 +355,8 @@ impl SegmentConfig {
 				&& opts.style.is_none()
 				&& matches!(opts.dirty, DirtyConfig::Off)
 				&& opts.dirty_color.is_none()
+				&& opts.warm_color.is_none()
+				&& opts.cold_color.is_none()
 				&& opts.capitalize.unwrap_or(true)
 				&& opts.enabled
 				&& opts.extra.is_empty();
@@ -395,6 +437,15 @@ fn format_icon(
 		format!("{} ", icon_text.color(color))
 	} else {
 		format!("{icon_text} ")
+	}
+}
+
+/// Colours `text` unless the segment has colours switched off.
+fn paint(segment: &SegmentConfig, text: &str, color: DynColors) -> String {
+	if segment.colors() {
+		format!("{}", text.color(color))
+	} else {
+		text.to_owned()
 	}
 }
 
@@ -724,6 +775,29 @@ mod tests {
 			rendered(&sample, SegmentType::Model)
 		);
 		assert_eq!(line.to_string(), expected);
+	}
+
+	#[test]
+	fn warm_and_cold_colors_parse_and_round_trip() {
+		let mut seg: SegmentConfig = serde_json::from_str(
+			r##"{"type":"cache_warm","warm_color":"#00FF00","cold_color":"rgb(1, 2, 3)"}"##,
+		)
+		.unwrap();
+		assert_eq!(seg.warm_color(), Some(DynColors::Rgb(0, 255, 0)));
+		assert_eq!(seg.cold_color(), Some(DynColors::Rgb(1, 2, 3)));
+		let json = serde_json::to_string(&seg).unwrap();
+		assert!(json.contains(r##""warm_color":"#00FF00""##), "{json}");
+		assert!(json.contains(r#""cold_color":"rgb(1, 2, 3)""#), "{json}");
+		seg.normalize();
+		assert!(
+			matches!(seg, SegmentConfig::Advanced(_)),
+			"custom colours keep the advanced form"
+		);
+		assert!(
+			SegmentConfig::Simple(SegmentType::CacheWarm)
+				.warm_color()
+				.is_none()
+		);
 	}
 
 	#[test]

@@ -2,8 +2,8 @@ use crate::constants::DIVIDER;
 use crate::context_window::{ContextWindow, CurrentUsage};
 use crate::format::{Percentage, Tokens};
 use crate::input::{
-	AgentInfo, CostInfo, InputData, ModelInfo, RateLimitPeriod, RateLimits, VimInfo, Workspace,
-	WorktreeInfo,
+	AgentInfo, CostInfo, EffortInfo, InputData, MissCause, ModelInfo, PrInfo, PromptCache,
+	RateLimitPeriod, RateLimits, RepoInfo, ThinkingInfo, VimInfo, Workspace, WorktreeInfo,
 };
 use crate::segment::{AccountDisplay, GitCache, RenderContext};
 use crate::usage::{PrepaidCredits, UsageError, UsageResponse};
@@ -24,10 +24,13 @@ impl SampleData {
 		let five_reset = chrono::Utc::now().timestamp() + 7200; // +2h
 		let seven_reset = chrono::Utc::now().timestamp() + 86_400 * 5; // +5d
 		let spend_reset = chrono::Utc::now().timestamp() + 86_400 * 19; // +19d
+		let cache_expires = chrono::Utc::now().timestamp() + 1800; // +30m
+		let last_miss = chrono::Utc::now().timestamp() - 300; // -5m
 
 		let input = InputData {
 			cwd: "/home/user/project".to_owned(),
 			session_id: "0a1b2c3d-4e5f-6789-abcd-ef0123456789".to_owned(),
+			session_name: "statusline".to_owned(),
 			model: ModelInfo {
 				id: "claude-fable-5".to_owned(),
 				display_name: "Fable".to_owned(),
@@ -35,6 +38,12 @@ impl SampleData {
 			workspace: Workspace {
 				current_dir: "/home/user/project".to_owned(),
 				project_dir: "/home/user/project".to_owned(),
+				git_worktree: String::new(),
+				repo: Some(RepoInfo {
+					host: "github.com".to_owned(),
+					owner: "ryanclark".to_owned(),
+					name: "statusline".to_owned(),
+				}),
 			},
 			version: "1.0.80".to_owned(),
 			cost: CostInfo {
@@ -82,6 +91,38 @@ impl SampleData {
 				original_branch: "main".to_owned(),
 			},
 			exceeds_200k_tokens: true,
+			fast_mode: true,
+			effort: EffortInfo {
+				level: "high".to_owned(),
+			},
+			thinking: ThinkingInfo { enabled: true },
+			prompt_cache: Some(PromptCache {
+				warm: true,
+				caching_observed: true,
+				ttl: "1h".to_owned(),
+				expires_at: Some(cache_expires),
+				requests: 14,
+				misses: 2,
+				expected_rebuilds: 1,
+				hit_ratio: Some(0.91),
+				cache_write_tokens: Tokens::from(352_000),
+				miss_recache_tokens: Tokens::from(310_200),
+				last_miss_at: Some(last_miss),
+				last_miss_cause: Some(MissCause {
+					causes: vec!["tools_changed".to_owned()],
+					tools_added: Some(2),
+					tools_removed: Some(0),
+					system_char_delta: None,
+				}),
+				miss_causes: [("tools_changed".to_owned(), 2)].into_iter().collect(),
+				recache_tokens_if_cold: Some(Tokens::from(45_000)),
+			}),
+			pr: PrInfo {
+				number: Some(1234),
+				url: "https://github.com/ryanclark/statusline/pull/1234".to_owned(),
+				review_state: "approved".to_owned(),
+				kind: String::new(),
+			},
 		};
 
 		let git = GitCache {
