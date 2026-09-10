@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0](https://github.com/ryanclark/statusline/compare/v1.0.0...v1.1.0) - 2026-09-10
+
+### Added
+
+- subagent grid, task icons, reset clock options, non-destructive install
+- add a subagent tab to configure
+- add `install --subagent` command and offer installation during initial install
+- add support for subagent status lines
+- add pr, repo, effort, thinking, fast_mode, session_name and prompt cache segments
+- add spend_limit and newline segments
+- add fable_usage segment
+
+### Fixed
+
+- tolerate null context usage and usage limit fields
+
+### Other
+
+- let cargo package resolve statusline-configure
+
 ## [1.0.0](https://github.com/ryanclark/statusline/compare/v0.1.4...v1.0.0) - 2026-06-10
 
 ### Added
