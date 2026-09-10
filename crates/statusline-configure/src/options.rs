@@ -12,6 +12,9 @@ pub enum OptionKind {
 	WarmColor,
 	ColdColor,
 	Capitalize,
+	ShowCountdown,
+	ShowTime,
+	TimeFormat,
 }
 
 #[must_use]
@@ -34,6 +37,11 @@ pub fn applicable_fields(set: OptionSet) -> Vec<OptionKind> {
 	if set.cache_state {
 		fields.push(OptionKind::WarmColor);
 		fields.push(OptionKind::ColdColor);
+	}
+	if set.countdown {
+		fields.push(OptionKind::ShowCountdown);
+		fields.push(OptionKind::ShowTime);
+		fields.push(OptionKind::TimeFormat);
 	}
 	if set.dirty {
 		fields.push(OptionKind::Dirty);
@@ -95,6 +103,27 @@ mod tests {
 				OptionKind::Style,
 				OptionKind::WarmColor,
 				OptionKind::ColdColor,
+				OptionKind::ShowCountdown,
+				OptionKind::ShowTime,
+				OptionKind::TimeFormat,
+			]
+		);
+	}
+
+	#[test]
+	fn rate_limit_fields_include_the_countdown_options() {
+		let set = meta(&SegmentType::FiveHour).options;
+		assert_eq!(
+			applicable_fields(set),
+			vec![
+				OptionKind::Colors,
+				OptionKind::Icon,
+				OptionKind::IconColor,
+				OptionKind::Label,
+				OptionKind::Style,
+				OptionKind::ShowCountdown,
+				OptionKind::ShowTime,
+				OptionKind::TimeFormat,
 			]
 		);
 	}

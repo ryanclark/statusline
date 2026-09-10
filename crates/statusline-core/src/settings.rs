@@ -34,8 +34,32 @@ pub struct Settings {
 	pub browser: Option<Browser>,
 	#[serde(default)]
 	pub skip_update_check: bool,
+	/// Lay the agent panel rows out as aligned columns instead of one free-form line per task.
+	#[serde(default = "enabled")]
+	pub subagent_grid: bool,
 	#[serde(flatten)]
 	pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+fn enabled() -> bool {
+	true
+}
+
+impl Default for Settings {
+	fn default() -> Self {
+		Self {
+			five_hour_reset_threshold: DEFAULT_FIVE_HOUR_RESET.into(),
+			seven_day_reset_threshold: DEFAULT_SEVEN_DAY_RESET.into(),
+			segments: None,
+			subagent_segments: None,
+			divider: None,
+			nerd_font: false,
+			browser: None,
+			skip_update_check: false,
+			subagent_grid: true,
+			extra: serde_json::Map::default(),
+		}
+	}
 }
 
 impl Settings {
@@ -49,29 +73,38 @@ impl Settings {
 		Ok(serde_json::from_str(&content)?)
 	}
 
-	pub fn ensure(
-		five_hour_reset_threshold: Percentage,
-		seven_day_reset_threshold: Percentage,
+	/// Creates the settings file with defaults when it is missing and otherwise keeps it as it is,
+	/// changing only the thresholds given explicitly. A file that fails to parse is an error rather
+	/// than something to replace, since it may hold a layout the user spent time on.
+	pub fn ensure_at(
+		path: &std::path::Path,
+		five_hour_reset_threshold: Option<Percentage>,
+		seven_day_reset_threshold: Option<Percentage>,
 	) -> Result<Self, SettingsError> {
-		let settings = Self {
-			five_hour_reset_threshold,
-			seven_day_reset_threshold,
-			segments: None,
-			subagent_segments: None,
-			divider: None,
-			nerd_font: false,
-			browser: None,
-			skip_update_check: false,
-			extra: Default::default(),
+		let (mut settings, mut changed) = match Self::load_from(path) {
+			Ok(existing) => (existing, false),
+			Err(SettingsError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+				(Self::default(), true)
+			}
+			Err(e) => return Err(e),
 		};
 
-		let path = Self::settings_path()?;
-		if let Some(parent) = path.parent() {
-			std::fs::create_dir_all(parent)?;
+		if let Some(five) = five_hour_reset_threshold
+			&& five != settings.five_hour_reset_threshold
+		{
+			settings.five_hour_reset_threshold = five;
+			changed = true;
+		}
+		if let Some(seven) = seven_day_reset_threshold
+			&& seven != settings.seven_day_reset_threshold
+		{
+			settings.seven_day_reset_threshold = seven;
+			changed = true;
 		}
 
-		let content = serde_json::to_string_pretty(&settings)?;
-		std::fs::write(&path, content)?;
+		if changed {
+			settings.save(path)?;
+		}
 
 		Ok(settings)
 	}
@@ -130,6 +163,7 @@ mod tests {
 			nerd_font: false,
 			browser: None,
 			skip_update_check: false,
+			subagent_grid: true,
 			extra: Default::default(),
 		};
 
@@ -200,6 +234,22 @@ mod tests {
 	}
 
 	#[test]
+	fn subagent_grid_is_on_unless_the_file_turns_it_off() {
+		let absent: Settings = serde_json::from_str(
+			r#"{"five_hour_reset_threshold":70,"seven_day_reset_threshold":100}"#,
+		)
+		.unwrap();
+		assert!(absent.subagent_grid);
+		let off: Settings = serde_json::from_str(
+			r#"{"five_hour_reset_threshold":70,"seven_day_reset_threshold":100,"subagent_grid":false}"#,
+		)
+		.unwrap();
+		assert!(!off.subagent_grid);
+		let json = serde_json::to_string(&off).unwrap();
+		assert!(json.contains(r#""subagent_grid":false"#), "{json}");
+	}
+
+	#[test]
 	fn settings_segments_not_serialized_when_none() {
 		let settings = Settings {
 			five_hour_reset_threshold: 70.0.into(),
@@ -210,6 +260,7 @@ mod tests {
 			nerd_font: false,
 			browser: None,
 			skip_update_check: false,
+			subagent_grid: true,
 			extra: Default::default(),
 		};
 		let json = serde_json::to_string(&settings).unwrap();
@@ -258,6 +309,66 @@ mod tests {
 		}"#;
 		let loaded: Settings = serde_json::from_str(json).unwrap();
 		assert!(loaded.browser.is_none());
+	}
+
+	fn scratch(name: &str) -> std::path::PathBuf {
+		let dir = std::env::temp_dir().join(format!("statusline-core-{name}"));
+		std::fs::remove_dir_all(&dir).ok();
+		dir.join("nested").join("settings.json")
+	}
+
+	const EXISTING: &str = r#"{"five_hour_reset_threshold":20,"seven_day_reset_threshold":50,"nerd_font":true,"segments":["model","cwd"]}"#;
+
+	#[test]
+	fn ensure_at_creates_the_file_with_defaults_when_missing() {
+		let path = scratch("ensure-missing");
+		let s = Settings::ensure_at(&path, Some(50.0.into()), None).unwrap();
+		assert_eq!(s.five_hour_reset_threshold, 50.0.into());
+		assert_eq!(s.seven_day_reset_threshold, DEFAULT_SEVEN_DAY_RESET.into());
+		assert!(s.segments.is_none());
+		let reloaded = Settings::load_from(&path).unwrap();
+		assert_eq!(reloaded.five_hour_reset_threshold, 50.0.into());
+	}
+
+	#[test]
+	fn ensure_at_leaves_an_existing_file_untouched() {
+		let path = scratch("ensure-keep");
+		std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+		std::fs::write(&path, EXISTING).unwrap();
+		let s = Settings::ensure_at(&path, None, None).unwrap();
+		assert_eq!(s.segments.as_ref().map(Vec::len), Some(2));
+		assert!(s.nerd_font);
+		assert_eq!(s.five_hour_reset_threshold, 20.0.into());
+		assert_eq!(
+			std::fs::read_to_string(&path).unwrap(),
+			EXISTING,
+			"file must not be rewritten"
+		);
+	}
+
+	#[test]
+	fn ensure_at_applies_only_the_thresholds_given() {
+		let path = scratch("ensure-thresholds");
+		std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+		std::fs::write(&path, EXISTING).unwrap();
+		Settings::ensure_at(&path, Some(65.0.into()), None).unwrap();
+		let reloaded = Settings::load_from(&path).unwrap();
+		assert_eq!(reloaded.five_hour_reset_threshold, 65.0.into());
+		assert_eq!(reloaded.seven_day_reset_threshold, 50.0.into());
+		assert_eq!(reloaded.segments.as_ref().map(Vec::len), Some(2));
+		assert!(reloaded.nerd_font);
+	}
+
+	#[test]
+	fn ensure_at_refuses_to_replace_an_unreadable_file() {
+		let path = scratch("ensure-corrupt");
+		std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+		std::fs::write(&path, "not json").unwrap();
+		assert!(matches!(
+			Settings::ensure_at(&path, None, None),
+			Err(SettingsError::Parse(_))
+		));
+		assert_eq!(std::fs::read_to_string(&path).unwrap(), "not json");
 	}
 
 	#[test]

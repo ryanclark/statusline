@@ -4,7 +4,7 @@ use crate::options::{OptionKind, applicable_fields, next_style};
 use crate::picker::{self, PickerState};
 use statusline_core::catalog::meta;
 use statusline_core::format::Percentage;
-use statusline_core::segment::{DirtyConfig, SegmentConfig, SegmentType};
+use statusline_core::segment::{DirtyConfig, SegmentConfig, SegmentType, TimeFormat};
 use statusline_core::settings::Settings;
 use statusline_core::subagent::default_subagent_segments;
 use std::str::FromStr;
@@ -106,9 +106,10 @@ pub struct GlobalState {
 	pub five: LineEdit,
 	pub seven: LineEdit,
 	pub nerd_font: bool,
+	pub grid: bool,
 }
 
-const GLOBAL_FIELDS: usize = 4;
+const GLOBAL_FIELDS: usize = 5;
 
 pub struct EditorModel {
 	pub mode: Mode,
@@ -126,6 +127,8 @@ pub struct EditorModel {
 	pub global: GlobalState,
 	pub divider: Option<String>,
 	pub nerd_font: bool,
+	/// Whether `statusline subagent` lays its rows out as aligned columns.
+	pub subagent_grid: bool,
 	pub five: Percentage,
 	pub seven: Percentage,
 }
@@ -180,6 +183,7 @@ impl EditorModel {
 			global: GlobalState::default(),
 			divider: s.divider.clone(),
 			nerd_font: s.nerd_font,
+			subagent_grid: s.subagent_grid,
 			five: s.five_hour_reset_threshold,
 			seven: s.seven_day_reset_threshold,
 		}
@@ -214,6 +218,7 @@ impl EditorModel {
 			subagent_segments,
 			divider: self.divider.clone(),
 			nerd_font: self.nerd_font,
+			subagent_grid: self.subagent_grid,
 			five_hour_reset_threshold: self.five,
 			seven_day_reset_threshold: self.seven,
 			..base.clone()
@@ -460,11 +465,24 @@ impl EditorModel {
 		let Some(row) = self.rows.get_mut(self.cursor) else {
 			return;
 		};
+		// The defaults depend on the segment type, so read them before taking the options apart.
+		let icon = row.config.icon();
+		let show_countdown = row.config.show_countdown();
+		let show_time = row.config.show_time();
+		let time_format = row.config.time_format();
 		let opts = row.config.options_mut();
 
 		match kind {
 			OptionKind::Colors => opts.colors ^= true,
-			OptionKind::Icon => opts.icon ^= true,
+			OptionKind::Icon => opts.icon = Some(!icon),
+			OptionKind::ShowCountdown => opts.show_countdown = Some(!show_countdown),
+			OptionKind::ShowTime => opts.show_time = Some(!show_time),
+			OptionKind::TimeFormat => {
+				opts.time_format = Some(match time_format {
+					TimeFormat::H24 => TimeFormat::H12,
+					TimeFormat::H12 => TimeFormat::H24,
+				});
+			}
 			OptionKind::Capitalize => {
 				let current = opts.capitalize.unwrap_or(true);
 
@@ -729,6 +747,7 @@ impl EditorModel {
 			five: LineEdit::with(&format_threshold(self.five)),
 			seven: LineEdit::with(&format_threshold(self.seven)),
 			nerd_font: self.nerd_font,
+			grid: self.subagent_grid,
 		};
 		self.focus = Focus::Global;
 	}
@@ -751,6 +770,11 @@ impl EditorModel {
 			}
 			Key::Toggle | Key::Char(' ') | Key::Left | Key::Right if self.global.field == 1 => {
 				self.global.nerd_font ^= true;
+
+				Effect::Redraw
+			}
+			Key::Toggle | Key::Char(' ') | Key::Left | Key::Right if self.global.field == 4 => {
+				self.global.grid ^= true;
 
 				Effect::Redraw
 			}
@@ -816,6 +840,11 @@ impl EditorModel {
 			self.dirty = true;
 		}
 
+		if self.global.grid != self.subagent_grid {
+			self.subagent_grid = self.global.grid;
+			self.dirty = true;
+		}
+
 		if let Ok(five) = Percentage::from_str(self.global.five.value())
 			&& five != self.five
 		{
@@ -842,7 +871,7 @@ mod tests {
 	use statusline_core::segment::{SegmentConfig, SegmentType};
 
 	fn model(types: &[SegmentType]) -> EditorModel {
-		let base = crate::default_settings();
+		let base = Settings::default();
 		let mut m = EditorModel::from_settings(&base);
 		m.rows = types
 			.iter()
@@ -857,8 +886,7 @@ mod tests {
 
 	#[test]
 	fn from_settings_uses_default_segments_when_none() {
-		let mut s = crate::default_settings();
-		s.segments = None;
+		let s = Settings::default();
 		let m = EditorModel::from_settings(&s);
 		let types: Vec<&SegmentType> = m.rows.iter().map(|r| r.config.segment_type()).collect();
 		assert_eq!(
@@ -946,7 +974,7 @@ mod tests {
 		assert!(!m.rows[0].enabled);
 		assert!(m.dirty);
 		assert_eq!(m.rows.len(), 2, "toggled-off row is kept in the list");
-		let base = crate::default_settings();
+		let base = Settings::default();
 		let s = m.to_settings(&base);
 		let segs = s.segments.unwrap();
 		assert_eq!(segs.len(), 2, "hidden rows persist (as enabled:false)");
@@ -1043,7 +1071,7 @@ mod tests {
 		m.rows[0].config.options_mut().dirty = DirtyConfig::On;
 		m.cursor = 0;
 		m.apply(Key::Toggle);
-		let s = m.to_settings(&crate::default_settings());
+		let s = m.to_settings(&Settings::default());
 		let segs = s.segments.expect("explicit list saved");
 		assert_eq!(segs.len(), 2, "hidden row was deleted on save");
 		assert!(!segs[0].enabled(), "hidden row not persisted as disabled");
@@ -1056,11 +1084,13 @@ mod tests {
 
 	#[test]
 	fn from_settings_restores_disabled_rows_as_hidden() {
-		let mut s = crate::default_settings();
-		s.segments = Some(vec![
-			serde_json::from_str(r#"{"type":"model","enabled":false}"#).unwrap(),
-			serde_json::from_str(r#""cwd""#).unwrap(),
-		]);
+		let s = Settings {
+			segments: Some(vec![
+				serde_json::from_str(r#"{"type":"model","enabled":false}"#).unwrap(),
+				serde_json::from_str(r#""cwd""#).unwrap(),
+			]),
+			..Settings::default()
+		};
 		let m = EditorModel::from_settings(&s);
 		assert!(!m.rows[0].enabled, "enabled:false must hide the row");
 		assert!(m.rows[1].enabled);
@@ -1068,8 +1098,7 @@ mod tests {
 
 	#[test]
 	fn untouched_default_list_stays_unpinned_on_save() {
-		let mut s = crate::default_settings();
-		s.segments = None;
+		let s = Settings::default();
 		let mut m = EditorModel::from_settings(&s);
 		m.apply(Key::Global);
 		m.apply(Key::Down);
@@ -1085,8 +1114,7 @@ mod tests {
 
 	#[test]
 	fn edited_list_is_pinned_on_save() {
-		let mut s = crate::default_settings();
-		s.segments = None;
+		let s = Settings::default();
 		let mut m = EditorModel::from_settings(&s);
 		m.cursor = 0;
 		m.apply(Key::Remove);
@@ -1246,6 +1274,47 @@ mod tests {
 	}
 
 	#[test]
+	fn global_down_stops_at_the_grid_field() {
+		let mut m = model(&[SegmentType::Model]);
+		m.apply(Key::Global);
+		for _ in 0..6 {
+			m.apply(Key::Down);
+		}
+		assert_eq!(m.global.field, 4);
+		assert!(m.global.grid, "the grid defaults on");
+		m.apply(Key::Char(' '));
+		assert!(!m.global.grid, "space should flip the grid toggle");
+	}
+
+	#[test]
+	fn global_grid_toggle_reaches_settings() {
+		let mut m = model(&[SegmentType::Model]);
+		m.apply(Key::Global);
+		m.global.field = 4;
+		m.apply(Key::Toggle);
+		m.apply(Key::Back);
+		let base = Settings::default();
+		let out = m.to_settings(&base);
+		assert!(!out.subagent_grid);
+		assert!(m.dirty);
+	}
+
+	#[test]
+	fn from_settings_keeps_a_disabled_grid() {
+		let base = Settings {
+			subagent_grid: false,
+			..Settings::default()
+		};
+		let m = EditorModel::from_settings(&base);
+		assert!(!m.subagent_grid);
+		let on = Settings::default();
+		assert!(
+			!m.to_settings(&on).subagent_grid,
+			"the editor's value wins over the base"
+		);
+	}
+
+	#[test]
 	fn add_row_opens_picker() {
 		let mut m = model(&[SegmentType::Model]);
 		m.cursor = m.rows.len();
@@ -1271,7 +1340,7 @@ mod tests {
 
 	#[test]
 	fn to_settings_preserves_base_extra_keys() {
-		let mut base = crate::default_settings();
+		let mut base = Settings::default();
 		base.extra.insert(
 			"future_key".to_owned(),
 			serde_json::Value::String("keep me".to_owned()),
@@ -1298,7 +1367,7 @@ mod tests {
 			"row is Advanced before saving"
 		);
 
-		let base = crate::default_settings();
+		let base = Settings::default();
 		let out = m.to_settings(&base);
 		let segs = out.segments.unwrap();
 		assert_eq!(segs.len(), 1);
@@ -1384,13 +1453,48 @@ mod tests {
 	}
 
 	#[test]
+	fn time_options_toggle_away_from_their_defaults() {
+		use statusline_core::segment::TimeFormat;
+		let mut m = model(&[SegmentType::FiveHour]);
+		m.cursor = 0;
+		m.apply(Key::Enter);
+		m.options.field = 5;
+		m.apply(Key::Toggle);
+		m.options.field = 6;
+		m.apply(Key::Toggle);
+		m.options.field = 7;
+		m.apply(Key::Toggle);
+		let opts = m.rows[0].config.clone().options_mut().clone();
+		assert_eq!(opts.show_countdown, Some(false));
+		assert_eq!(opts.show_time, Some(true));
+		assert_eq!(opts.time_format, Some(TimeFormat::H12));
+		assert!(m.dirty);
+		m.apply(Key::Toggle);
+		let opts = m.rows[0].config.clone().options_mut().clone();
+		assert_eq!(opts.time_format, Some(TimeFormat::H24));
+	}
+
+	#[test]
+	fn cache_warm_show_time_toggles_off_first() {
+		let mut m = model(&[SegmentType::CacheWarm]);
+		m.cursor = 0;
+		m.apply(Key::Enter);
+		m.options.field = 8;
+		m.apply(Key::Toggle);
+		let opts = m.rows[0].config.clone().options_mut().clone();
+		assert_eq!(opts.show_time, Some(false));
+	}
+
+	#[test]
 	fn tab_switches_layouts_and_remembers_each_cursor() {
-		let mut base = crate::default_settings();
-		base.segments = Some(vec![
-			SegmentConfig::Simple(SegmentType::Model),
-			SegmentConfig::Simple(SegmentType::Cwd),
-		]);
-		base.subagent_segments = Some(vec![SegmentConfig::Simple(SegmentType::TaskName)]);
+		let base = Settings {
+			segments: Some(vec![
+				SegmentConfig::Simple(SegmentType::Model),
+				SegmentConfig::Simple(SegmentType::Cwd),
+			]),
+			subagent_segments: Some(vec![SegmentConfig::Simple(SegmentType::TaskName)]),
+			..Settings::default()
+		};
 		let mut m = EditorModel::from_settings(&base);
 		m.cursor = 1;
 		assert_eq!(m.mode, Mode::StatusLine);
@@ -1407,7 +1511,7 @@ mod tests {
 
 	#[test]
 	fn subagent_rows_start_from_the_default_layout_and_save_only_when_changed() {
-		let base = crate::default_settings();
+		let base = Settings::default();
 		let mut m = EditorModel::from_settings(&base);
 		m.apply(Key::NextTab);
 		assert_eq!(m.rows.len(), default_subagent_segments().len());
@@ -1418,7 +1522,10 @@ mod tests {
 		m.cursor = 0;
 		m.apply(Key::Remove);
 		let saved = m.to_settings(&base);
-		assert_eq!(saved.subagent_segments.as_ref().map(Vec::len), Some(6));
+		assert_eq!(
+			saved.subagent_segments.as_ref().map(Vec::len),
+			Some(default_subagent_segments().len() - 1)
+		);
 		assert!(
 			saved.segments.is_none(),
 			"the status line list is untouched"
@@ -1427,7 +1534,7 @@ mod tests {
 
 	#[test]
 	fn newline_is_refused_on_the_subagent_tab() {
-		let mut m = EditorModel::from_settings(&crate::default_settings());
+		let mut m = EditorModel::from_settings(&Settings::default());
 		m.apply(Key::NextTab);
 		let before = m.rows.len();
 		assert_eq!(m.apply(Key::AddNewline), Effect::None);
@@ -1441,7 +1548,7 @@ mod tests {
 
 	#[test]
 	fn install_key_only_acts_on_an_uninstalled_subagent_tab() {
-		let mut m = EditorModel::from_settings(&crate::default_settings());
+		let mut m = EditorModel::from_settings(&Settings::default());
 		assert_eq!(m.apply(Key::Install), Effect::None);
 		m.apply(Key::NextTab);
 		assert_eq!(m.apply(Key::Install), Effect::InstallSubagent);
@@ -1542,7 +1649,7 @@ mod tests {
 		m.apply(Key::Char('5'));
 		m.apply(Key::Back);
 		assert_eq!(m.focus, Focus::List);
-		let base = crate::default_settings();
+		let base = Settings::default();
 		let out = m.to_settings(&base);
 		assert_eq!(out.five_hour_reset_threshold, 55.0.into());
 		assert!(m.dirty);
@@ -1555,7 +1662,7 @@ mod tests {
 		m.global.field = 2;
 		m.global.five = LineEdit::with("not-a-number");
 		m.apply(Key::Back);
-		let base = crate::default_settings();
+		let base = Settings::default();
 		let out = m.to_settings(&base);
 		assert_eq!(out.five_hour_reset_threshold, 70.0.into());
 	}
@@ -1569,7 +1676,7 @@ mod tests {
 		m.global.field = 1;
 		m.apply(Key::Toggle);
 		m.apply(Key::Back);
-		let base = crate::default_settings();
+		let base = Settings::default();
 		let out = m.to_settings(&base);
 		assert_eq!(out.divider.as_deref(), Some("|"));
 		assert!(out.nerd_font);

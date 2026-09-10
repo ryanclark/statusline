@@ -11,7 +11,7 @@
       "type": "agent",
       "status": "running",
       "description": "Review the auth flow for injection risks",
-      "label": "security-reviewer",
+      "label": "Reviewing auth middleware",
       "startTime": 1738425600000,
       "model": "claude-opus-5",
       "effort": "high",
@@ -26,6 +26,7 @@
       "type": "agent",
       "status": "completed",
       "description": "Find call sites of parse_color",
+      "label": "Grepping for parse_color",
       "tokenCount": 8000,
       "cwd": "/home/user/project"
     },

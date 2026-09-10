@@ -68,7 +68,7 @@ just install
 statusline install
 ```
 
-This saves default settings and wires up Claude Code's `settings.json` to call `statusline`. Pass `--subagent` to also wire the agent panel rows to `statusline subagent`; without the flag, an interactive install offers to add it when it is not configured yet. The organization shown in the `extra_usage` segment is read from Claude Code's own `~/.claude.json` at runtime, so it always matches the currently-active account.
+This creates `~/.statusline/settings.json` with default settings when it is missing, keeps an existing file (and its segments) as it is, and wires up Claude Code's `settings.json` to call `statusline`. Pass `--subagent` to also wire the agent panel rows to `statusline subagent`; without the flag, an interactive install offers to add it when it is not configured yet. The organization shown in the `extra_usage` segment is read from Claude Code's own `~/.claude.json` at runtime, so it always matches the currently-active account.
 
 ### Keychain access (API segments only)
 
@@ -125,6 +125,12 @@ This opens an interactive editor with a live preview to add, remove, reorder and
 Press `Tab` to switch between the status line and the subagent layout. The subagent tab shows one preview row per sample task, and offers `i` to wire up `subagentStatusLine` when Claude Code does not have it yet.
 
 ### Available segments
+
+Some segments need a recent Claude Code, and stay empty on older versions: `spend_limit`,
+`cache_warm`, `session_cache_hit_ratio`, and `cache_misses` need 2.1.251 or later, `cache_last_miss`
+needs 2.1.260, `pr` needs 2.1.234 for GitLab merge requests, and `repo` needs 2.1.260 for GitLab
+projects nested in subgroups. In the agent panel, the per-task `model` needs 2.1.205 and `effort`
+needs 2.1.214.
 
 #### Context window
 
@@ -223,7 +229,7 @@ Each segment can be a plain string or an object with options:
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `colors` | bool | `true` | Enable/disable ANSI colors |
-| `icon` | bool | `true` | Show/hide the segment's icon |
+| `icon` | bool | `true` (`false` for `task_status`) | Show/hide the segment's icon |
 | `icon_color` | string | — | Custom icon color |
 | `label` | string | — | Custom label replacing the default icon |
 | `style` | string | — | Text style: `bold`, `dim`, `italic`, `underline` |
@@ -243,6 +249,18 @@ Colors can be specified as named colors (`red`, `cyan`, `yellow`, `green`, `blue
 |---|---|---|---|
 | `warm_color` | string | `green` | Color of the ♨ icon and the `warm` state |
 | `cold_color` | string | `yellow` | Color of the ♨ icon and the `cold` state |
+
+#### Countdown options
+
+`five_hour`, `seven_day`, `spend_limit`, `fable_usage`, and `cache_warm` count down to a reset or
+expiry. Each can also print the clock time it counts down to, in your local time zone, as
+`2h 10m (16:00)`:
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `show_countdown` | bool | `true` | Show the time left |
+| `show_time` | bool | `false` (`true` for `cache_warm`) | Show the clock time after the countdown, or alone when the countdown is off |
+| `time_format` | string | `24h` | `24h` for `16:00`, `12h` for `4:00pm` |
 
 #### account options
 
@@ -340,20 +358,26 @@ Claude Code can also hand the agent panel's rows to a command through `subagentS
 
 `statusline subagent` reads the task list on stdin and prints one row per task, built from the
 `subagent_segments` list in `~/.statusline/settings.json`. The default layout is `task_name`, `task_status`, `divider`, `model`, `task_tokens`, `divider`,
-`task_description`. Every task carries its own model, effort, cwd, and token counts, so `model`,
+`task_description`, `divider`, `task_label`. Ad-hoc agents carry no `name`, so that column simply drops out for them. Every task carries its own model, effort, cwd, and token counts, so `model`,
 `model_id`, `effort`, `cwd`, `context_percentage`, `context_window_size`, and `total_input_tokens`
 work per task next to the task segments below. A task whose row renders empty keeps Claude Code's
 default row.
+
+Rows are laid out as a grid: each segment is a column as wide as its widest value across the tasks,
+and a divider sits after the padded cell before it, so the columns and dividers line up down the
+panel. Set `"subagent_grid": false` in `~/.statusline/settings.json`, or toggle `subagent_grid`
+under `g` global in `statusline configure`, for one free-form line per task instead.
 
 #### Subagent
 
 | Segment | Description |
 |---|---|
-| `task_name` | Subagent name |
-| `task_status` | Task status (`running`, `completed`, `failed`, `pending`), colored |
+| `task_name` | Subagent name with ⚙ icon |
+| `task_status` | Task status (`running`, `completed`, `failed`, `pending`), colored by state; `"icon": true` adds a ● in the same color (off by default, since the panel draws its own marker) |
 | `task_description` | Task description, dimmed |
-| `task_elapsed` | Time since the task started |
-| `task_tokens` | Tokens the task has used |
+| `task_elapsed` | Time since the task started with ⏱ icon |
+| `task_tokens` | Tokens the task has used with ↑ icon |
+| `task_label` | What the task is doing right now, from Claude Code's live label |
 
 
 ## Options
@@ -410,6 +434,13 @@ just cert-clean
 
 ```
 just install-signed "Your Name" "ABC123XYZ"
+```
+
+To skip the arguments, save the identity in a `justfile.local` next to the `justfile` (it is gitignored):
+
+```
+export DEVELOPER_NAME := "Your Name"
+export TEAM_ID := "ABC123XYZ"
 ```
 
 To find your name and team ID:

@@ -25,9 +25,10 @@ pub(crate) fn run() {
 		.and_then(|s| s.divider.clone())
 		.unwrap_or_else(|| DIVIDER.to_owned());
 	let nerd_font = settings.as_ref().is_some_and(|s| s.nerd_font);
+	let grid = settings.as_ref().is_none_or(|s| s.subagent_grid);
 
 	let mut out = std::io::stdout().lock();
-	for row in render_rows(&input, &segments, &divider, nerd_font) {
+	for row in render_rows(&input, &segments, &divider, nerd_font, grid) {
 		if let Ok(line) = serde_json::to_string(&row) {
 			let _ = writeln!(out, "{line}");
 		}

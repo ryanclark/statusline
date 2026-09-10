@@ -38,6 +38,8 @@ pub struct OptionSet {
 	pub capitalize: bool,
 	/// Warm and cold colour options, only meaningful for the prompt cache state segment.
 	pub cache_state: bool,
+	/// Countdown and clock time options, for segments that count down to a reset or expiry.
+	pub countdown: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +60,7 @@ const ICON_TEXT: OptionSet = OptionSet {
 	dirty: false,
 	capitalize: false,
 	cache_state: false,
+	countdown: false,
 };
 
 const COLORED_TEXT: OptionSet = OptionSet {
@@ -68,6 +71,7 @@ const COLORED_TEXT: OptionSet = OptionSet {
 	dirty: false,
 	capitalize: false,
 	cache_state: false,
+	countdown: false,
 };
 
 const NO_OPTIONS: OptionSet = OptionSet {
@@ -78,6 +82,7 @@ const NO_OPTIONS: OptionSet = OptionSet {
 	dirty: false,
 	capitalize: false,
 	cache_state: false,
+	countdown: false,
 };
 
 const STYLED_TEXT: OptionSet = OptionSet {
@@ -88,6 +93,7 @@ const STYLED_TEXT: OptionSet = OptionSet {
 	dirty: false,
 	capitalize: false,
 	cache_state: false,
+	countdown: false,
 };
 
 #[must_use]
@@ -192,6 +198,7 @@ static CATALOG: &[SegmentMeta] = &[
 		description: "Prompt cache state (warm with time until cold, or cold)",
 		options: OptionSet {
 			cache_state: true,
+			countdown: true,
 			..ICON_TEXT
 		},
 	},
@@ -233,7 +240,10 @@ static CATALOG: &[SegmentMeta] = &[
 		label: "5-hour limit",
 		category: Category::RateLimits,
 		description: "5-hour rate limit % with optional reset countdown",
-		options: ICON_TEXT,
+		options: OptionSet {
+			countdown: true,
+			..ICON_TEXT
+		},
 	},
 	SegmentMeta {
 		ty: SegmentType::SevenDay,
@@ -241,7 +251,10 @@ static CATALOG: &[SegmentMeta] = &[
 		label: "7-day limit",
 		category: Category::RateLimits,
 		description: "7-day rate limit % with optional reset countdown",
-		options: ICON_TEXT,
+		options: OptionSet {
+			countdown: true,
+			..ICON_TEXT
+		},
 	},
 	SegmentMeta {
 		ty: SegmentType::SpendLimit,
@@ -249,7 +262,10 @@ static CATALOG: &[SegmentMeta] = &[
 		label: "Spend limit",
 		category: Category::RateLimits,
 		description: "Spend limit % with reset countdown (Claude apps gateway only)",
-		options: ICON_TEXT,
+		options: OptionSet {
+			countdown: true,
+			..ICON_TEXT
+		},
 	},
 	SegmentMeta {
 		ty: SegmentType::FableUsage,
@@ -257,7 +273,10 @@ static CATALOG: &[SegmentMeta] = &[
 		label: "Fable usage",
 		category: Category::RateLimits,
 		description: "Fable weekly rate limit % with reset countdown (calls the API)",
-		options: ICON_TEXT,
+		options: OptionSet {
+			countdown: true,
+			..ICON_TEXT
+		},
 	},
 	SegmentMeta {
 		ty: SegmentType::ExtraUsage,
@@ -345,6 +364,7 @@ static CATALOG: &[SegmentMeta] = &[
 			dirty: true,
 			capitalize: false,
 			cache_state: false,
+			countdown: false,
 		},
 	},
 	SegmentMeta {
@@ -497,6 +517,7 @@ static CATALOG: &[SegmentMeta] = &[
 			dirty: false,
 			capitalize: true,
 			cache_state: false,
+			countdown: false,
 		},
 	},
 	SegmentMeta {
@@ -513,6 +534,7 @@ static CATALOG: &[SegmentMeta] = &[
 			dirty: false,
 			capitalize: false,
 			cache_state: false,
+			countdown: false,
 		},
 	},
 	SegmentMeta {
@@ -529,7 +551,7 @@ static CATALOG: &[SegmentMeta] = &[
 		label: "Task name",
 		category: Category::Subagent,
 		description: "Subagent name",
-		options: STYLED_TEXT,
+		options: ICON_TEXT,
 	},
 	SegmentMeta {
 		ty: SegmentType::TaskStatus,
@@ -537,7 +559,7 @@ static CATALOG: &[SegmentMeta] = &[
 		label: "Task status",
 		category: Category::Subagent,
 		description: "Task status (running, completed, failed, pending), colored",
-		options: COLORED_TEXT,
+		options: ICON_TEXT,
 	},
 	SegmentMeta {
 		ty: SegmentType::TaskDescription,
@@ -553,7 +575,7 @@ static CATALOG: &[SegmentMeta] = &[
 		label: "Task elapsed",
 		category: Category::Subagent,
 		description: "Time since the task started",
-		options: STYLED_TEXT,
+		options: ICON_TEXT,
 	},
 	SegmentMeta {
 		ty: SegmentType::TaskTokens,
@@ -561,6 +583,14 @@ static CATALOG: &[SegmentMeta] = &[
 		label: "Task tokens",
 		category: Category::Subagent,
 		description: "Tokens the task has used",
+		options: ICON_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::TaskLabel,
+		id: "task_label",
+		label: "Task activity",
+		category: Category::Subagent,
+		description: "What the task is doing right now, from its live label",
 		options: STYLED_TEXT,
 	},
 ];
@@ -576,6 +606,43 @@ pub fn meta(ty: &SegmentType) -> &'static SegmentMeta {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn task_segments_expose_icon_options_except_the_description() {
+		for ty in [
+			SegmentType::TaskName,
+			SegmentType::TaskStatus,
+			SegmentType::TaskElapsed,
+			SegmentType::TaskTokens,
+		] {
+			let set = meta(&ty).options;
+			assert!(set.icon && set.label, "{ty:?}");
+		}
+		assert!(!meta(&SegmentType::TaskDescription).options.icon);
+	}
+
+	#[test]
+	fn the_subagent_catalog_offers_the_activity_label() {
+		let ids: Vec<&str> = for_subagent().iter().map(|m| m.id).collect();
+		assert!(ids.contains(&"task_label"), "{ids:?}");
+		let set = meta(&SegmentType::TaskLabel).options;
+		assert!(set.style && !set.icon && !set.colors);
+	}
+
+	#[test]
+	fn countdown_segments_expose_the_time_options() {
+		for ty in [
+			SegmentType::FiveHour,
+			SegmentType::SevenDay,
+			SegmentType::SpendLimit,
+			SegmentType::FableUsage,
+			SegmentType::CacheWarm,
+		] {
+			assert!(meta(&ty).options.countdown, "{ty:?}");
+		}
+		assert!(!meta(&SegmentType::TotalInputTokens).options.countdown);
+		assert!(!meta(&SegmentType::TaskElapsed).options.countdown);
+	}
 
 	#[test]
 	fn every_segment_type_has_catalog_entry() {

@@ -9,13 +9,23 @@ use statusline_core::claude_settings::{
 use std::io::IsTerminal;
 
 pub(crate) fn install(
-	five_hour_reset_threshold: Percentage,
-	seven_day_reset_threshold: Percentage,
+	five_hour_reset_threshold: Option<Percentage>,
+	seven_day_reset_threshold: Option<Percentage>,
 	subagent: bool,
 ) -> Result<()> {
-	Settings::ensure(five_hour_reset_threshold, seven_day_reset_threshold)?;
+	let settings_path = Settings::settings_path()?;
+	let existed = settings_path.exists();
+	Settings::ensure_at(
+		&settings_path,
+		five_hour_reset_threshold,
+		seven_day_reset_threshold,
+	)?;
 
-	println!("{} Saved settings", "✓".green());
+	if existed {
+		println!("{} Kept {}", "✓".green(), settings_path.display());
+	} else {
+		println!("{} Saved default settings", "✓".green());
+	}
 
 	let path = home_dir()?.join(".claude").join("settings.json");
 	let mut settings = read_settings(&path)?;

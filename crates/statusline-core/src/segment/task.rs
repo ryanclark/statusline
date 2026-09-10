@@ -1,9 +1,29 @@
-use crate::constants::{CYAN, GRAY, GREEN, RED};
+use crate::constants::{CYAN, GRAY, GREEN, RED, UP_ARROW};
 use crate::format::elapsed_since;
 use chrono::Utc;
 use owo_colors::{DynColors, OwoColorize};
 
-use super::{RenderContext, SegmentConfig, apply_style, paint};
+use super::{Icon, RenderContext, SegmentConfig, apply_style, format_icon, paint};
+
+const AGENT_ICON: Icon = Icon {
+	unicode: "\u{2699}",
+	nerd: "\u{f013}",
+};
+
+const STATE_ICON: Icon = Icon {
+	unicode: "\u{25cf}",
+	nerd: "\u{f111}",
+};
+
+const ELAPSED_ICON: Icon = Icon {
+	unicode: "\u{23f1}",
+	nerd: "\u{f252}",
+};
+
+const TOKENS_ICON: Icon = Icon {
+	unicode: UP_ARROW,
+	nerd: "\u{f062}",
+};
 
 /// Epoch values this large can only be milliseconds; the docs do not name the unit.
 const MILLIS_THRESHOLD: i64 = 100_000_000_000;
@@ -24,7 +44,8 @@ pub(super) fn task_name(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Opt
 		return None;
 	}
 
-	Some(apply_style(name, segment.style()))
+	let icon = format_icon(segment, AGENT_ICON, GRAY, ctx.nerd_font);
+	Some(apply_style(&format!("{icon}{name}"), segment.style()))
 }
 
 pub(super) fn task_status(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
@@ -33,12 +54,15 @@ pub(super) fn task_status(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> O
 		return None;
 	}
 
-	let text = match status_color(status) {
+	// The dot carries the state colour too, so it reads at a glance even when the word is cut off.
+	let color = status_color(status);
+	let icon = format_icon(segment, STATE_ICON, color.unwrap_or(GRAY), ctx.nerd_font);
+	let text = match color {
 		Some(color) => paint(segment, status, color),
 		None => status.clone(),
 	};
 
-	Some(apply_style(&text, segment.style()))
+	Some(apply_style(&format!("{icon}{text}"), segment.style()))
 }
 
 pub(super) fn task_description(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
@@ -65,11 +89,23 @@ pub(super) fn task_elapsed(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> 
 	};
 	let elapsed = elapsed_since(start_secs, Utc::now())?;
 
-	Some(apply_style(&elapsed, segment.style()))
+	let icon = format_icon(segment, ELAPSED_ICON, GRAY, ctx.nerd_font);
+	Some(apply_style(&format!("{icon}{elapsed}"), segment.style()))
 }
 
 pub(super) fn task_tokens(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
 	let tokens = ctx.task?.token_count?;
 
-	Some(apply_style(&tokens.to_string(), segment.style()))
+	let icon = format_icon(segment, TOKENS_ICON, CYAN, ctx.nerd_font);
+	Some(apply_style(&format!("{icon}{tokens}"), segment.style()))
+}
+
+/// The task's live activity, which Claude Code updates as the agent works.
+pub(super) fn task_label(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
+	let label = &ctx.task?.label;
+	if label.is_empty() {
+		return None;
+	}
+
+	Some(apply_style(label, segment.style()))
 }

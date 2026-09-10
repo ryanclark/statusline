@@ -36,11 +36,15 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
 	Install {
-		#[arg(short, default_value_t = settings::DEFAULT_FIVE_HOUR_RESET.into(), value_name = "N")]
-		five_hour_reset_threshold: Percentage,
+		/// Show the 5-hour reset countdown above this percentage (default 70). An existing settings
+		/// file keeps its value unless this is given.
+		#[arg(short, value_name = "N")]
+		five_hour_reset_threshold: Option<Percentage>,
 
-		#[arg(short, default_value_t = settings::DEFAULT_SEVEN_DAY_RESET.into(), value_name = "N")]
-		seven_day_reset_threshold: Percentage,
+		/// Show the 7-day reset countdown above this percentage (default 100). An existing settings
+		/// file keeps its value unless this is given.
+		#[arg(short, value_name = "N")]
+		seven_day_reset_threshold: Option<Percentage>,
 
 		/// Also wire Claude Code's subagentStatusLine to `statusline subagent`.
 		#[arg(long)]

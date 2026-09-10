@@ -3,7 +3,9 @@ use crate::options::{OptionKind, applicable_fields};
 use crate::picker;
 use statusline_core::catalog::{OptionSet, meta};
 use statusline_core::sample::SampleData;
-use statusline_core::segment::{DirtyConfig, PartKind, SegmentConfig, SegmentLine, SegmentType};
+use statusline_core::segment::{
+	DirtyConfig, PartKind, SegmentConfig, SegmentLine, SegmentType, TimeFormat, align_rows,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowKind {
@@ -69,32 +71,77 @@ fn preview_rows(model: &EditorModel, sample: &SampleData, highlight: bool) -> Ve
 			.map(|r| r.config.clone())
 			.collect()
 	};
-	let render = |ctx| {
-		let line = SegmentLine {
-			segments: &segs,
-			ctx,
-		};
-		if highlight {
-			highlighted_line(model, &line)
-		} else {
-			format!("{line}")
-		}
-	};
-
 	match model.mode {
 		Mode::StatusLine => {
-			render(sample.render_context_with(divider, model.nerd_font, model.five, model.seven))
-				.split('\n')
-				.map(str::to_owned)
-				.collect()
+			let line = SegmentLine {
+				segments: &segs,
+				ctx: sample.render_context_with(divider, model.nerd_font, model.five, model.seven),
+			};
+			let rendered = if highlight {
+				highlighted_line(model, &line)
+			} else {
+				format!("{line}")
+			};
+			rendered.split('\n').map(str::to_owned).collect()
 		}
-		Mode::Subagent => (0..sample.tasks.len())
-			.filter_map(|i| {
-				sample.task_context_with(i, divider, model.nerd_font, model.five, model.seven)
-			})
-			.map(render)
-			.collect(),
+		Mode::Subagent => {
+			let lines: Vec<SegmentLine<'_>> = (0..sample.tasks.len())
+				.filter_map(|i| {
+					sample.task_context_with(i, divider, model.nerd_font, model.five, model.seven)
+				})
+				.map(|ctx| SegmentLine {
+					segments: &segs,
+					ctx,
+				})
+				.collect();
+			if model.subagent_grid {
+				// The selection brackets are measured like any other text, so the column widens
+				// while a cell is selected but the dividers still line up.
+				let parts: Vec<_> = lines
+					.iter()
+					.map(|line| {
+						if highlight {
+							bracketed_parts(model, line)
+						} else {
+							line.parts_with_indices()
+						}
+					})
+					.collect();
+				align_rows(&parts, None)
+			} else {
+				lines
+					.iter()
+					.map(|line| {
+						if highlight {
+							highlighted_line(model, line)
+						} else {
+							format!("{line}")
+						}
+					})
+					.collect()
+			}
+		}
 	}
+}
+
+/// The rendered parts with the selected segment wrapped in brand-coloured brackets, for layouts
+/// that align parts after rendering.
+fn bracketed_parts(model: &EditorModel, line: &SegmentLine<'_>) -> Vec<(usize, String, PartKind)> {
+	let brand = crate::theme::sgr_fg(crate::theme::BRAND_CT);
+	line.parts_with_indices()
+		.into_iter()
+		.map(|(idx, output, kind)| {
+			if idx == model.cursor {
+				(
+					idx,
+					format!("{brand}[\u{1b}[0m{output}{brand}]\u{1b}[0m"),
+					kind,
+				)
+			} else {
+				(idx, output, kind)
+			}
+		})
+		.collect()
 }
 
 fn highlighted_line(model: &EditorModel, line: &SegmentLine<'_>) -> String {
@@ -397,6 +444,9 @@ fn option_label(kind: OptionKind) -> &'static str {
 		OptionKind::WarmColor => "warm color",
 		OptionKind::ColdColor => "cold color",
 		OptionKind::Capitalize => "capitalize",
+		OptionKind::ShowCountdown => "countdown",
+		OptionKind::ShowTime => "show time",
+		OptionKind::TimeFormat => "time format",
 	}
 }
 
@@ -426,10 +476,16 @@ fn option_value(model: &EditorModel, config: &SegmentConfig, kind: OptionKind) -
 
 	match kind {
 		OptionKind::Colors => on_off(opts.is_none_or(|o| o.colors)).to_owned(),
-		OptionKind::Icon => on_off(opts.is_none_or(|o| o.icon)).to_owned(),
+		OptionKind::Icon => on_off(config.icon()).to_owned(),
 		OptionKind::Capitalize => {
 			on_off(opts.and_then(|o| o.capitalize).unwrap_or(true)).to_owned()
 		}
+		OptionKind::ShowCountdown => on_off(config.show_countdown()).to_owned(),
+		OptionKind::ShowTime => on_off(config.show_time()).to_owned(),
+		OptionKind::TimeFormat => match config.time_format() {
+			TimeFormat::H24 => "24h".to_owned(),
+			TimeFormat::H12 => "12h".to_owned(),
+		},
 		OptionKind::IconColor => {
 			let value = opts
 				.and_then(|o| o.icon_color.clone())
@@ -517,12 +573,13 @@ fn picker_body(model: &EditorModel) -> Vec<Body> {
 
 fn global_body(model: &EditorModel) -> Vec<Body> {
 	let g = &model.global;
-	let nerd = if g.nerd_font { "on" } else { "off" };
+	let on_off = |flag: bool| if flag { "on" } else { "off" }.to_owned();
 	let fields = [
 		("divider".to_owned(), format!("\"{}\"", g.divider.value())),
-		("nerd_font".to_owned(), nerd.to_owned()),
+		("nerd_font".to_owned(), on_off(g.nerd_font)),
 		("5h reset at".to_owned(), format!("{}%", g.five.value())),
 		("7d reset at".to_owned(), format!("{}%", g.seven.value())),
+		("subagent_grid".to_owned(), on_off(g.grid)),
 	];
 	let mut out = Vec::with_capacity(fields.len() + 1);
 
@@ -623,7 +680,7 @@ mod tests {
 	}
 
 	fn model(types: &[SegmentType]) -> EditorModel {
-		let base = crate::default_settings();
+		let base = statusline_core::settings::Settings::default();
 		let mut m = EditorModel::from_settings(&base);
 		m.rows = types
 			.iter()
@@ -676,6 +733,33 @@ mod tests {
 	}
 
 	#[test]
+	fn options_block_shows_the_time_option_values() {
+		let mut m = model(&[SegmentType::FiveHour]);
+		m.cursor = 0;
+		m.apply(Key::Enter);
+		let rows = block(&m, &SampleData::representative(), 60);
+		let texts: Vec<String> = rows.iter().map(|r| strip_ansi(&r.text)).collect();
+		let find = |label: &str| {
+			texts
+				.iter()
+				.find(|t| t.contains(label))
+				.unwrap_or_else(|| panic!("{label} missing from {texts:?}"))
+				.clone()
+		};
+		assert!(find("countdown").ends_with("on"));
+		assert!(find("show time").ends_with("off"));
+		assert!(find("time format").ends_with("24h"));
+
+		let mut m = model(&[SegmentType::CacheWarm]);
+		m.cursor = 0;
+		m.apply(Key::Enter);
+		let rows = block(&m, &SampleData::representative(), 60);
+		let texts: Vec<String> = rows.iter().map(|r| strip_ansi(&r.text)).collect();
+		let show_time = texts.iter().find(|t| t.contains("show time")).unwrap();
+		assert!(show_time.ends_with("on"), "{show_time}");
+	}
+
+	#[test]
 	fn options_window_follows_the_selected_field() {
 		let sample = SampleData::representative();
 		let mut m = default_model();
@@ -703,7 +787,7 @@ mod tests {
 	#[test]
 	fn label_and_icon_color_hint_when_icon_off() {
 		let mut m = model(&[SegmentType::FiveHour]);
-		m.rows[0].config.options_mut().icon = false;
+		m.rows[0].config.options_mut().icon = Some(false);
 		let config = &m.rows[0].config;
 		assert!(
 			option_value(&m, config, OptionKind::Label).contains("needs icon"),
@@ -757,6 +841,67 @@ mod tests {
 		let rows = block(&m, &sample, 40);
 		let previews = rows.iter().filter(|r| r.kind == RowKind::Preview).count();
 		assert_eq!(previews, sample.tasks.len());
+	}
+
+	fn subagent_preview(m: &EditorModel) -> Vec<String> {
+		block(m, &SampleData::representative(), 200)
+			.iter()
+			.filter(|r| r.kind == RowKind::Preview)
+			.map(|r| strip_ansi(&r.text))
+			.collect()
+	}
+
+	#[test]
+	fn subagent_preview_aligns_dividers_when_the_grid_is_on() {
+		let mut m = model(&[SegmentType::Model]);
+		m.apply(Key::NextTab);
+		m.focus = Focus::Global;
+		let rows = subagent_preview(&m);
+		assert_eq!(rows.len(), 2, "{rows:?}");
+		assert_eq!(
+			rows[0].find('\u{2022}'),
+			rows[1].find('\u{2022}'),
+			"{rows:?}"
+		);
+
+		m.subagent_grid = false;
+		let rows = subagent_preview(&m);
+		assert_ne!(
+			rows[0].find('\u{2022}'),
+			rows[1].find('\u{2022}'),
+			"{rows:?}"
+		);
+	}
+
+	#[test]
+	fn highlighted_grid_preview_keeps_dividers_aligned() {
+		let mut m = model(&[SegmentType::Model]);
+		m.apply(Key::NextTab);
+		m.cursor = 0;
+		let rows = subagent_preview(&m);
+		assert!(
+			rows[0].contains('['),
+			"the cursor row is bracketed: {rows:?}"
+		);
+		assert_eq!(
+			rows[0].find('\u{2022}'),
+			rows[1].find('\u{2022}'),
+			"{rows:?}"
+		);
+	}
+
+	#[test]
+	fn global_block_shows_the_grid_field() {
+		let mut m = model(&[SegmentType::Model]);
+		m.apply(Key::Global);
+		let rows = block(&m, &SampleData::representative(), 40);
+		let texts: Vec<String> = rows.iter().map(|r| strip_ansi(&r.text)).collect();
+		assert!(
+			texts
+				.iter()
+				.any(|t| t.contains("subagent_grid") && t.contains("on")),
+			"{texts:?}"
+		);
 	}
 
 	#[test]

@@ -64,6 +64,7 @@ pub fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Optio
 		SegmentType::TaskDescription => task::task_description(segment, ctx),
 		SegmentType::TaskElapsed => task::task_elapsed(segment, ctx),
 		SegmentType::TaskTokens => task::task_tokens(segment, ctx),
+		SegmentType::TaskLabel => task::task_label(segment, ctx),
 	};
 
 	result.filter(|s| !s.is_empty())
@@ -414,8 +415,22 @@ mod tests {
 	}
 
 	#[test]
-	fn render_cache_warm_shows_time_until_cold() {
+	fn render_cache_warm_shows_time_until_cold_and_the_clock() {
 		let out = rendered(SegmentType::CacheWarm, &cache_input(true, true)).unwrap();
+		let (countdown, clock) = out.rsplit_once(" (").expect("clock in parentheses");
+		assert!(
+			countdown.ends_with("warm 2h0m") || countdown.ends_with("warm 1h59m"),
+			"got: {out}"
+		);
+		assert!(clock.ends_with(')') && clock.contains(':'), "got: {out}");
+	}
+
+	#[test]
+	fn render_cache_warm_can_drop_the_clock() {
+		let seg: SegmentConfig =
+			serde_json::from_str(r#"{"type":"cache_warm","show_time":false}"#).unwrap();
+		let out =
+			strip_ansi(&render_segment(&seg, &default_ctx(&cache_input(true, true))).unwrap());
 		assert!(
 			out.ends_with("warm 2h0m") || out.ends_with("warm 1h59m"),
 			"got: {out}"
@@ -669,6 +684,7 @@ mod tests {
 			SegmentType::TaskDescription,
 			SegmentType::TaskElapsed,
 			SegmentType::TaskTokens,
+			SegmentType::TaskLabel,
 		] {
 			assert!(rendered(ty.clone(), &input).is_none(), "{ty:?}");
 		}
@@ -686,19 +702,96 @@ mod tests {
 		};
 		assert_eq!(
 			render(SegmentType::TaskName).as_deref(),
-			Some("security-reviewer")
+			Some("\u{2699} security-reviewer")
 		);
+		// Claude Code draws its own marker in front of every panel row, so the status dot is opt-in.
 		assert_eq!(render(SegmentType::TaskStatus).as_deref(), Some("running"));
 		assert_eq!(
 			render(SegmentType::TaskDescription).as_deref(),
 			Some("Review the auth flow for injection risks")
 		);
-		assert_eq!(render(SegmentType::TaskTokens).as_deref(), Some("45.3k"));
+		assert_eq!(
+			render(SegmentType::TaskTokens).as_deref(),
+			Some("\u{2191} 45.3k")
+		);
 		let elapsed = render(SegmentType::TaskElapsed).unwrap();
 		assert!(
-			elapsed.starts_with("1m3"),
+			elapsed.starts_with("\u{23f1} 1m3"),
 			"millisecond start times count as elapsed: {elapsed}"
 		);
+		assert_eq!(
+			render(SegmentType::TaskLabel).as_deref(),
+			Some("Reviewing auth middleware")
+		);
+	}
+
+	#[test]
+	fn render_task_label_is_the_live_activity_and_absent_without_one() {
+		let mut task = sample_task();
+		let input = task.to_input();
+		let mut ctx = default_ctx(&input);
+		ctx.task = Some(&task);
+		let seg: SegmentConfig =
+			serde_json::from_str(r#"{"type":"task_label","style":"italic"}"#).unwrap();
+		let out = render_segment(&seg, &ctx).unwrap();
+		assert!(out.contains("\u{1b}[3m"), "style applies: {out:?}");
+		assert_eq!(strip_ansi(&out), "Reviewing auth middleware");
+		task.label.clear();
+		let input = task.to_input();
+		let mut ctx = default_ctx(&input);
+		ctx.task = Some(&task);
+		assert!(render_segment(&SegmentConfig::Simple(SegmentType::TaskLabel), &ctx).is_none());
+	}
+
+	#[test]
+	fn render_task_icons_follow_the_icon_options() {
+		let task = sample_task();
+		let input = task.to_input();
+		let mut ctx = default_ctx(&input);
+		ctx.task = Some(&task);
+		let render = |json: &str, ctx: &RenderContext<'_>| {
+			let seg: SegmentConfig = serde_json::from_str(json).unwrap();
+			strip_ansi(&render_segment(&seg, ctx).unwrap())
+		};
+		assert_eq!(
+			render(r#"{"type":"task_status","icon":true}"#, &ctx),
+			"\u{25cf} running"
+		);
+		assert_eq!(
+			render(r#"{"type":"task_name","label":"agent:"}"#, &ctx),
+			"agent: security-reviewer"
+		);
+		assert_eq!(
+			render(r#"{"type":"task_tokens","icon":false}"#, &ctx),
+			"45.3k"
+		);
+		ctx.nerd_font = true;
+		assert_eq!(
+			render(r#"{"type":"task_status","icon":true}"#, &ctx),
+			"\u{f111} running"
+		);
+		assert_eq!(render(r#""task_name""#, &ctx), "\u{f013} security-reviewer");
+	}
+
+	#[test]
+	fn render_task_status_icon_takes_the_state_colour_unless_overridden() {
+		let task = sample_task();
+		let input = task.to_input();
+		let mut ctx = default_ctx(&input);
+		ctx.task = Some(&task);
+		let seg: SegmentConfig =
+			serde_json::from_str(r#"{"type":"task_status","icon":true}"#).unwrap();
+		let out = render_segment(&seg, &ctx).unwrap();
+		assert!(
+			out.contains("\u{1b}[38;2;100;200;220m\u{25cf}"),
+			"running dot is cyan: {out:?}"
+		);
+		let seg: SegmentConfig =
+			serde_json::from_str(r##"{"type":"task_status","icon":true,"icon_color":"#ff0000"}"##)
+				.unwrap();
+		let out = render_segment(&seg, &ctx).unwrap();
+		assert!(out.contains("\u{1b}[38;2;255;0;0m\u{25cf}"), "{out:?}");
+		assert!(out.contains("\u{1b}[38;2;100;200;220mrunning"), "{out:?}");
 	}
 
 	#[test]

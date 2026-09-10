@@ -15,6 +15,7 @@ pub mod sample;
 pub mod segment;
 pub mod settings;
 pub mod subagent;
+pub mod text;
 pub mod usage;
 pub mod usage_bridge;
 pub mod util;

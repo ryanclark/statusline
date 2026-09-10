@@ -4,9 +4,12 @@ mod cost;
 mod credits;
 mod env;
 mod git;
+mod grid;
+pub use grid::align_rows;
 mod rate_limit;
 mod render;
 mod task;
+mod timing;
 
 use crate::format::{Percentage, parse_color};
 use crate::input::InputData;
@@ -74,6 +77,7 @@ pub enum SegmentType {
 	TaskDescription,
 	TaskElapsed,
 	TaskTokens,
+	TaskLabel,
 }
 
 impl SegmentType {
@@ -135,7 +139,8 @@ impl SegmentType {
 				TaskStatus => TaskDescription,
 				TaskDescription => TaskElapsed,
 				TaskElapsed => TaskTokens,
-				TaskTokens => return None,
+				TaskTokens => TaskLabel,
+				TaskLabel => return None,
 			})
 		}
 
@@ -151,6 +156,12 @@ fn default_true() -> bool {
 	true
 }
 
+/// Claude Code draws its own marker in front of every agent panel row, so the status dot would be
+/// a second one; every other icon is on unless switched off.
+fn icon_by_default(ty: &SegmentType) -> bool {
+	*ty != SegmentType::TaskStatus
+}
+
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_true(b: &bool) -> bool {
 	*b
@@ -162,8 +173,8 @@ pub struct SegmentOptions {
 	pub segment_type: SegmentType,
 	#[serde(default = "default_true")]
 	pub colors: bool,
-	#[serde(default = "default_true")]
-	pub icon: bool,
+	#[serde(default)]
+	pub icon: Option<bool>,
 	#[serde(default)]
 	pub icon_color: Option<String>,
 	#[serde(default)]
@@ -180,10 +191,26 @@ pub struct SegmentOptions {
 	pub cold_color: Option<String>,
 	#[serde(default)]
 	pub capitalize: Option<bool>,
+	#[serde(default)]
+	pub show_time: Option<bool>,
+	#[serde(default)]
+	pub time_format: Option<TimeFormat>,
+	#[serde(default)]
+	pub show_countdown: Option<bool>,
 	#[serde(default = "default_true", skip_serializing_if = "is_true")]
 	pub enabled: bool,
 	#[serde(flatten)]
 	pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// How a reset or expiry clock time is written.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub enum TimeFormat {
+	#[default]
+	#[serde(rename = "24h")]
+	H24,
+	#[serde(rename = "12h")]
+	H12,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -246,8 +273,10 @@ impl SegmentConfig {
 	#[must_use]
 	pub fn icon(&self) -> bool {
 		match self {
-			Self::Simple(_) => true,
-			Self::Advanced(opts) => opts.icon,
+			Self::Simple(ty) => icon_by_default(ty),
+			Self::Advanced(opts) => opts
+				.icon
+				.unwrap_or_else(|| icon_by_default(&opts.segment_type)),
 		}
 	}
 
@@ -312,6 +341,33 @@ impl SegmentConfig {
 		}
 	}
 
+	/// Whether a countdown segment also prints the clock time it counts down to. The cache expiry
+	/// is the one instant worth knowing exactly, so only `cache_warm` shows it unasked.
+	#[must_use]
+	pub fn show_time(&self) -> bool {
+		let by_default = *self.segment_type() == SegmentType::CacheWarm;
+		match self {
+			Self::Simple(_) => by_default,
+			Self::Advanced(opts) => opts.show_time.unwrap_or(by_default),
+		}
+	}
+
+	#[must_use]
+	pub fn time_format(&self) -> TimeFormat {
+		match self {
+			Self::Simple(_) => TimeFormat::default(),
+			Self::Advanced(opts) => opts.time_format.unwrap_or_default(),
+		}
+	}
+
+	#[must_use]
+	pub fn show_countdown(&self) -> bool {
+		match self {
+			Self::Simple(_) => true,
+			Self::Advanced(opts) => opts.show_countdown.unwrap_or(true),
+		}
+	}
+
 	#[must_use]
 	pub fn enabled(&self) -> bool {
 		match self {
@@ -340,7 +396,7 @@ impl SegmentConfig {
 			*self = Self::Advanced(SegmentOptions {
 				segment_type: t.clone(),
 				colors: true,
-				icon: true,
+				icon: None,
 				icon_color: None,
 				label: None,
 				style: None,
@@ -349,6 +405,9 @@ impl SegmentConfig {
 				warm_color: None,
 				cold_color: None,
 				capitalize: None,
+				show_time: None,
+				time_format: None,
+				show_countdown: None,
 				enabled: true,
 				extra: serde_json::Map::new(),
 			});
@@ -362,7 +421,10 @@ impl SegmentConfig {
 	pub fn normalize(&mut self) {
 		if let Self::Advanced(opts) = self {
 			let is_default = opts.colors
-				&& opts.icon && opts.icon_color.is_none()
+				&& opts
+					.icon
+					.is_none_or(|icon| icon == icon_by_default(&opts.segment_type))
+				&& opts.icon_color.is_none()
 				&& opts.label.is_none()
 				&& opts.style.is_none()
 				&& matches!(opts.dirty, DirtyConfig::Off)
@@ -370,6 +432,9 @@ impl SegmentConfig {
 				&& opts.warm_color.is_none()
 				&& opts.cold_color.is_none()
 				&& opts.capitalize.unwrap_or(true)
+				&& opts.show_time.is_none()
+				&& opts.time_format.is_none()
+				&& opts.show_countdown.is_none()
 				&& opts.enabled
 				&& opts.extra.is_empty();
 			if is_default {
@@ -635,7 +700,7 @@ mod tests {
 		let opts = seg.options_mut();
 		assert_eq!(opts.segment_type, SegmentType::GitBranch);
 		assert!(opts.colors);
-		assert!(opts.icon);
+		assert!(opts.icon.is_none_or(|icon| icon));
 		assert!(opts.icon_color.is_none());
 		assert!(opts.label.is_none());
 		assert!(opts.style.is_none());
@@ -720,6 +785,122 @@ mod tests {
 
 	fn rendered(sample: &crate::sample::SampleData, ty: SegmentType) -> String {
 		render_segment(&SegmentConfig::Simple(ty), &sample.render_context()).unwrap()
+	}
+
+	fn plain(s: &str) -> String {
+		String::from_utf8(strip_ansi_escapes::strip(s)).unwrap()
+	}
+
+	/// "(15:10)" or "(3:10pm)" at the end of a segment.
+	fn ends_with_clock(text: &str) -> bool {
+		let Some(open) = text.rfind('(') else {
+			return false;
+		};
+		let inner = &text[open + 1..];
+		inner.ends_with(')') && inner.contains(':') && inner.len() <= 8
+	}
+
+	#[test]
+	fn icon_defaults_off_only_for_task_status() {
+		assert!(!SegmentConfig::Simple(SegmentType::TaskStatus).icon());
+		assert!(SegmentConfig::Simple(SegmentType::TaskName).icon());
+		let on: SegmentConfig =
+			serde_json::from_str(r#"{"type":"task_status","icon":true}"#).unwrap();
+		assert!(on.icon());
+		let unset: SegmentConfig = serde_json::from_str(r#"{"type":"task_status"}"#).unwrap();
+		assert!(
+			!unset.icon(),
+			"an Advanced config without `icon` keeps the type's default"
+		);
+	}
+
+	#[test]
+	fn normalize_treats_the_type_default_icon_as_default() {
+		let mut off: SegmentConfig =
+			serde_json::from_str(r#"{"type":"task_status","icon":false}"#).unwrap();
+		off.normalize();
+		assert!(matches!(off, SegmentConfig::Simple(_)));
+		let mut on: SegmentConfig =
+			serde_json::from_str(r#"{"type":"task_status","icon":true}"#).unwrap();
+		on.normalize();
+		assert!(matches!(on, SegmentConfig::Advanced(_)));
+		let mut five: SegmentConfig =
+			serde_json::from_str(r#"{"type":"five_hour","icon":true}"#).unwrap();
+		five.normalize();
+		assert!(matches!(five, SegmentConfig::Simple(_)));
+	}
+
+	#[test]
+	fn time_options_deserialize_and_round_trip() {
+		let seg: SegmentConfig = serde_json::from_str(
+			r#"{"type":"five_hour","show_time":true,"time_format":"12h","show_countdown":false}"#,
+		)
+		.unwrap();
+		assert!(seg.show_time());
+		assert_eq!(seg.time_format(), TimeFormat::H12);
+		assert!(!seg.show_countdown());
+		let json = serde_json::to_string(&seg).unwrap();
+		assert!(json.contains(r#""time_format":"12h""#), "{json}");
+		assert!(json.contains(r#""show_countdown":false"#), "{json}");
+	}
+
+	#[test]
+	fn show_time_defaults_on_only_for_cache_warm() {
+		assert!(SegmentConfig::Simple(SegmentType::CacheWarm).show_time());
+		assert!(!SegmentConfig::Simple(SegmentType::FiveHour).show_time());
+		assert_eq!(
+			SegmentConfig::Simple(SegmentType::FiveHour).time_format(),
+			TimeFormat::H24
+		);
+		assert!(SegmentConfig::Simple(SegmentType::FiveHour).show_countdown());
+		let off: SegmentConfig =
+			serde_json::from_str(r#"{"type":"cache_warm","show_time":false}"#).unwrap();
+		assert!(!off.show_time());
+	}
+
+	#[test]
+	fn normalize_keeps_time_options() {
+		let mut seg: SegmentConfig =
+			serde_json::from_str(r#"{"type":"five_hour","show_countdown":false}"#).unwrap();
+		seg.normalize();
+		assert!(matches!(seg, SegmentConfig::Advanced(_)));
+		let mut seg: SegmentConfig = serde_json::from_str(r#"{"type":"five_hour"}"#).unwrap();
+		seg.normalize();
+		assert!(matches!(seg, SegmentConfig::Simple(_)));
+	}
+
+	#[test]
+	fn five_hour_appends_the_reset_clock_when_asked() {
+		let sample = crate::sample::SampleData::representative();
+		let ctx = sample.render_context_with(
+			&sample.divider,
+			false,
+			Percentage::default(),
+			Percentage::default(),
+		);
+		let seg: SegmentConfig =
+			serde_json::from_str(r#"{"type":"five_hour","show_time":true}"#).unwrap();
+		let text = plain(&render_segment(&seg, &ctx).unwrap());
+		assert!(ends_with_clock(&text), "{text}");
+		let plain_seg = SegmentConfig::Simple(SegmentType::FiveHour);
+		let text = plain(&render_segment(&plain_seg, &ctx).unwrap());
+		assert!(!ends_with_clock(&text), "{text}");
+	}
+
+	#[test]
+	fn fable_usage_appends_the_reset_clock_when_asked() {
+		let sample = crate::sample::SampleData::representative();
+		let seg: SegmentConfig =
+			serde_json::from_str(r#"{"type":"fable_usage","show_time":true}"#).unwrap();
+		let text = plain(&render_segment(&seg, &sample.render_context()).unwrap());
+		assert!(ends_with_clock(&text), "{text}");
+	}
+
+	#[test]
+	fn cache_warm_shows_the_expiry_clock_by_default() {
+		let sample = crate::sample::SampleData::representative();
+		let text = plain(&rendered(&sample, SegmentType::CacheWarm));
+		assert!(ends_with_clock(&text), "{text}");
 	}
 
 	#[test]

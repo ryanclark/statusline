@@ -1,5 +1,5 @@
 use crate::constants::{CYAN, DOWN_ARROW, GRAY, GREEN, ORANGE, PURPLE, UP_ARROW, YELLOW};
-use crate::format::{ColoredPercentage, Percentage, countdown_to, elapsed_since};
+use crate::format::{ColoredPercentage, Percentage, elapsed_since};
 use crate::input::PromptCache;
 use chrono::Utc;
 use owo_colors::OwoColorize;
@@ -203,7 +203,7 @@ pub(super) fn cache_warm(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Op
 	let until_cold = cache
 		.expires_at
 		.filter(|_| cache.warm)
-		.and_then(|at| countdown_to(at, Utc::now()))
+		.and_then(|at| super::timing::reset_hint(segment, at, Utc::now()))
 		.map(|left| dim_suffix(segment, &left))
 		.unwrap_or_default();
 

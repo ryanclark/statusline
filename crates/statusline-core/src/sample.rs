@@ -165,7 +165,7 @@ impl SampleData {
 				kind: "agent".to_owned(),
 				status: "running".to_owned(),
 				description: "Review the auth flow for injection risks".to_owned(),
-				label: "security-reviewer".to_owned(),
+				label: "Reviewing auth middleware".to_owned(),
 				start_time: Some(task_started),
 				model: "claude-opus-5".to_owned(),
 				effort: Some(Effort::Level("high".to_owned())),
@@ -179,6 +179,7 @@ impl SampleData {
 				kind: "agent".to_owned(),
 				status: "completed".to_owned(),
 				description: "Find call sites of parse_color".to_owned(),
+				label: "Grepping for parse_color".to_owned(),
 				start_time: Some(task_started - 40_000),
 				model: "claude-sonnet-5".to_owned(),
 				context_window_size: Some(Tokens::from(200_000)),
@@ -299,7 +300,7 @@ mod tests {
 			let name = render_segment(&SegmentConfig::Simple(SegmentType::TaskName), &ctx).unwrap();
 			assert_eq!(
 				String::from_utf8(strip_ansi_escapes::strip(&name)).unwrap(),
-				data.tasks[i].name
+				format!("\u{2699} {}", data.tasks[i].name)
 			);
 			let model = render_segment(&SegmentConfig::Simple(SegmentType::Model), &ctx);
 			assert_eq!(model.is_some(), !data.tasks[i].model.is_empty());

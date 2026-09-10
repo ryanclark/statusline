@@ -7,6 +7,7 @@ use crate::usage::UsageError;
 use chrono::Utc;
 use owo_colors::OwoColorize;
 
+use super::timing::reset_hint;
 use super::{Icon, RenderContext, SegmentConfig, apply_style, format_icon};
 
 fn format_rate_limit(
@@ -27,11 +28,9 @@ fn format_rate_limit(
 	};
 
 	let reset = if period.used_percentage > threshold {
-		if let Some(countdown) = period.countdown(Utc::now()) {
-			format!(" {}", countdown.dimmed())
-		} else {
-			String::new()
-		}
+		reset_hint(segment, period.resets_at, Utc::now())
+			.map(|hint| format!(" {}", hint.dimmed()))
+			.unwrap_or_default()
 	} else {
 		String::new()
 	};
@@ -101,10 +100,11 @@ pub(super) fn fable_usage(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> O
 		format!("{}", limit.percent)
 	};
 
-	let reset = match limit.countdown(Utc::now()) {
-		Some(countdown) => format!(" {}", countdown.dimmed()),
-		None => String::new(),
-	};
+	let reset = limit
+		.resets_at_epoch()
+		.and_then(|at| reset_hint(segment, at, Utc::now()))
+		.map(|hint| format!(" {}", hint.dimmed()))
+		.unwrap_or_default();
 
 	let text = format!("{icon_str}{pct}{reset}");
 

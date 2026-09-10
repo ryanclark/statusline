@@ -4,7 +4,8 @@
 use crate::context_window::{ContextWindow, CurrentUsage};
 use crate::format::{Percentage, Tokens};
 use crate::input::{AgentInfo, EffortInfo, InputData, ModelInfo};
-use crate::segment::{RenderContext, SegmentConfig, SegmentLine, SegmentType};
+use crate::segment::{RenderContext, SegmentConfig, SegmentLine, SegmentType, align_rows};
+use crate::text::truncate_visible;
 use crate::util::null_as_default;
 use serde::{Deserialize, Serialize};
 
@@ -148,6 +149,8 @@ pub fn default_subagent_segments() -> Vec<SegmentConfig> {
 		SegmentType::TaskTokens,
 		SegmentType::Divider,
 		SegmentType::TaskDescription,
+		SegmentType::Divider,
+		SegmentType::TaskLabel,
 	]
 	.into_iter()
 	.map(SegmentConfig::Simple)
@@ -155,39 +158,59 @@ pub fn default_subagent_segments() -> Vec<SegmentConfig> {
 }
 
 /// Renders every task; a task whose row comes out empty is left out so Claude Code keeps its
-/// default rendering for it.
+/// default rendering for it. With `grid` on, the rows are laid out as aligned columns.
 #[must_use]
 pub fn render_rows(
 	input: &SubagentInput,
 	segments: &[SegmentConfig],
 	divider: &str,
 	nerd_font: bool,
+	grid: bool,
 ) -> Vec<Row> {
+	let inputs: Vec<InputData> = input.tasks.iter().map(Task::to_input).collect();
+	let lines: Vec<SegmentLine<'_>> = input
+		.tasks
+		.iter()
+		.zip(&inputs)
+		.map(|(task, data)| SegmentLine {
+			segments,
+			ctx: RenderContext {
+				input: data,
+				usage: None,
+				credits: None,
+				git: None,
+				five_threshold: Percentage::default(),
+				seven_threshold: Percentage::default(),
+				divider,
+				nerd_font,
+				account: None,
+				task: Some(task),
+			},
+		})
+		.collect();
+	// Claude Code truncates or wraps rows wider than the panel; cutting them here keeps the
+	// grid's columns intact and marks the cut.
+	let width = input.columns.filter(|columns| *columns > 0);
+	let contents: Vec<String> = if grid {
+		let parts: Vec<_> = lines.iter().map(SegmentLine::parts_with_indices).collect();
+		align_rows(&parts, width)
+	} else {
+		lines.iter().map(ToString::to_string).collect()
+	};
+
 	input
 		.tasks
 		.iter()
-		.filter_map(|task| {
-			let data = task.to_input();
-			let line = SegmentLine {
-				segments,
-				ctx: RenderContext {
-					input: &data,
-					usage: None,
-					credits: None,
-					git: None,
-					five_threshold: Percentage::default(),
-					seven_threshold: Percentage::default(),
-					divider,
-					nerd_font,
-					account: None,
-					task: Some(task),
-				},
-			};
-			let content = line.to_string();
-			(!content.is_empty()).then(|| Row {
+		.zip(contents)
+		.filter(|(_, content)| !content.is_empty())
+		.map(|(task, mut content)| {
+			if let Some(width) = width {
+				truncate_visible(&mut content, width);
+			}
+			Row {
 				id: task.id.clone(),
 				content,
-			})
+			}
 		})
 		.collect()
 }
@@ -279,7 +302,13 @@ mod tests {
 	#[test]
 	fn rows_render_one_entry_per_task_in_order() {
 		let input = SubagentInput::from_reader(FIXTURE.as_bytes()).unwrap();
-		let rows = render_rows(&input, &default_subagent_segments(), "\u{2022}", false);
+		let rows = render_rows(
+			&input,
+			&default_subagent_segments(),
+			"\u{2022}",
+			false,
+			false,
+		);
 		let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
 		assert_eq!(ids, ["task-1", "task-2", "task-3"]);
 		let first = strip_ansi(&rows[0].content);
@@ -293,9 +322,145 @@ mod tests {
 		let input = SubagentInput::from_reader(FIXTURE.as_bytes()).unwrap();
 		// task-3 has no model, so a model-only layout leaves Claude Code's default row in place.
 		let segments = [SegmentConfig::Simple(SegmentType::Model)];
-		let rows = render_rows(&input, &segments, "\u{2022}", false);
+		let rows = render_rows(&input, &segments, "\u{2022}", false, false);
 		let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
 		assert_eq!(ids, ["task-1"]);
+	}
+
+	#[test]
+	fn grid_rows_line_up_dividers_across_tasks() {
+		let input = SubagentInput::from_reader(FIXTURE.as_bytes()).unwrap();
+		let rows = render_rows(
+			&input,
+			&default_subagent_segments(),
+			"\u{2022}",
+			false,
+			true,
+		);
+		let plain: Vec<String> = rows.iter().map(|r| strip_ansi(&r.content)).collect();
+		assert_eq!(plain.len(), 3, "{plain:?}");
+		let first_divider = |s: &str| s.find('\u{2022}');
+		assert_eq!(
+			first_divider(&plain[0]),
+			first_divider(&plain[1]),
+			"{plain:?}"
+		);
+		let last_divider = |s: &str| s.rfind('\u{2022}');
+		assert_eq!(
+			last_divider(&plain[0]),
+			last_divider(&plain[1]),
+			"{plain:?}"
+		);
+		assert!(
+			plain[0].starts_with("\u{2699} security-reviewer running "),
+			"{}",
+			plain[0]
+		);
+		assert!(
+			plain[1].starts_with("\u{2699} Explore           completed "),
+			"{}",
+			plain[1]
+		);
+		// task-3 has neither model nor description: the row ends at its last cell, without padding
+		// or a dangling divider.
+		assert_eq!(plain[2], "\u{2699} worker            pending");
+	}
+
+	#[test]
+	fn grid_off_keeps_the_plain_rows() {
+		let input = SubagentInput::from_reader(FIXTURE.as_bytes()).unwrap();
+		let rows = render_rows(
+			&input,
+			&default_subagent_segments(),
+			"\u{2022}",
+			false,
+			false,
+		);
+		assert_eq!(strip_ansi(&rows[2].content), "\u{2699} worker pending");
+	}
+
+	#[test]
+	fn grid_rows_skip_tasks_that_render_nothing() {
+		let input = SubagentInput::from_reader(FIXTURE.as_bytes()).unwrap();
+		let segments = [SegmentConfig::Simple(SegmentType::Model)];
+		let rows = render_rows(&input, &segments, "\u{2022}", false, true);
+		let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+		assert_eq!(ids, ["task-1"]);
+	}
+
+	#[test]
+	fn rows_are_clipped_to_the_panel_width() {
+		use crate::text::visible_width;
+		let narrow = FIXTURE.replace(r#""columns": 100"#, r#""columns": 30"#);
+		let input = SubagentInput::from_reader(narrow.as_bytes()).unwrap();
+		assert_eq!(input.columns, Some(30));
+		for grid in [true, false] {
+			let rows = render_rows(
+				&input,
+				&default_subagent_segments(),
+				"\u{2022}",
+				false,
+				grid,
+			);
+			for row in &rows {
+				assert!(
+					visible_width(&row.content) <= 30,
+					"{}",
+					strip_ansi(&row.content)
+				);
+			}
+			assert!(strip_ansi(&rows[0].content).ends_with('\u{2026}'));
+			// Six columns cannot keep their widths in 30 cells, so the grid gives the padding up too.
+			assert_eq!(
+				strip_ansi(&rows[2].content).trim_end(),
+				"\u{2699} worker pending"
+			);
+		}
+	}
+
+	#[test]
+	fn the_default_layout_ends_with_the_live_activity() {
+		let layout = default_subagent_segments();
+		let tail: Vec<&SegmentType> = layout
+			.iter()
+			.rev()
+			.take(2)
+			.map(SegmentConfig::segment_type)
+			.collect();
+		assert_eq!(tail, [&SegmentType::TaskLabel, &SegmentType::Divider]);
+		let input = SubagentInput::from_reader(FIXTURE.as_bytes()).unwrap();
+		let rows = render_rows(&input, &layout, "\u{2022}", false, true);
+		assert!(strip_ansi(&rows[0].content).ends_with("\u{2022} Reviewing auth middleware"));
+	}
+
+	#[test]
+	fn a_long_description_does_not_push_the_activity_off_the_row() {
+		let long = "summarise every README section in one sentence each and keep going until every heading is covered";
+		let json = format!(
+			r#"{{"columns": 80, "tasks": [
+				{{"id": "a", "status": "running", "description": "list segment functions", "label": "Reading files", "model": "claude-sonnet-5", "tokenCount": 82787}},
+				{{"id": "b", "status": "running", "description": "{long}", "label": "Writing summary.md", "model": "claude-fable-5-1", "tokenCount": 45746}}
+			]}}"#
+		);
+		let input = SubagentInput::from_reader(json.as_bytes()).unwrap();
+		let rows = render_rows(
+			&input,
+			&default_subagent_segments(),
+			"\u{2022}",
+			false,
+			true,
+		);
+		let plain: Vec<String> = rows.iter().map(|r| strip_ansi(&r.content)).collect();
+		assert!(plain[0].ends_with("\u{2022} Reading files"), "{}", plain[0]);
+		assert!(
+			plain[1].ends_with("\u{2022} Writing summary.md"),
+			"{}",
+			plain[1]
+		);
+		assert!(plain[1].contains('\u{2026}'), "{}", plain[1]);
+		for row in &plain {
+			assert!(row.chars().count() <= 80, "{row}");
+		}
 	}
 
 	#[test]

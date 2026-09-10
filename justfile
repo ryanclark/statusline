@@ -1,3 +1,6 @@
+# Machine-specific settings (signing identity, etc) live in the gitignored justfile.local.
+import? 'justfile.local'
+
 bin := "statusline"
 target_bin := "target" / "debug" / bin
 release_bin := "target" / "release" / bin
@@ -27,7 +30,11 @@ compile:
 build:
     cargo build --workspace --release
 
-build-signed developer_name team_id:
+# Recipe parameter backticks are the only expressions that can see the exports from justfile.local, so the signing
+# identity defaults are read there rather than in top-level variables.
+
+# Codesign with the given identity, or with DEVELOPER_NAME and TEAM_ID from justfile.local
+build-signed developer_name=`echo "${DEVELOPER_NAME:-}"` team_id=`echo "${TEAM_ID:-}"`: (require-identity developer_name team_id)
     cargo build --workspace --release --features codesigned
     codesign --force --options runtime --sign "Developer ID Application: {{developer_name}} ({{team_id}})" {{release_bin}}
     codesign --verify --verbose {{release_bin}}
@@ -35,14 +42,20 @@ build-signed developer_name team_id:
 install: build
     cp {{release_bin}} "${CARGO_HOME:-$HOME/.cargo}/bin/"
 
-install-signed developer_name team_id: (build-signed developer_name team_id)
+# Codesigned build copied into CARGO_HOME; takes the same identity defaults as build-signed
+install-signed developer_name=`echo "${DEVELOPER_NAME:-}"` team_id=`echo "${TEAM_ID:-}"`: (build-signed developer_name team_id)
     cp {{release_bin}} "${CARGO_HOME:-$HOME/.cargo}/bin/"
+
+[private]
+require-identity developer_name team_id:
+    @test -n "{{developer_name}}" -a -n "{{team_id}}" || { echo "pass developer_name and team_id, or export DEVELOPER_NAME and TEAM_ID in justfile.local" >&2; exit 1; }
 
 dev *ARGS:
     cargo build --quiet
     {{target_bin}} {{ARGS}}
 
-cert-request developer_name:
+cert-request developer_name=`echo "${DEVELOPER_NAME:-}"`:
+    @test -n "{{developer_name}}" || { echo "pass developer_name, or export DEVELOPER_NAME in justfile.local" >&2; exit 1; }
     openssl req -new -newkey rsa:2048 -nodes \
         -keyout devid.key -out devid.csr \
         -subj "/CN={{developer_name}}"
@@ -66,6 +79,10 @@ cert-import cer:
         TEAM=$(echo "$IDENTITY" | sed 's/.*(\(.*\))/\1/'); \
         echo "Test with:"; \
         echo "  just install-signed \"$NAME\" \"$TEAM\""; \
+        echo ""; \
+        echo "Or save the identity for future builds in justfile.local:"; \
+        echo "  export DEVELOPER_NAME := \"$NAME\""; \
+        echo "  export TEAM_ID := \"$TEAM\""; \
         echo ""; \
         echo "Clean up: just cert-clean"
 

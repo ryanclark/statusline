@@ -64,23 +64,8 @@ fn load_or_default(path: &Path) -> Result<Settings, ConfigureError> {
 	match Settings::load_from(path) {
 		Ok(s) => Ok(s),
 		Err(SettingsError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-			Ok(default_settings())
+			Ok(Settings::default())
 		}
 		Err(e) => Err(e.into()),
-	}
-}
-
-pub(crate) fn default_settings() -> Settings {
-	use statusline_core::settings::{DEFAULT_FIVE_HOUR_RESET, DEFAULT_SEVEN_DAY_RESET};
-	Settings {
-		five_hour_reset_threshold: DEFAULT_FIVE_HOUR_RESET.into(),
-		seven_day_reset_threshold: DEFAULT_SEVEN_DAY_RESET.into(),
-		segments: None,
-		subagent_segments: None,
-		divider: None,
-		nerd_font: false,
-		browser: None,
-		skip_update_check: false,
-		extra: serde_json::Map::default(),
 	}
 }

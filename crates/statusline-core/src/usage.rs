@@ -51,16 +51,17 @@ pub struct Limit {
 }
 
 impl Limit {
+	/// The reset instant as epoch seconds, since the API writes it as an RFC 3339 string.
+	#[must_use]
+	pub fn resets_at_epoch(&self) -> Option<i64> {
+		DateTime::parse_from_rfc3339(self.resets_at.as_deref()?)
+			.ok()
+			.map(|at| at.timestamp())
+	}
+
 	#[must_use]
 	pub fn countdown(&self, now: DateTime<Utc>) -> Option<String> {
-		let reset_time = DateTime::parse_from_rfc3339(self.resets_at.as_deref()?).ok()?;
-		let total_secs = reset_time.signed_duration_since(now).num_seconds();
-		if total_secs <= 0 {
-			return None;
-		}
-
-		#[allow(clippy::cast_sign_loss)]
-		Some(crate::format::format_duration_secs(total_secs as u64))
+		crate::format::countdown_to(self.resets_at_epoch()?, now)
 	}
 
 	#[must_use]
@@ -144,6 +145,20 @@ impl PrepaidCredits {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn resets_at_epoch_parses_the_rfc3339_instant() {
+		let limit: Limit = serde_json::from_str(
+			r#"{"kind": "session", "percent": 12, "resets_at": "2026-07-16T17:30:00+00:00"}"#,
+		)
+		.unwrap();
+		let expected = DateTime::parse_from_rfc3339("2026-07-16T17:30:00+00:00")
+			.unwrap()
+			.timestamp();
+		assert_eq!(limit.resets_at_epoch(), Some(expected));
+		let none: Limit = serde_json::from_str(r#"{"kind": "session", "percent": 12}"#).unwrap();
+		assert_eq!(none.resets_at_epoch(), None);
+	}
 
 	fn strip_ansi(s: String) -> String {
 		String::from_utf8(strip_ansi_escapes::strip(s)).unwrap()
