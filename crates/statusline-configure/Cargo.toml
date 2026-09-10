@@ -6,7 +6,6 @@ rust-version = "1.91"
 description = "Inline live-preview editor for statusline segments"
 repository = "https://github.com/ryanclark/statusline"
 license = "MIT"
-publish = false
 
 [dependencies]
 statusline-core.workspace = true
