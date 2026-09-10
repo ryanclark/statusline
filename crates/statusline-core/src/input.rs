@@ -77,6 +77,8 @@ pub struct RateLimits {
 	pub five_hour: Option<RateLimitPeriod>,
 	#[serde(default)]
 	pub seven_day: Option<RateLimitPeriod>,
+	#[serde(default)]
+	pub spend_limit: Option<RateLimitPeriod>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -175,6 +177,19 @@ mod tests {
 		assert_eq!(input.vim.mode, "NORMAL");
 		assert_eq!(input.agent.name, "security-reviewer");
 		assert_eq!(input.worktree.name, "my-feature");
+	}
+
+	#[test]
+	fn parse_spend_limit_window() {
+		let json = r#"{"rate_limits": {"spend_limit": {"used_percentage": 62.8, "resets_at": 1740787200}}}"#;
+		let input = InputData::from_reader(json.as_bytes()).unwrap();
+		let spend = input
+			.rate_limits
+			.spend_limit
+			.expect("spend_limit window should parse");
+		assert_eq!(spend.used_percentage, 62.8.into());
+		assert_eq!(spend.resets_at, 1740787200);
+		assert!(input.rate_limits.five_hour.is_none());
 	}
 
 	#[test]

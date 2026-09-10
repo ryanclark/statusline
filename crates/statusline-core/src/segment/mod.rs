@@ -26,10 +26,12 @@ pub enum SegmentType {
 	OutputTokens,
 	FiveHour,
 	SevenDay,
+	SpendLimit,
 	FableUsage,
 	ExtraUsage,
 	Credits,
 	Divider,
+	Newline,
 	Cwd,
 	ProjectDir,
 	Model,
@@ -70,11 +72,13 @@ impl SegmentType {
 				InputTokens => OutputTokens,
 				OutputTokens => FiveHour,
 				FiveHour => SevenDay,
-				SevenDay => FableUsage,
+				SevenDay => SpendLimit,
+				SpendLimit => FableUsage,
 				FableUsage => ExtraUsage,
 				ExtraUsage => Credits,
 				Credits => Divider,
-				Divider => Cwd,
+				Divider => Newline,
+				Newline => Cwd,
 				Cwd => ProjectDir,
 				ProjectDir => Model,
 				Model => ModelId,
@@ -399,33 +403,66 @@ pub struct SegmentLine<'a> {
 	pub ctx: RenderContext<'a>,
 }
 
+/// What a rendered part is, so line assembly can collapse separators and line breaks that would
+/// otherwise sit at a row edge or next to each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartKind {
+	Text,
+	Divider,
+	Newline,
+}
+
 impl SegmentLine<'_> {
 	#[must_use]
-	pub fn parts(&self) -> Vec<(String, bool)> {
+	pub fn parts(&self) -> Vec<(String, PartKind)> {
 		self.parts_with_indices()
 			.into_iter()
-			.map(|(_, output, is_divider)| (output, is_divider))
+			.map(|(_, output, kind)| (output, kind))
 			.collect()
 	}
 
 	#[must_use]
-	pub fn parts_with_indices(&self) -> Vec<(usize, String, bool)> {
-		let mut parts: Vec<(usize, String, bool)> = Vec::new();
+	pub fn parts_with_indices(&self) -> Vec<(usize, String, PartKind)> {
+		let mut parts: Vec<(usize, String, PartKind)> = Vec::new();
 
 		for (idx, segment) in self.segments.iter().enumerate() {
 			if !segment.enabled() {
 				continue;
 			}
-			let is_divider = *segment.segment_type() == SegmentType::Divider;
-			if let Some(output) = render_segment(segment, &self.ctx) {
-				if is_divider && (parts.is_empty() || parts.last().is_some_and(|(_, _, d)| *d)) {
-					continue;
+			let kind = match segment.segment_type() {
+				SegmentType::Divider => PartKind::Divider,
+				SegmentType::Newline => PartKind::Newline,
+				_ => PartKind::Text,
+			};
+			let Some(output) = render_segment(segment, &self.ctx) else {
+				continue;
+			};
+			match kind {
+				// A divider only makes sense between two pieces of text on the same row.
+				PartKind::Divider => {
+					if parts.last().is_none_or(|(_, _, k)| *k != PartKind::Text) {
+						continue;
+					}
 				}
-				parts.push((idx, output, is_divider));
+				// A divider right before a line break is a trailing divider. Segments that render nothing
+				// must not leave an empty row behind, so repeated breaks collapse into one.
+				PartKind::Newline => {
+					while parts
+						.last()
+						.is_some_and(|(_, _, k)| *k == PartKind::Divider)
+					{
+						parts.pop();
+					}
+					if parts.last().is_none_or(|(_, _, k)| *k == PartKind::Newline) {
+						continue;
+					}
+				}
+				PartKind::Text => {}
 			}
+			parts.push((idx, output, kind));
 		}
 
-		while parts.last().is_some_and(|(_, _, d)| *d) {
+		while parts.last().is_some_and(|(_, _, k)| *k != PartKind::Text) {
 			parts.pop();
 		}
 
@@ -435,11 +472,13 @@ impl SegmentLine<'_> {
 
 impl fmt::Display for SegmentLine<'_> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		for (i, (output, _)) in self.parts().iter().enumerate() {
-			if i > 0 {
+		let mut after_break = true;
+		for (output, kind) in self.parts() {
+			if !after_break && kind != PartKind::Newline {
 				write!(f, " ")?;
 			}
 			write!(f, "{output}")?;
+			after_break = kind == PartKind::Newline;
 		}
 
 		Ok(())
@@ -598,14 +637,93 @@ mod tests {
 			ctx: sample.render_context(),
 		};
 		let parts = line.parts();
-		assert!(parts.first().is_some_and(|(_, d)| !*d), "leading divider");
-		assert!(parts.last().is_some_and(|(_, d)| !*d), "trailing divider");
+		assert!(
+			parts.first().is_some_and(|(_, k)| *k != PartKind::Divider),
+			"leading divider"
+		);
+		assert!(
+			parts.last().is_some_and(|(_, k)| *k != PartKind::Divider),
+			"trailing divider"
+		);
 		let joined = parts
 			.iter()
 			.map(|(s, _)| s.as_str())
 			.collect::<Vec<_>>()
 			.join(" ");
 		assert_eq!(joined, line.to_string());
+	}
+
+	fn rendered(sample: &crate::sample::SampleData, ty: SegmentType) -> String {
+		render_segment(&SegmentConfig::Simple(ty), &sample.render_context()).unwrap()
+	}
+
+	#[test]
+	fn newline_splits_the_line_without_surrounding_spaces() {
+		let sample = crate::sample::SampleData::representative();
+		let segments = vec![
+			SegmentConfig::Simple(SegmentType::Cwd),
+			SegmentConfig::Simple(SegmentType::Newline),
+			SegmentConfig::Simple(SegmentType::Model),
+		];
+		let line = SegmentLine {
+			segments: &segments,
+			ctx: sample.render_context(),
+		};
+		let expected = format!(
+			"{}\n{}",
+			rendered(&sample, SegmentType::Cwd),
+			rendered(&sample, SegmentType::Model)
+		);
+		assert_eq!(line.to_string(), expected);
+	}
+
+	#[test]
+	fn dividers_next_to_a_newline_are_dropped() {
+		let sample = crate::sample::SampleData::representative();
+		let segments = vec![
+			SegmentConfig::Simple(SegmentType::Cwd),
+			SegmentConfig::Simple(SegmentType::Divider),
+			SegmentConfig::Simple(SegmentType::Newline),
+			SegmentConfig::Simple(SegmentType::Divider),
+			SegmentConfig::Simple(SegmentType::Model),
+		];
+		let line = SegmentLine {
+			segments: &segments,
+			ctx: sample.render_context(),
+		};
+		let expected = format!(
+			"{}\n{}",
+			rendered(&sample, SegmentType::Cwd),
+			rendered(&sample, SegmentType::Model)
+		);
+		assert_eq!(line.to_string(), expected);
+	}
+
+	#[test]
+	fn leading_trailing_and_repeated_newlines_collapse() {
+		let sample = crate::sample::SampleData::representative();
+		// A segment that renders nothing between two line breaks must not leave a blank row behind.
+		let skipped: SegmentConfig =
+			serde_json::from_str(r#"{"type":"model","enabled":false}"#).unwrap();
+		let segments = vec![
+			SegmentConfig::Simple(SegmentType::Newline),
+			SegmentConfig::Simple(SegmentType::Cwd),
+			SegmentConfig::Simple(SegmentType::Newline),
+			skipped,
+			SegmentConfig::Simple(SegmentType::Newline),
+			SegmentConfig::Simple(SegmentType::Model),
+			SegmentConfig::Simple(SegmentType::Newline),
+		];
+		let line = SegmentLine {
+			segments: &segments,
+			ctx: sample.render_context(),
+		};
+		let expected = format!(
+			"{}\n{}",
+			rendered(&sample, SegmentType::Cwd),
+			rendered(&sample, SegmentType::Model)
+		);
+		assert_eq!(line.to_string(), expected);
 	}
 
 	#[test]

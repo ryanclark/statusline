@@ -33,6 +33,7 @@ pub enum Key {
 	Back,
 	Add,
 	AddDivider,
+	AddNewline,
 	Replace,
 	Remove,
 	Global,
@@ -155,6 +156,20 @@ impl EditorModel {
 		}
 	}
 
+	fn insert_simple(&mut self, ty: SegmentType) -> Effect {
+		let at = self.cursor.min(self.rows.len());
+		self.rows.insert(
+			at,
+			Row {
+				config: SegmentConfig::Simple(ty),
+				enabled: true,
+			},
+		);
+		self.dirty = true;
+
+		Effect::Redraw
+	}
+
 	pub fn apply(&mut self, key: Key) -> Effect {
 		match self.focus {
 			Focus::List => self.apply_list(key),
@@ -217,19 +232,8 @@ impl EditorModel {
 					Effect::None
 				}
 			}
-			Key::AddDivider => {
-				let at = self.cursor.min(self.rows.len());
-				self.rows.insert(
-					at,
-					Row {
-						config: SegmentConfig::Simple(SegmentType::Divider),
-						enabled: true,
-					},
-				);
-				self.dirty = true;
-
-				Effect::Redraw
-			}
+			Key::AddDivider => self.insert_simple(SegmentType::Divider),
+			Key::AddNewline => self.insert_simple(SegmentType::Newline),
 			Key::Enter if self.cursor == n => {
 				self.enter_picker();
 
@@ -358,6 +362,7 @@ impl EditorModel {
 			| Key::Add
 			| Key::Replace
 			| Key::AddDivider
+			| Key::AddNewline
 			| Key::Remove => {
 				if let Some(row) = self.rows.get_mut(self.cursor) {
 					row.config.normalize();
@@ -1450,6 +1455,23 @@ mod tests {
 			m.apply(Key::Down);
 		}
 		assert!(m.picker.selected < len);
+	}
+
+	#[test]
+	fn n_inserts_newline_at_cursor() {
+		let mut m = model(&[SegmentType::Model, SegmentType::Cwd]);
+		m.cursor = 1;
+		assert_eq!(m.apply(Key::AddNewline), Effect::Redraw);
+		let types: Vec<&SegmentType> = m.rows.iter().map(|r| r.config.segment_type()).collect();
+		assert_eq!(
+			types,
+			vec![
+				&SegmentType::Model,
+				&SegmentType::Newline,
+				&SegmentType::Cwd
+			]
+		);
+		assert!(m.dirty);
 	}
 
 	#[test]

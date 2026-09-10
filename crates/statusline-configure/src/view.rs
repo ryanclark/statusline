@@ -3,7 +3,7 @@ use crate::options::{OptionKind, applicable_fields};
 use crate::picker;
 use statusline_core::catalog::{OptionSet, meta};
 use statusline_core::sample::SampleData;
-use statusline_core::segment::{DirtyConfig, SegmentConfig, SegmentLine, SegmentType};
+use statusline_core::segment::{DirtyConfig, PartKind, SegmentConfig, SegmentLine, SegmentType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowKind {
@@ -39,6 +39,9 @@ impl RenderRow {
 }
 
 const CHROME_ROWS: usize = 8;
+
+/// Stands in for a line break wherever a raw newline would break the editor layout.
+const NEWLINE_MARK: &str = "\u{21b5}";
 
 #[must_use]
 pub fn preview_line(model: &EditorModel, sample: &SampleData) -> String {
@@ -91,19 +94,32 @@ pub fn preview_highlighted(model: &EditorModel, sample: &SampleData) -> String {
 	let brand = crate::theme::sgr_fg(crate::theme::BRAND_CT);
 	let mut out = String::new();
 
-	for (i, (idx, output, _)) in line.parts_with_indices().iter().enumerate() {
-		if i > 0 {
+	let mut after_break = true;
+	for (idx, output, kind) in &line.parts_with_indices() {
+		let is_break = *kind == PartKind::Newline;
+		if !after_break && !is_break {
 			out.push(' ');
 		}
 		if *idx == model.cursor {
+			// A line break has no glyph of its own, so mark the selection with a visible symbol and
+			// keep the break so the preview still splits.
+			let shown = if is_break {
+				NEWLINE_MARK
+			} else {
+				output.as_str()
+			};
 			out.push_str(&brand);
 			out.push_str("[\u{1b}[0m");
-			out.push_str(output);
+			out.push_str(shown);
 			out.push_str(&brand);
 			out.push_str("]\u{1b}[0m");
+			if is_break {
+				out.push('\n');
+			}
 		} else {
 			out.push_str(output);
 		}
+		after_break = is_break;
 	}
 
 	out
@@ -144,6 +160,10 @@ fn pad_to(s: &str, width: usize) -> String {
 }
 
 fn segment_example(model: &EditorModel, sample: &SampleData, config: &SegmentConfig) -> String {
+	if *config.segment_type() == SegmentType::Newline {
+		return NEWLINE_MARK.to_owned();
+	}
+
 	let divider = model
 		.divider
 		.as_deref()
@@ -211,8 +231,15 @@ pub fn block(model: &EditorModel, sample: &SampleData, term_rows: usize) -> Vec<
 	let mut out = Vec::new();
 
 	let body = body_rows(model);
-	let mut page = page_size(term_rows).min(body.len());
-	let footer = 6;
+	let preview = preview_highlighted(model, sample);
+	let preview_rows: Vec<&str> = preview.split('\n').collect();
+	// Every extra preview row is one fewer list row, otherwise the preview falls off the screen.
+	let extra_preview_rows = preview_rows.len() - 1;
+	let mut page = page_size(term_rows)
+		.saturating_sub(extra_preview_rows)
+		.max(1)
+		.min(body.len());
+	let footer = 6 + extra_preview_rows;
 	let markers = if body.len() > page { 2 } else { 0 };
 
 	if page + markers + footer > term_rows {
@@ -259,10 +286,9 @@ pub fn block(model: &EditorModel, sample: &SampleData, term_rows: usize) -> Vec<
 	out.push(RenderRow::blank());
 	out.push(RenderRow::new("Preview", RowKind::PreviewLabel));
 	out.push(RenderRow::new(String::new(), RowKind::Border));
-	out.push(RenderRow::new(
-		preview_highlighted(model, sample),
-		RowKind::Preview,
-	));
+	for row in preview_rows {
+		out.push(RenderRow::new(row, RowKind::Preview));
+	}
 	out.truncate(term_rows.max(1));
 
 	out
@@ -490,7 +516,7 @@ fn segment_id(ty: &SegmentType) -> &'static str {
 pub fn help_line(focus: Focus) -> &'static str {
 	match focus {
 		Focus::List => {
-			"space on/off \u{b7} shift + \u{2191}\u{2193} reorder \u{b7} \u{2192} options \u{b7} a add \u{b7} r replace \u{b7} d divider \u{b7} x remove \u{b7} g global \u{b7} s save \u{b7} q quit"
+			"space on/off \u{b7} shift + \u{2191}\u{2193} reorder \u{b7} \u{2192} options \u{b7} a add \u{b7} r replace \u{b7} d divider \u{b7} n newline \u{b7} x remove \u{b7} g global \u{b7} s save \u{b7} q quit"
 		}
 		Focus::Options => {
 			"\u{2191}\u{2193} field \u{b7} space/\u{2192} change \u{b7} \u{21b5} edit \u{b7} \u{2190} back"
@@ -603,6 +629,16 @@ mod tests {
 			option_value(&m, config, OptionKind::IconColor).contains("needs icon"),
 			"icon color renders only with the icon; the pane must say so"
 		);
+	}
+
+	#[test]
+	fn preview_renders_one_row_per_status_line_row() {
+		let m = model(&[SegmentType::Cwd, SegmentType::Newline, SegmentType::Model]);
+		let rows = block(&m, &SampleData::representative(), 40);
+		let previews: Vec<&RenderRow> =
+			rows.iter().filter(|r| r.kind == RowKind::Preview).collect();
+		assert_eq!(previews.len(), 2, "one preview row per line: {rows:?}");
+		assert!(previews.iter().all(|r| !r.text.contains('\n')));
 	}
 
 	#[test]

@@ -18,6 +18,7 @@ pub fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Optio
 
 		SegmentType::FiveHour => rate_limit::five_hour(segment, ctx),
 		SegmentType::SevenDay => rate_limit::seven_day(segment, ctx),
+		SegmentType::SpendLimit => rate_limit::spend_limit(segment, ctx),
 		SegmentType::FableUsage => rate_limit::fable_usage(segment, ctx),
 		SegmentType::ExtraUsage => rate_limit::extra_usage(segment, ctx),
 		SegmentType::Credits => credits::credits(segment, ctx),
@@ -35,6 +36,7 @@ pub fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Optio
 		SegmentType::GitStash => git::git_stash(segment, ctx),
 
 		SegmentType::Divider => env::divider(segment, ctx),
+		SegmentType::Newline => env::newline(segment, ctx),
 		SegmentType::Cwd => env::cwd(segment, ctx),
 		SegmentType::ProjectDir => env::project_dir(segment, ctx),
 		SegmentType::Model => env::model(segment, ctx),
@@ -208,11 +210,70 @@ mod tests {
 				resets_at: future_epoch,
 			}),
 			seven_day: None,
+			spend_limit: None,
 		};
 		let ctx = default_ctx(&input);
 		let seg = SegmentConfig::Simple(SegmentType::FiveHour);
 		let output = strip_ansi(&render_segment(&seg, &ctx).unwrap());
 		assert!(output.contains("42%"), "got: {output}");
+	}
+
+	#[test]
+	fn render_spend_limit_no_data_returns_none() {
+		let input = default_input();
+		let ctx = default_ctx(&input);
+		let seg = SegmentConfig::Simple(SegmentType::SpendLimit);
+		assert!(render_segment(&seg, &ctx).is_none());
+	}
+
+	#[test]
+	fn render_spend_limit_shows_countdown_at_any_usage() {
+		use crate::input::RateLimitPeriod;
+		let mut input = default_input();
+		input.rate_limits = RateLimits {
+			five_hour: None,
+			seven_day: None,
+			spend_limit: Some(RateLimitPeriod {
+				used_percentage: 5.0.into(),
+				resets_at: Utc::now().timestamp() + 3 * 86_400,
+			}),
+		};
+		let ctx = default_ctx(&input);
+		let seg = SegmentConfig::Simple(SegmentType::SpendLimit);
+		let output = strip_ansi(&render_segment(&seg, &ctx).unwrap());
+		assert!(output.contains("5%"), "got: {output}");
+		// A spend limit has no threshold setting: the countdown is always useful.
+		assert!(
+			output.contains('d'),
+			"expected a days countdown, got: {output}"
+		);
+	}
+
+	#[test]
+	fn render_spend_limit_over_100_keeps_the_real_value() {
+		use crate::input::RateLimitPeriod;
+		let mut input = default_input();
+		input.rate_limits = RateLimits {
+			five_hour: None,
+			seven_day: None,
+			spend_limit: Some(RateLimitPeriod {
+				used_percentage: 120.0.into(),
+				resets_at: 0,
+			}),
+		};
+		let ctx = default_ctx(&input);
+		let seg: SegmentConfig =
+			serde_json::from_str(r#"{"type": "spend_limit", "icon": false}"#).unwrap();
+		let output = strip_ansi(&render_segment(&seg, &ctx).unwrap());
+		assert_eq!(output, "120%", "no countdown once resets_at has passed");
+	}
+
+	#[test]
+	fn render_newline_emits_a_line_break() {
+		let input = default_input();
+		let ctx = default_ctx(&input);
+		let seg = SegmentConfig::Simple(SegmentType::Newline);
+		assert_eq!(render_segment(&seg, &ctx).as_deref(), Some("\n"));
 	}
 
 	#[test]

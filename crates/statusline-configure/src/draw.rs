@@ -78,6 +78,7 @@ fn map_key(ev: KeyEvent, focus: Focus, editing: bool) -> Option<model::Key> {
 		KeyCode::Char('a') if letters_are_commands => Key::Add,
 		KeyCode::Char('r') if letters_are_commands => Key::Replace,
 		KeyCode::Char('d') if letters_are_commands => Key::AddDivider,
+		KeyCode::Char('n') if letters_are_commands => Key::AddNewline,
 		KeyCode::Char('x') if letters_are_commands => Key::Remove,
 		KeyCode::Char('g') if letters_are_commands => Key::Global,
 		KeyCode::Char('s') if letters_are_commands => Key::Save,
@@ -550,6 +551,18 @@ mod tests {
 		assert_eq!(
 			map_key(ev(KeyCode::Char('d')), Focus::Picker, false),
 			Some(model::Key::Char('d'))
+		);
+	}
+
+	#[test]
+	fn n_adds_newline_in_list_but_is_text_in_picker() {
+		assert_eq!(
+			map_key(ev(KeyCode::Char('n')), Focus::List, false),
+			Some(model::Key::AddNewline)
+		);
+		assert_eq!(
+			map_key(ev(KeyCode::Char('n')), Focus::Picker, false),
+			Some(model::Key::Char('n'))
 		);
 	}
 

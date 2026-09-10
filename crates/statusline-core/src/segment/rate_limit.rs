@@ -1,4 +1,6 @@
-use crate::constants::{FABLE_USAGE_ICON, FIVE_HOUR_ICON, GRAY, RED, SEVEN_DAY_ICON, YELLOW};
+use crate::constants::{
+	FABLE_USAGE_ICON, FIVE_HOUR_ICON, GRAY, RED, SEVEN_DAY_ICON, SPEND_LIMIT_ICON, YELLOW,
+};
 use crate::format::{ColoredPercentage, Percentage};
 use crate::input::RateLimitPeriod;
 use crate::usage::UsageError;
@@ -61,6 +63,21 @@ pub(super) fn seven_day(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Opt
 			nerd: "\u{f073}",
 		},
 		ctx.seven_threshold,
+		ctx.nerd_font,
+	)
+}
+
+pub(super) fn spend_limit(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
+	// A gateway spend limit has no reset-threshold setting, so the countdown shows whenever there is
+	// any usage at all.
+	format_rate_limit(
+		segment,
+		ctx.input.rate_limits.spend_limit.as_ref(),
+		Icon {
+			unicode: SPEND_LIMIT_ICON,
+			nerd: "\u{f0d6}",
+		},
+		Percentage::default(),
 		ctx.nerd_font,
 	)
 }

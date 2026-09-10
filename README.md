@@ -46,7 +46,7 @@ brew install ryanclark/tap/statusline
 
 macOS (Apple Silicon) and Linux (arm64/amd64) are supported.
 > [!NOTE]
-> Keychain access to "Chrome Safe Storage" is only needed if you use the `extra_usage` segment (see below).
+> Keychain access to "Chrome Safe Storage" is only needed if you use `extra_usage`, `fable_usage`, or `credits` (see below).
 
 Or, without Homebrew, install a prebuilt binary from the latest GitHub release:
 
@@ -70,11 +70,11 @@ statusline install
 
 This saves default settings and wires up Claude Code's `settings.json` to call `statusline`. The organization shown in the `extra_usage` segment is read from Claude Code's own `~/.claude.json` at runtime, so it always matches the currently-active account.
 
-### Keychain access (extra_usage only)
+### Keychain access (API segments only)
 
-If you include the `extra_usage` segment, statusline reads your Chrome session cookie to fetch spend data from claude.ai. On first run, macOS will prompt you to allow access to "Chrome Safe Storage" in Keychain. Select **Always Allow** so it doesn't prompt on every invocation.
+If you include `extra_usage`, `fable_usage`, or `credits`, statusline reads your Chrome session cookie to fetch usage data from claude.ai. On first run, macOS will prompt you to allow access to "Chrome Safe Storage" in Keychain. Select **Always Allow** so it doesn't prompt on every invocation.
 
-If you don't use the `extra_usage` segment, no Chrome access or API calls are needed.
+If you don't use any of those segments, no Chrome access or API calls are needed.
 
 ## What it shows
 
@@ -136,7 +136,7 @@ This opens an interactive editor with a live preview to add, remove, reorder and
 | `output_tokens` | Total output tokens with ↓ icon |
 | `cache_read_tokens` | Cache read tokens with ↻ icon |
 | `cache_hit_ratio` | Cache read as % of total input |
-| `exceeds_200k` | Warning indicator when context exceeds 200k tokens |
+| `exceeds200k` | Warning indicator when context exceeds 200k tokens |
 
 #### Rate limits
 
@@ -144,8 +144,9 @@ This opens an interactive editor with a live preview to add, remove, reorder and
 |---|---|
 | `five_hour` | 5-hour rate limit % with optional reset countdown |
 | `seven_day` | 7-day rate limit % with optional reset countdown |
+| `spend_limit` | Spend limit % with reset countdown (only present behind a Claude apps gateway) |
 | `fable_usage` | Fable weekly rate limit % with reset countdown (calls the API) |
-| `extra_usage` | Extra usage $used/$limit (only segment that calls the API) |
+| `extra_usage` | Extra usage $used/$limit (calls the API) |
 
 #### Cost & performance
 
@@ -187,6 +188,10 @@ This opens an interactive editor with a live preview to add, remove, reorder and
 | Segment | Description |
 |---|---|
 | `divider` | Separator character (default `•`) |
+| `newline` | Line break: segments after it render on the next row |
+
+Claude Code shows each line of output as its own status row, so `newline` splits the status line into
+multiple rows. Dividers next to a line break are dropped, and a break whose row would be empty is skipped.
 
 ### Advanced segment options
 
@@ -300,10 +305,10 @@ Set `skip_update_check` in `~/.statusline/settings.json` to suppress the once-a-
 
 Most segments read from the JSON that Claude Code pipes via stdin — no external calls needed. The exceptions:
 
-- `extra_usage`, `fable_usage` — call the claude.ai API (requires Chrome session cookie)
+- `extra_usage`, `fable_usage`, `credits` — call the claude.ai API (requires Chrome session cookie)
 - `git_branch`, `git_ahead_behind`, `git_stash` — run git commands in the project directory
 
-If you don't include `extra_usage` or `fable_usage` in your segments, the API call and Chrome cookie auth are skipped entirely.
+If you don't include `extra_usage`, `fable_usage`, or `credits` in your segments, the API call and Chrome cookie auth are skipped entirely.
 
 ## Options
 
@@ -370,5 +375,5 @@ security find-identity -v -p codesigning | grep "Developer ID Application"
 ## Requirements
 
 - macOS (Apple Silicon)
-- Google Chrome (only if using the `extra_usage` segment)
+- Google Chrome (only if using `extra_usage`, `fable_usage`, or `credits`)
 - Rust toolchain (for building from source)

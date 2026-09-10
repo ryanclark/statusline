@@ -25,6 +25,10 @@ pub(super) fn divider(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Optio
 	}
 }
 
+pub(super) fn newline(_segment: &SegmentConfig, _ctx: &RenderContext<'_>) -> Option<String> {
+	Some("\n".to_owned())
+}
+
 pub(super) fn cwd(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
 	if ctx.input.cwd.is_empty() {
 		return None;

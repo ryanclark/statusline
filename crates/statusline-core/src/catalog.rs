@@ -64,6 +64,15 @@ const COLORED_TEXT: OptionSet = OptionSet {
 	capitalize: false,
 };
 
+const NO_OPTIONS: OptionSet = OptionSet {
+	colors: false,
+	icon: false,
+	label: false,
+	style: false,
+	dirty: false,
+	capitalize: false,
+};
+
 const STYLED_TEXT: OptionSet = OptionSet {
 	colors: false,
 	icon: false,
@@ -168,6 +177,14 @@ static CATALOG: &[SegmentMeta] = &[
 		options: ICON_TEXT,
 	},
 	SegmentMeta {
+		ty: SegmentType::SpendLimit,
+		id: "spend_limit",
+		label: "Spend limit",
+		category: Category::RateLimits,
+		description: "Spend limit % with reset countdown (Claude apps gateway only)",
+		options: ICON_TEXT,
+	},
+	SegmentMeta {
 		ty: SegmentType::FableUsage,
 		id: "fable_usage",
 		label: "Fable usage",
@@ -180,7 +197,7 @@ static CATALOG: &[SegmentMeta] = &[
 		id: "extra_usage",
 		label: "Extra usage",
 		category: Category::RateLimits,
-		description: "Extra usage $used/$limit (only segment that calls the API)",
+		description: "Extra usage $used/$limit (calls the API)",
 		options: COLORED_TEXT,
 	},
 	SegmentMeta {
@@ -188,7 +205,7 @@ static CATALOG: &[SegmentMeta] = &[
 		id: "credits",
 		label: "Prepaid credits",
 		category: Category::RateLimits,
-		description: "Prepaid credit balance with ◉ icon",
+		description: "Prepaid credit balance with ◉ icon (calls the API)",
 		options: ICON_TEXT,
 	},
 	SegmentMeta {
@@ -380,6 +397,14 @@ static CATALOG: &[SegmentMeta] = &[
 			capitalize: false,
 		},
 	},
+	SegmentMeta {
+		ty: SegmentType::Newline,
+		id: "newline",
+		label: "New line",
+		category: Category::Layout,
+		description: "Line break: segments after it render on the next row",
+		options: NO_OPTIONS,
+	},
 ];
 
 #[must_use]
@@ -452,6 +477,11 @@ mod tests {
 				..OptionSet::default()
 			}
 		);
+	}
+
+	#[test]
+	fn newline_has_no_options() {
+		assert_eq!(meta(&SegmentType::Newline).options, OptionSet::default());
 	}
 
 	#[test]

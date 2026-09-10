@@ -23,6 +23,7 @@ impl SampleData {
 	pub fn representative() -> Self {
 		let five_reset = chrono::Utc::now().timestamp() + 7200; // +2h
 		let seven_reset = chrono::Utc::now().timestamp() + 86_400 * 5; // +5d
+		let spend_reset = chrono::Utc::now().timestamp() + 86_400 * 19; // +19d
 
 		let input = InputData {
 			cwd: "/home/user/project".to_owned(),
@@ -63,6 +64,10 @@ impl SampleData {
 				seven_day: Some(RateLimitPeriod {
 					used_percentage: Percentage::from(41.2),
 					resets_at: seven_reset,
+				}),
+				spend_limit: Some(RateLimitPeriod {
+					used_percentage: Percentage::from(62.8),
+					resets_at: spend_reset,
 				}),
 			},
 			vim: VimInfo {
