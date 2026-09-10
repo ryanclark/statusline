@@ -9,5 +9,9 @@ jobs:
     uses: ryanclark/workflows/.github/workflows/rust-release-plz.yml@v1
     with:
       app-id: "3903999"
+      # 0.3.157, the reusable workflow's default, cannot diff a git-only package that depends on
+      # unpublished workspace crates (release-plz/release-plz#2595). Fixed in later releases.
+      release-plz-version: "0.3.165"
+      release-plz-sha256: "ab29700191d5277f415b176d73241a57456f9b2589dd456186138e99b6f083cb"
     secrets:
       APP_KEY: ${{ secrets.RELEASE_PLZ_APP_KEY }}
