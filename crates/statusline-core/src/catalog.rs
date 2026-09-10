@@ -95,6 +95,30 @@ pub fn catalog() -> &'static [SegmentMeta] {
 	CATALOG
 }
 
+/// Status line segments that also make sense per subagent task, because a task carries its own
+/// model, effort, cwd, and context counts.
+const PER_TASK_IDS: &[&str] = &[
+	"model",
+	"model_id",
+	"effort",
+	"cwd",
+	"context_percentage",
+	"context_remaining",
+	"context_window_size",
+	"total_input_tokens",
+	"agent_name",
+	"divider",
+];
+
+/// The catalog as offered for the subagent status line.
+#[must_use]
+pub fn for_subagent() -> Vec<&'static SegmentMeta> {
+	CATALOG
+		.iter()
+		.filter(|m| m.category == Category::Subagent || PER_TASK_IDS.contains(&m.id))
+		.collect()
+}
+
 static CATALOG: &[SegmentMeta] = &[
 	SegmentMeta {
 		ty: SegmentType::ContextPercentage,
@@ -626,6 +650,32 @@ mod tests {
 			.map(|m| m.id)
 			.collect();
 		assert_eq!(with, vec!["cache_warm"]);
+	}
+
+	#[test]
+	fn subagent_catalog_has_task_and_per_task_segments_only() {
+		let ids: Vec<&str> = for_subagent().iter().map(|m| m.id).collect();
+		for id in [
+			"task_name",
+			"task_status",
+			"model",
+			"effort",
+			"cwd",
+			"context_percentage",
+			"divider",
+		] {
+			assert!(ids.contains(&id), "{id} missing");
+		}
+		for id in [
+			"five_hour",
+			"git_branch",
+			"newline",
+			"extra_usage",
+			"account",
+			"session_name",
+		] {
+			assert!(!ids.contains(&id), "{id} makes no sense per task");
+		}
 	}
 
 	#[test]

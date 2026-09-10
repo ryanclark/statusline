@@ -6,12 +6,38 @@ use statusline_core::catalog::meta;
 use statusline_core::format::Percentage;
 use statusline_core::segment::{DirtyConfig, SegmentConfig, SegmentType};
 use statusline_core::settings::Settings;
+use statusline_core::subagent::default_subagent_segments;
 use std::str::FromStr;
 
 #[derive(Debug, Clone)]
 pub struct Row {
 	pub config: SegmentConfig,
 	pub enabled: bool,
+}
+
+/// Which of the two layouts the editor is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+	StatusLine,
+	Subagent,
+}
+
+impl Mode {
+	#[must_use]
+	pub fn label(self) -> &'static str {
+		match self {
+			Self::StatusLine => "Status line",
+			Self::Subagent => "Subagent",
+		}
+	}
+
+	#[must_use]
+	pub fn other(self) -> Self {
+		match self {
+			Self::StatusLine => Self::Subagent,
+			Self::Subagent => Self::StatusLine,
+		}
+	}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +60,8 @@ pub enum Key {
 	Add,
 	AddDivider,
 	AddNewline,
+	NextTab,
+	Install,
 	Replace,
 	Remove,
 	Global,
@@ -53,6 +81,7 @@ pub enum Effect {
 	Quit,
 	ConfirmQuitUnsaved,
 	OpenPicker,
+	InstallSubagent,
 	None,
 }
 
@@ -82,8 +111,14 @@ pub struct GlobalState {
 const GLOBAL_FIELDS: usize = 4;
 
 pub struct EditorModel {
+	pub mode: Mode,
 	pub rows: Vec<Row>,
 	pub cursor: usize,
+	/// The layout that is not on screen, swapped in by [`Key::NextTab`].
+	pub other_rows: Vec<Row>,
+	pub other_cursor: usize,
+	pub subagent_installed: bool,
+	pub notice: Option<String>,
 	pub focus: Focus,
 	pub dirty: bool,
 	pub options: OptionsState,
@@ -95,6 +130,27 @@ pub struct EditorModel {
 	pub seven: Percentage,
 }
 
+fn rows_from(segments: Vec<SegmentConfig>) -> Vec<Row> {
+	segments
+		.into_iter()
+		.map(|config| Row {
+			enabled: config.enabled(),
+			config,
+		})
+		.collect()
+}
+
+fn configs_of(rows: &[Row]) -> Vec<SegmentConfig> {
+	rows.iter()
+		.map(|r| {
+			let mut config = r.config.clone();
+			config.options_mut().enabled = r.enabled;
+			config.normalize();
+			config
+		})
+		.collect()
+}
+
 impl EditorModel {
 	#[must_use]
 	pub fn from_settings(s: &Settings) -> Self {
@@ -102,17 +158,21 @@ impl EditorModel {
 			.segments
 			.clone()
 			.unwrap_or_else(statusline_core::segment::default_segments);
-		let rows = segs
-			.into_iter()
-			.map(|config| Row {
-				enabled: config.enabled(),
-				config,
-			})
-			.collect();
+		let rows = rows_from(segs);
+		let subagent_rows = rows_from(
+			s.subagent_segments
+				.clone()
+				.unwrap_or_else(default_subagent_segments),
+		);
 
 		Self {
+			mode: Mode::StatusLine,
 			rows,
 			cursor: 0,
+			other_rows: subagent_rows,
+			other_cursor: 0,
+			subagent_installed: false,
+			notice: None,
 			focus: Focus::List,
 			dirty: false,
 			options: OptionsState::default(),
@@ -127,17 +187,12 @@ impl EditorModel {
 
 	#[must_use]
 	pub fn to_settings(&self, base: &Settings) -> Settings {
-		let segments: Vec<SegmentConfig> = self
-			.rows
-			.iter()
-			.map(|r| {
-				let mut config = r.config.clone();
-				config.options_mut().enabled = r.enabled;
-				config.normalize();
-				config
-			})
-			.collect();
+		let (status_rows, subagent_rows) = match self.mode {
+			Mode::StatusLine => (&self.rows, &self.other_rows),
+			Mode::Subagent => (&self.other_rows, &self.rows),
+		};
 
+		let segments = configs_of(status_rows);
 		let segments = if base.segments.is_none()
 			&& segments == statusline_core::segment::default_segments()
 		{
@@ -145,15 +200,33 @@ impl EditorModel {
 		} else {
 			Some(segments)
 		};
+		let subagent_segments = configs_of(subagent_rows);
+		let subagent_segments = if base.subagent_segments.is_none()
+			&& subagent_segments == default_subagent_segments()
+		{
+			None
+		} else {
+			Some(subagent_segments)
+		};
 
 		Settings {
 			segments,
+			subagent_segments,
 			divider: self.divider.clone(),
 			nerd_font: self.nerd_font,
 			five_hour_reset_threshold: self.five,
 			seven_day_reset_threshold: self.seven,
 			..base.clone()
 		}
+	}
+
+	fn switch_mode(&mut self) -> Effect {
+		std::mem::swap(&mut self.rows, &mut self.other_rows);
+		std::mem::swap(&mut self.cursor, &mut self.other_cursor);
+		self.mode = self.mode.other();
+		self.focus = Focus::List;
+
+		Effect::Redraw
 	}
 
 	fn insert_simple(&mut self, ty: SegmentType) -> Effect {
@@ -171,6 +244,7 @@ impl EditorModel {
 	}
 
 	pub fn apply(&mut self, key: Key) -> Effect {
+		self.notice = None;
 		match self.focus {
 			Focus::List => self.apply_list(key),
 			Focus::Options => self.apply_options(key),
@@ -233,7 +307,13 @@ impl EditorModel {
 				}
 			}
 			Key::AddDivider => self.insert_simple(SegmentType::Divider),
+			// Each subagent row is one panel line, so a line break has no meaning there.
+			Key::AddNewline if self.mode == Mode::Subagent => Effect::None,
 			Key::AddNewline => self.insert_simple(SegmentType::Newline),
+			Key::NextTab => self.switch_mode(),
+			Key::Install if self.mode == Mode::Subagent && !self.subagent_installed => {
+				Effect::InstallSubagent
+			}
 			Key::Enter if self.cursor == n => {
 				self.enter_picker();
 
@@ -594,7 +674,7 @@ impl EditorModel {
 				Effect::Redraw
 			}
 			Key::Down => {
-				let len = picker::filtered(self.picker.query.value()).len();
+				let len = picker::filtered_for(self.picker.query.value(), self.mode).len();
 
 				if self.picker.selected + 1 < len {
 					self.picker.selected += 1;
@@ -603,7 +683,7 @@ impl EditorModel {
 				Effect::Redraw
 			}
 			Key::Enter => {
-				let results = picker::filtered(self.picker.query.value());
+				let results = picker::filtered_for(self.picker.query.value(), self.mode);
 
 				if self.picker.selected < results.len() {
 					let ty = results[self.picker.selected].ty.clone();
@@ -1304,6 +1384,72 @@ mod tests {
 	}
 
 	#[test]
+	fn tab_switches_layouts_and_remembers_each_cursor() {
+		let mut base = crate::default_settings();
+		base.segments = Some(vec![
+			SegmentConfig::Simple(SegmentType::Model),
+			SegmentConfig::Simple(SegmentType::Cwd),
+		]);
+		base.subagent_segments = Some(vec![SegmentConfig::Simple(SegmentType::TaskName)]);
+		let mut m = EditorModel::from_settings(&base);
+		m.cursor = 1;
+		assert_eq!(m.mode, Mode::StatusLine);
+		assert_eq!(m.apply(Key::NextTab), Effect::Redraw);
+		assert_eq!(m.mode, Mode::Subagent);
+		assert_eq!(m.rows.len(), 1);
+		assert_eq!(m.cursor, 0);
+		assert_eq!(*m.rows[0].config.segment_type(), SegmentType::TaskName);
+		m.apply(Key::NextTab);
+		assert_eq!(m.mode, Mode::StatusLine);
+		assert_eq!(m.rows.len(), 2);
+		assert_eq!(m.cursor, 1);
+	}
+
+	#[test]
+	fn subagent_rows_start_from_the_default_layout_and_save_only_when_changed() {
+		let base = crate::default_settings();
+		let mut m = EditorModel::from_settings(&base);
+		m.apply(Key::NextTab);
+		assert_eq!(m.rows.len(), default_subagent_segments().len());
+		assert!(
+			m.to_settings(&base).subagent_segments.is_none(),
+			"untouched default stays absent"
+		);
+		m.cursor = 0;
+		m.apply(Key::Remove);
+		let saved = m.to_settings(&base);
+		assert_eq!(saved.subagent_segments.as_ref().map(Vec::len), Some(6));
+		assert!(
+			saved.segments.is_none(),
+			"the status line list is untouched"
+		);
+	}
+
+	#[test]
+	fn newline_is_refused_on_the_subagent_tab() {
+		let mut m = EditorModel::from_settings(&crate::default_settings());
+		m.apply(Key::NextTab);
+		let before = m.rows.len();
+		assert_eq!(m.apply(Key::AddNewline), Effect::None);
+		assert_eq!(
+			m.rows.len(),
+			before,
+			"a raw line break inside a panel row would break the panel"
+		);
+		assert!(!m.dirty);
+	}
+
+	#[test]
+	fn install_key_only_acts_on_an_uninstalled_subagent_tab() {
+		let mut m = EditorModel::from_settings(&crate::default_settings());
+		assert_eq!(m.apply(Key::Install), Effect::None);
+		m.apply(Key::NextTab);
+		assert_eq!(m.apply(Key::Install), Effect::InstallSubagent);
+		m.subagent_installed = true;
+		assert_eq!(m.apply(Key::Install), Effect::None);
+	}
+
+	#[test]
 	fn left_collapses_options_accordion() {
 		let mut m = model(&[SegmentType::TotalInputTokens]);
 		m.cursor = 0;
@@ -1490,7 +1636,7 @@ mod tests {
 		for c in "git".chars() {
 			m.apply(Key::Char(c));
 		}
-		let len = picker::filtered("git").len();
+		let len = picker::filtered_for("git", Mode::StatusLine).len();
 		for _ in 0..(len + 5) {
 			m.apply(Key::Down);
 		}

@@ -6,6 +6,7 @@
 
 pub mod browser;
 pub mod catalog;
+pub mod claude_settings;
 pub mod constants;
 pub mod context_window;
 pub mod format;

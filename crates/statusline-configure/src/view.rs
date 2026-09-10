@@ -1,4 +1,4 @@
-use crate::model::{EditorModel, Focus};
+use crate::model::{EditorModel, Focus, Mode};
 use crate::options::{OptionKind, applicable_fields};
 use crate::picker;
 use statusline_core::catalog::{OptionSet, meta};
@@ -7,6 +7,7 @@ use statusline_core::segment::{DirtyConfig, PartKind, SegmentConfig, SegmentLine
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowKind {
+	Tabs,
 	Preview,
 	PreviewLabel,
 	Border,
@@ -38,62 +39,67 @@ impl RenderRow {
 	}
 }
 
-const CHROME_ROWS: usize = 8;
+const CHROME_ROWS: usize = 10;
 
 /// Stands in for a line break wherever a raw newline would break the editor layout.
 const NEWLINE_MARK: &str = "\u{21b5}";
 
-#[must_use]
-pub fn preview_line(model: &EditorModel, sample: &SampleData) -> String {
-	let segs: Vec<SegmentConfig> = model
-		.rows
-		.iter()
-		.filter(|r| r.enabled)
-		.map(|r| r.config.clone())
-		.collect();
+/// One entry per rendered row: the status line splits on its line breaks, the subagent layout
+/// renders once per sample task.
+fn preview_rows(model: &EditorModel, sample: &SampleData, highlight: bool) -> Vec<String> {
 	let divider = model
 		.divider
 		.as_deref()
 		.unwrap_or(statusline_core::constants::DIVIDER);
-
-	let ctx = sample.render_context_with(divider, model.nerd_font, model.five, model.seven);
-	let line = SegmentLine {
-		segments: &segs,
-		ctx,
+	let segs: Vec<SegmentConfig> = if highlight {
+		model
+			.rows
+			.iter()
+			.map(|r| {
+				let mut config = r.config.clone();
+				config.options_mut().enabled = r.enabled;
+				config
+			})
+			.collect()
+	} else {
+		model
+			.rows
+			.iter()
+			.filter(|r| r.enabled)
+			.map(|r| r.config.clone())
+			.collect()
+	};
+	let render = |ctx| {
+		let line = SegmentLine {
+			segments: &segs,
+			ctx,
+		};
+		if highlight {
+			highlighted_line(model, &line)
+		} else {
+			format!("{line}")
+		}
 	};
 
-	format!("{line}")
+	match model.mode {
+		Mode::StatusLine => {
+			render(sample.render_context_with(divider, model.nerd_font, model.five, model.seven))
+				.split('\n')
+				.map(str::to_owned)
+				.collect()
+		}
+		Mode::Subagent => (0..sample.tasks.len())
+			.filter_map(|i| {
+				sample.task_context_with(i, divider, model.nerd_font, model.five, model.seven)
+			})
+			.map(render)
+			.collect(),
+	}
 }
 
-#[must_use]
-pub fn preview_highlighted(model: &EditorModel, sample: &SampleData) -> String {
-	if !matches!(model.focus, Focus::List | Focus::Options) {
-		return preview_line(model, sample);
-	}
-
-	let divider = model
-		.divider
-		.as_deref()
-		.unwrap_or(statusline_core::constants::DIVIDER);
-	let ctx = sample.render_context_with(divider, model.nerd_font, model.five, model.seven);
-
-	let segs: Vec<SegmentConfig> = model
-		.rows
-		.iter()
-		.map(|r| {
-			let mut config = r.config.clone();
-			config.options_mut().enabled = r.enabled;
-			config
-		})
-		.collect();
-	let line = SegmentLine {
-		segments: &segs,
-		ctx,
-	};
-
+fn highlighted_line(model: &EditorModel, line: &SegmentLine<'_>) -> String {
 	let brand = crate::theme::sgr_fg(crate::theme::BRAND_CT);
 	let mut out = String::new();
-
 	let mut after_break = true;
 	for (idx, output, kind) in &line.parts_with_indices() {
 		let is_break = *kind == PartKind::Newline;
@@ -168,7 +174,16 @@ fn segment_example(model: &EditorModel, sample: &SampleData, config: &SegmentCon
 		.divider
 		.as_deref()
 		.unwrap_or(statusline_core::constants::DIVIDER);
-	let ctx = sample.render_context_with(divider, model.nerd_font, model.five, model.seven);
+	// Examples come from the first sample task in subagent mode so task segments have something to show.
+	let ctx = match model.mode {
+		Mode::StatusLine => None,
+		Mode::Subagent => {
+			sample.task_context_with(0, divider, model.nerd_font, model.five, model.seven)
+		}
+	}
+	.unwrap_or_else(|| {
+		sample.render_context_with(divider, model.nerd_font, model.five, model.seven)
+	});
 
 	let mut config = config.clone();
 
@@ -230,11 +245,18 @@ impl Body {
 pub fn block(model: &EditorModel, sample: &SampleData, term_rows: usize) -> Vec<RenderRow> {
 	let mut out = Vec::new();
 
+	out.push(RenderRow::new(tabs_row(model), RowKind::Tabs));
+	out.push(RenderRow::blank());
+	let header = 2;
+
 	let body = body_rows(model);
-	let preview = preview_highlighted(model, sample);
-	let preview_rows: Vec<&str> = preview.split('\n').collect();
+	let preview_rows = preview_rows(
+		model,
+		sample,
+		matches!(model.focus, Focus::List | Focus::Options),
+	);
 	// Every extra preview row is one fewer list row, otherwise the preview falls off the screen.
-	let extra_preview_rows = preview_rows.len() - 1;
+	let extra_preview_rows = preview_rows.len().saturating_sub(1);
 	let mut page = page_size(term_rows)
 		.saturating_sub(extra_preview_rows)
 		.max(1)
@@ -242,8 +264,8 @@ pub fn block(model: &EditorModel, sample: &SampleData, term_rows: usize) -> Vec<
 	let footer = 6 + extra_preview_rows;
 	let markers = if body.len() > page { 2 } else { 0 };
 
-	if page + markers + footer > term_rows {
-		page = term_rows.saturating_sub(markers + footer).max(1);
+	if page + markers + footer + header > term_rows {
+		page = term_rows.saturating_sub(markers + footer + header).max(1);
 	}
 
 	let cursor_idx = body
@@ -282,7 +304,7 @@ pub fn block(model: &EditorModel, sample: &SampleData, term_rows: usize) -> Vec<
 	}
 
 	out.push(RenderRow::blank());
-	out.push(RenderRow::new(help_line(model.focus), RowKind::Help));
+	out.push(RenderRow::new(help_line(model), RowKind::Help));
 	out.push(RenderRow::blank());
 	out.push(RenderRow::new("Preview", RowKind::PreviewLabel));
 	out.push(RenderRow::new(String::new(), RowKind::Border));
@@ -464,7 +486,7 @@ fn picker_body(model: &EditorModel) -> Vec<Body> {
 		model.picker.query.value()
 	)));
 
-	let results = picker::filtered(model.picker.query.value());
+	let results = picker::filtered_for(model.picker.query.value(), model.mode);
 	let mut last_category = None;
 
 	for (i, m) in results.iter().enumerate() {
@@ -526,19 +548,59 @@ fn segment_id(ty: &SegmentType) -> &'static str {
 }
 
 #[must_use]
-pub fn help_line(focus: Focus) -> &'static str {
-	match focus {
+pub fn help_line(model: &EditorModel) -> String {
+	match model.focus {
 		Focus::List => {
-			"space on/off \u{b7} shift + \u{2191}\u{2193} reorder \u{b7} \u{2192} options \u{b7} a add \u{b7} r replace \u{b7} d divider \u{b7} n newline \u{b7} x remove \u{b7} g global \u{b7} s save \u{b7} q quit"
+			let mut line = format!(
+				"space on/off \u{b7} shift + \u{2191}\u{2193} reorder \u{b7} \u{2192} options \u{b7} a add \u{b7} r replace \u{b7} d divider{} \u{b7} x remove \u{b7} g global \u{b7} tab {} \u{b7} s save \u{b7} q quit",
+				if model.mode == Mode::StatusLine {
+					" \u{b7} n newline"
+				} else {
+					""
+				},
+				model.mode.other().label().to_ascii_lowercase()
+			);
+			if model.mode == Mode::Subagent && !model.subagent_installed {
+				line.push_str(" \u{b7} i install");
+			}
+			line
 		}
 		Focus::Options => {
-			"\u{2191}\u{2193} field \u{b7} space/\u{2192} change \u{b7} \u{21b5} edit \u{b7} \u{2190} back"
+			"\u{2191}\u{2193} field \u{b7} space/\u{2192} change \u{b7} \u{21b5} edit \u{b7} \u{2190} back".to_owned()
 		}
 		Focus::Picker => {
-			"type to filter \u{b7} \u{2191}\u{2193} select \u{b7} \u{21b5} add \u{b7} esc cancel"
+			"type to filter \u{b7} \u{2191}\u{2193} select \u{b7} \u{21b5} add \u{b7} esc cancel".to_owned()
 		}
-		Focus::Global => "\u{2191}\u{2193} field \u{b7} \u{21b5} edit \u{b7} \u{2190} back",
+		Focus::Global => "\u{2191}\u{2193} field \u{b7} \u{21b5} edit \u{b7} \u{2190} back".to_owned(),
 	}
+}
+
+/// The tab strip: the active layout in brand colour, the other dimmed, plus an install hint for a
+/// subagent line Claude Code is not wired to yet.
+fn tabs_row(model: &EditorModel) -> String {
+	let brand = crate::theme::sgr_fg(crate::theme::BRAND_CT);
+	let dim = crate::theme::sgr_fg(crate::theme::DIM_CT);
+	let warn = crate::theme::sgr_fg(crate::theme::YELLOW_CT);
+	const RESET: &str = "\u{1b}[0m";
+	let mut out = String::new();
+	for mode in [Mode::StatusLine, Mode::Subagent] {
+		if mode == model.mode {
+			out.push_str(&format!("{brand}\u{1b}[1m {} {RESET}", mode.label()));
+		} else {
+			out.push_str(&format!("{dim} {} {RESET}", mode.label()));
+		}
+		out.push(' ');
+	}
+	if !model.subagent_installed {
+		out.push_str(&format!(
+			"{warn}(subagent line not installed: press i on its tab){RESET}"
+		));
+	}
+	if let Some(notice) = &model.notice {
+		out.push_str(&format!(" {warn}{notice}{RESET}"));
+	}
+
+	out
 }
 
 #[cfg(test)]
@@ -546,6 +608,15 @@ mod tests {
 	use super::*;
 	use crate::model::{EditorModel, Key, Row};
 	use statusline_core::segment::{SegmentConfig, SegmentType};
+
+	fn preview_highlighted(model: &EditorModel, sample: &SampleData) -> String {
+		let highlight = matches!(model.focus, Focus::List | Focus::Options);
+		preview_rows(model, sample, highlight).join("\n")
+	}
+
+	fn preview_line(model: &EditorModel, sample: &SampleData) -> String {
+		preview_rows(model, sample, false).join("\n")
+	}
 
 	fn strip_ansi(s: &str) -> String {
 		String::from_utf8(strip_ansi_escapes::strip(s.as_bytes())).expect("valid utf8")
@@ -655,6 +726,58 @@ mod tests {
 	}
 
 	#[test]
+	fn block_starts_with_a_tabs_row_naming_both_modes() {
+		let m = model(&[SegmentType::Model]);
+		let rows = block(&m, &SampleData::representative(), 40);
+		assert_eq!(rows[0].kind, RowKind::Tabs);
+		let text = strip_ansi(&rows[0].text);
+		assert!(
+			text.contains("Status line") && text.contains("Subagent"),
+			"{text}"
+		);
+	}
+
+	#[test]
+	fn tabs_row_flags_an_uninstalled_subagent_line() {
+		let mut m = model(&[SegmentType::Model]);
+		m.apply(Key::NextTab);
+		let sample = SampleData::representative();
+		let text = strip_ansi(&block(&m, &sample, 40)[0].text);
+		assert!(text.contains("not installed"), "{text}");
+		m.subagent_installed = true;
+		let text = strip_ansi(&block(&m, &sample, 40)[0].text);
+		assert!(!text.contains("not installed"), "{text}");
+	}
+
+	#[test]
+	fn subagent_preview_has_one_row_per_sample_task() {
+		let mut m = model(&[SegmentType::Model]);
+		m.apply(Key::NextTab);
+		let sample = SampleData::representative();
+		let rows = block(&m, &sample, 40);
+		let previews = rows.iter().filter(|r| r.kind == RowKind::Preview).count();
+		assert_eq!(previews, sample.tasks.len());
+	}
+
+	#[test]
+	fn picker_in_subagent_mode_lists_only_per_task_segments() {
+		let mut m = model(&[SegmentType::Model]);
+		m.apply(Key::NextTab);
+		m.apply(Key::Add);
+		let rows = block(&m, &SampleData::representative(), 200);
+		let text: Vec<String> = rows.iter().map(|r| strip_ansi(&r.text)).collect();
+		let text = text.join("\n");
+		assert!(
+			text.contains("task_name") && text.contains("model"),
+			"{text}"
+		);
+		assert!(
+			!text.contains("five_hour") && !text.contains("git_branch"),
+			"{text}"
+		);
+	}
+
+	#[test]
 	fn preview_reflects_enabled_and_order() {
 		let sample = SampleData::representative();
 		let mut m = model(&[
@@ -760,10 +883,10 @@ mod tests {
 
 	#[test]
 	fn page_size_floors() {
-		assert_eq!(page_size(24), 16);
+		assert_eq!(page_size(24), 14);
 		assert_eq!(page_size(12), 4);
 		assert_eq!(page_size(3), 4);
-		assert_eq!(page_size(50), 42);
+		assert_eq!(page_size(50), 40);
 	}
 
 	#[test]
@@ -788,7 +911,7 @@ mod tests {
 			page_size(term_rows),
 			"body window must equal page_size(term_rows), proving a single chrome subtraction"
 		);
-		assert_eq!(body_shown, 16);
+		assert_eq!(body_shown, 14);
 	}
 
 	#[test]
@@ -831,10 +954,11 @@ mod tests {
 				.any(|r| r.kind == RowKind::Help && r.text.contains("save")),
 			"help line present in the footer"
 		);
+		assert_eq!(block[0].kind, RowKind::Tabs);
 		assert!(
-			matches!(block[0].kind, RowKind::Normal | RowKind::Cursor),
-			"body leads the block: {:?}",
-			block[0].kind
+			matches!(block[2].kind, RowKind::Normal | RowKind::Cursor),
+			"body follows the tab strip: {:?}",
+			block[2].kind
 		);
 	}
 

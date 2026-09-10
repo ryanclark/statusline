@@ -122,6 +122,8 @@ statusline configure
 
 This opens an interactive editor with a live preview to add, remove, reorder and toggle segments and edit their options, writing the result to `~/.statusline/settings.json` (existing keys are preserved). Key hints: ↑↓ move, ⇧↑/⇧↓ reorder, space toggle, → options, `a` add, `s` save, `q` quit.
 
+Press `Tab` to switch between the status line and the subagent layout. The subagent tab shows one preview row per sample task, and offers `i` to wire up `subagentStatusLine` when Claude Code does not have it yet.
+
 ### Available segments
 
 #### Context window

@@ -12,6 +12,8 @@ use crate::usage::{PrepaidCredits, UsageError, UsageResponse};
 pub struct SampleData {
 	pub input: InputData,
 	pub tasks: Vec<Task>,
+	/// Each task viewed as a status line input, borrowed by [`Self::task_context`].
+	pub task_inputs: Vec<InputData>,
 	pub git: GitCache,
 	pub usage: Result<UsageResponse, UsageError>,
 	pub credits: Result<PrepaidCredits, UsageError>,
@@ -156,24 +158,41 @@ impl SampleData {
 		};
 
 		let task_started = (chrono::Utc::now().timestamp() - 95) * 1000; // -1m35s, in millis
-		let tasks = vec![Task {
-			id: "task-1".to_owned(),
-			name: "security-reviewer".to_owned(),
-			kind: "agent".to_owned(),
-			status: "running".to_owned(),
-			description: "Review the auth flow for injection risks".to_owned(),
-			label: "security-reviewer".to_owned(),
-			start_time: Some(task_started),
-			model: "claude-opus-5".to_owned(),
-			effort: Some(Effort::Level("high".to_owned())),
-			context_window_size: Some(Tokens::from(200_000)),
-			token_count: Some(Tokens::from(45_321)),
-			cwd: "/home/user/project".to_owned(),
-		}];
+		let tasks = vec![
+			Task {
+				id: "task-1".to_owned(),
+				name: "security-reviewer".to_owned(),
+				kind: "agent".to_owned(),
+				status: "running".to_owned(),
+				description: "Review the auth flow for injection risks".to_owned(),
+				label: "security-reviewer".to_owned(),
+				start_time: Some(task_started),
+				model: "claude-opus-5".to_owned(),
+				effort: Some(Effort::Level("high".to_owned())),
+				context_window_size: Some(Tokens::from(200_000)),
+				token_count: Some(Tokens::from(45_321)),
+				cwd: "/home/user/project".to_owned(),
+			},
+			Task {
+				id: "task-2".to_owned(),
+				name: "Explore".to_owned(),
+				kind: "agent".to_owned(),
+				status: "completed".to_owned(),
+				description: "Find call sites of parse_color".to_owned(),
+				start_time: Some(task_started - 40_000),
+				model: "claude-sonnet-5".to_owned(),
+				context_window_size: Some(Tokens::from(200_000)),
+				token_count: Some(Tokens::from(8_000)),
+				cwd: "/home/user/project".to_owned(),
+				..Task::default()
+			},
+		];
+		let task_inputs = tasks.iter().map(Task::to_input).collect();
 
 		Self {
 			input,
 			tasks,
+			task_inputs,
 			git,
 			usage: Ok(usage),
 			credits: Ok(credits),
@@ -186,6 +205,41 @@ impl SampleData {
 	#[must_use]
 	pub fn render_context(&self) -> RenderContext<'_> {
 		self.render_context_with(&self.divider, self.nerd_font, 70.0.into(), 100.0.into())
+	}
+
+	/// A render context for sample task `index`, or `None` past the last task.
+	#[must_use]
+	pub fn task_context(&self, index: usize) -> Option<RenderContext<'_>> {
+		self.task_context_with(
+			index,
+			&self.divider,
+			self.nerd_font,
+			70.0.into(),
+			100.0.into(),
+		)
+	}
+
+	#[must_use]
+	pub fn task_context_with<'a>(
+		&'a self,
+		index: usize,
+		divider: &'a str,
+		nerd_font: bool,
+		five_threshold: Percentage,
+		seven_threshold: Percentage,
+	) -> Option<RenderContext<'a>> {
+		Some(RenderContext {
+			input: self.task_inputs.get(index)?,
+			usage: None,
+			credits: None,
+			git: None,
+			five_threshold,
+			seven_threshold,
+			divider,
+			nerd_font,
+			account: None,
+			task: self.tasks.get(index),
+		})
 	}
 
 	#[must_use]
@@ -215,7 +269,7 @@ impl SampleData {
 mod tests {
 	use super::*;
 	use crate::catalog::catalog;
-	use crate::segment::{SegmentConfig, render_segment};
+	use crate::segment::{SegmentConfig, SegmentType, render_segment};
 
 	#[test]
 	fn sample_renders_every_segment() {
@@ -231,6 +285,26 @@ mod tests {
 				m.id
 			);
 		}
+	}
+
+	#[test]
+	fn every_sample_task_renders_the_task_segments() {
+		let data = SampleData::representative();
+		assert!(
+			data.tasks.len() >= 2,
+			"the subagent preview should show more than one row"
+		);
+		for i in 0..data.tasks.len() {
+			let ctx = data.task_context(i).unwrap();
+			let name = render_segment(&SegmentConfig::Simple(SegmentType::TaskName), &ctx).unwrap();
+			assert_eq!(
+				String::from_utf8(strip_ansi_escapes::strip(&name)).unwrap(),
+				data.tasks[i].name
+			);
+			let model = render_segment(&SegmentConfig::Simple(SegmentType::Model), &ctx);
+			assert_eq!(model.is_some(), !data.tasks[i].model.is_empty());
+		}
+		assert!(data.task_context(data.tasks.len()).is_none());
 	}
 
 	#[test]

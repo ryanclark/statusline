@@ -9,9 +9,11 @@ use crossterm::style::{
 };
 use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode, size};
 use crossterm::{execute, queue};
+use statusline_core::claude_settings::{self, Entry, Outcome};
 use statusline_core::sample::SampleData;
 use statusline_core::settings::Settings;
 use std::io::Write;
+use std::path::Path;
 
 struct TermGuard;
 
@@ -79,6 +81,8 @@ fn map_key(ev: KeyEvent, focus: Focus, editing: bool) -> Option<model::Key> {
 		KeyCode::Char('r') if letters_are_commands => Key::Replace,
 		KeyCode::Char('d') if letters_are_commands => Key::AddDivider,
 		KeyCode::Char('n') if letters_are_commands => Key::AddNewline,
+		KeyCode::Char('i') if letters_are_commands => Key::Install,
+		KeyCode::Tab if focus == Focus::List => Key::NextTab,
 		KeyCode::Char('x') if letters_are_commands => Key::Remove,
 		KeyCode::Char('g') if letters_are_commands => Key::Global,
 		KeyCode::Char('s') if letters_are_commands => Key::Save,
@@ -201,7 +205,7 @@ fn paint_row(
 	color: bool,
 ) -> Result<(), ConfigureError> {
 	match row.kind {
-		RowKind::Preview => {
+		RowKind::Preview | RowKind::Tabs => {
 			queue!(out, Print(visible_truncate(&row.text, width)))?;
 		}
 		RowKind::Blank => {}
@@ -387,9 +391,12 @@ fn confirm_discard(out: &mut impl Write, color: bool) -> Result<bool, ConfigureE
 pub(crate) fn run_editor(
 	settings: &Settings,
 	sample: &SampleData,
+	claude_settings_path: Option<&Path>,
 ) -> Result<Option<Settings>, ConfigureError> {
 	require_tty()?;
 	let mut model = EditorModel::from_settings(settings);
+	model.subagent_installed =
+		claude_settings_path.is_some_and(|p| claude_settings::is_configured(p, Entry::Subagent));
 	let color = colors_enabled();
 	let _guard = TermGuard::enter()?;
 	let mut out = std::io::stdout();
@@ -435,8 +442,28 @@ pub(crate) fn run_editor(
 			Effect::Redraw | Effect::OpenPicker => {
 				draw(&mut out, &model, sample, color)?;
 			}
+			Effect::InstallSubagent => {
+				model.notice = Some(install_subagent(&mut model, claude_settings_path));
+				draw(&mut out, &model, sample, color)?;
+			}
 			Effect::None => {}
 		}
+	}
+}
+
+fn install_subagent(model: &mut EditorModel, path: Option<&Path>) -> String {
+	let Some(path) = path else {
+		return "no Claude Code settings path to install into".to_owned();
+	};
+	match claude_settings::install_entry(path, Entry::Subagent) {
+		Ok(Outcome::Written | Outcome::Kept) => {
+			model.subagent_installed = true;
+			"subagent status line installed".to_owned()
+		}
+		Ok(Outcome::Skipped) => {
+			"settings.json already has a different subagentStatusLine".to_owned()
+		}
+		Err(e) => format!("install failed: {e}"),
 	}
 }
 
@@ -591,6 +618,27 @@ mod tests {
 	}
 
 	#[test]
+	fn tab_switches_layouts_in_list_focus_only() {
+		assert_eq!(
+			map_key(ev(KeyCode::Tab), Focus::List, false),
+			Some(model::Key::NextTab)
+		);
+		assert_eq!(map_key(ev(KeyCode::Tab), Focus::Picker, false), None);
+	}
+
+	#[test]
+	fn i_installs_in_list_but_is_text_in_picker() {
+		assert_eq!(
+			map_key(ev(KeyCode::Char('i')), Focus::List, false),
+			Some(model::Key::Install)
+		);
+		assert_eq!(
+			map_key(ev(KeyCode::Char('i')), Focus::Picker, false),
+			Some(model::Key::Char('i'))
+		);
+	}
+
+	#[test]
 	fn list_letters_are_commands() {
 		assert_eq!(
 			map_key(ev(KeyCode::Char('a')), Focus::List, false),
@@ -682,7 +730,7 @@ mod tests {
 
 	#[test]
 	fn unknown_keys_are_ignored() {
-		assert_eq!(map_key(ev(KeyCode::Tab), Focus::List, false), None);
+		assert_eq!(map_key(ev(KeyCode::Insert), Focus::List, false), None);
 		assert_eq!(map_key(ev(KeyCode::F(1)), Focus::List, false), None);
 	}
 

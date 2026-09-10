@@ -119,6 +119,9 @@ fn main() {
 			match statusline_configure::run(statusline_configure::Options {
 				settings_path: path,
 				sample: None,
+				claude_settings_path: util::home_dir()
+					.ok()
+					.map(|h| h.join(".claude").join("settings.json")),
 			}) {
 				Ok(statusline_configure::Outcome::Saved(p)) => {
 					println!("{} {}", "saved".green().bold(), p.display());
