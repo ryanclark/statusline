@@ -41,6 +41,10 @@ enum Commands {
 
 		#[arg(short, default_value_t = settings::DEFAULT_SEVEN_DAY_RESET.into(), value_name = "N")]
 		seven_day_reset_threshold: Percentage,
+
+		/// Also wire Claude Code's subagentStatusLine to `statusline subagent`.
+		#[arg(long)]
+		subagent: bool,
 	},
 	Profiles {
 		#[arg(short, long)]
@@ -69,8 +73,13 @@ fn main() {
 		Some(Commands::Install {
 			five_hour_reset_threshold,
 			seven_day_reset_threshold,
+			subagent,
 		}) => {
-			if let Err(e) = install(five_hour_reset_threshold, seven_day_reset_threshold) {
+			if let Err(e) = install(
+				five_hour_reset_threshold,
+				seven_day_reset_threshold,
+				subagent,
+			) {
 				eprintln!("{} {e:?}", "Installation failed:".red().bold());
 			}
 		}
@@ -256,5 +265,16 @@ fn main() {
 				print!("{line}");
 			}
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn cli_definition_is_consistent() {
+		use clap::CommandFactory as _;
+		Cli::command().debug_assert();
 	}
 }

@@ -68,7 +68,7 @@ just install
 statusline install
 ```
 
-This saves default settings and wires up Claude Code's `settings.json` to call `statusline`. The organization shown in the `extra_usage` segment is read from Claude Code's own `~/.claude.json` at runtime, so it always matches the currently-active account.
+This saves default settings and wires up Claude Code's `settings.json` to call `statusline`. Pass `--subagent` to also wire the agent panel rows to `statusline subagent`; without the flag, an interactive install offers to add it when it is not configured yet. The organization shown in the `extra_usage` segment is read from Claude Code's own `~/.claude.json` at runtime, so it always matches the currently-active account.
 
 ### Keychain access (API segments only)
 
@@ -330,14 +330,14 @@ If you don't include `extra_usage`, `fable_usage`, or `credits` in your segments
 ## Subagent status line
 
 Claude Code can also hand the agent panel's rows to a command through `subagentStatusLine` in
-`~/.claude/settings.json`. `statusline subagent` reads the task list on stdin and prints one row per
-task, built from the `subagent_segments` list in `~/.statusline/settings.json`:
+`~/.claude/settings.json`. `statusline install --subagent` wires it up; by hand, the entry is:
 
 ```json
 "subagentStatusLine": {"type": "command", "command": "statusline subagent"}
 ```
 
-The default layout is `task_name`, `task_status`, `divider`, `model`, `task_tokens`, `divider`,
+`statusline subagent` reads the task list on stdin and prints one row per task, built from the
+`subagent_segments` list in `~/.statusline/settings.json`. The default layout is `task_name`, `task_status`, `divider`, `model`, `task_tokens`, `divider`,
 `task_description`. Every task carries its own model, effort, cwd, and token counts, so `model`,
 `model_id`, `effort`, `cwd`, `context_percentage`, `context_window_size`, and `total_input_tokens`
 work per task next to the task segments below. A task whose row renders empty keeps Claude Code's
