@@ -988,6 +988,7 @@ version = "1.1.0"
 dependencies = [
  "aes",
  "cbc",
+ "chrono",
  "clap",
  "eyre",
  "owo-colors",

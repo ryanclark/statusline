@@ -107,9 +107,10 @@ pub struct GlobalState {
 	pub seven: LineEdit,
 	pub nerd_font: bool,
 	pub grid: bool,
+	pub capture_snapshots: bool,
 }
 
-const GLOBAL_FIELDS: usize = 5;
+const GLOBAL_FIELDS: usize = 6;
 
 pub struct EditorModel {
 	pub mode: Mode,
@@ -129,6 +130,7 @@ pub struct EditorModel {
 	pub nerd_font: bool,
 	/// Whether `statusline subagent` lays its rows out as aligned columns.
 	pub subagent_grid: bool,
+	pub capture_snapshots: bool,
 	pub five: Percentage,
 	pub seven: Percentage,
 }
@@ -184,6 +186,7 @@ impl EditorModel {
 			divider: s.divider.clone(),
 			nerd_font: s.nerd_font,
 			subagent_grid: s.subagent_grid,
+			capture_snapshots: s.capture_snapshots,
 			five: s.five_hour_reset_threshold,
 			seven: s.seven_day_reset_threshold,
 		}
@@ -219,6 +222,7 @@ impl EditorModel {
 			divider: self.divider.clone(),
 			nerd_font: self.nerd_font,
 			subagent_grid: self.subagent_grid,
+			capture_snapshots: self.capture_snapshots,
 			five_hour_reset_threshold: self.five,
 			seven_day_reset_threshold: self.seven,
 			..base.clone()
@@ -748,6 +752,7 @@ impl EditorModel {
 			seven: LineEdit::with(&format_threshold(self.seven)),
 			nerd_font: self.nerd_font,
 			grid: self.subagent_grid,
+			capture_snapshots: self.capture_snapshots,
 		};
 		self.focus = Focus::Global;
 	}
@@ -775,6 +780,11 @@ impl EditorModel {
 			}
 			Key::Toggle | Key::Char(' ') | Key::Left | Key::Right if self.global.field == 4 => {
 				self.global.grid ^= true;
+
+				Effect::Redraw
+			}
+			Key::Toggle | Key::Char(' ') | Key::Left | Key::Right if self.global.field == 5 => {
+				self.global.capture_snapshots ^= true;
 
 				Effect::Redraw
 			}
@@ -842,6 +852,11 @@ impl EditorModel {
 
 		if self.global.grid != self.subagent_grid {
 			self.subagent_grid = self.global.grid;
+			self.dirty = true;
+		}
+
+		if self.global.capture_snapshots != self.capture_snapshots {
+			self.capture_snapshots = self.global.capture_snapshots;
 			self.dirty = true;
 		}
 
@@ -1274,10 +1289,10 @@ mod tests {
 	}
 
 	#[test]
-	fn global_down_stops_at_the_grid_field() {
+	fn global_down_reaches_the_grid_field() {
 		let mut m = model(&[SegmentType::Model]);
 		m.apply(Key::Global);
-		for _ in 0..6 {
+		for _ in 0..4 {
 			m.apply(Key::Down);
 		}
 		assert_eq!(m.global.field, 4);
@@ -1681,6 +1696,38 @@ mod tests {
 		assert_eq!(out.divider.as_deref(), Some("|"));
 		assert!(out.nerd_font);
 		assert!(m.dirty);
+	}
+
+	#[test]
+	fn global_capture_snapshots_toggle_saves_to_settings() {
+		let mut m = model(&[SegmentType::Model]);
+		m.apply(Key::Global);
+		for _ in 0..GLOBAL_FIELDS {
+			m.apply(Key::Down);
+		}
+		assert_eq!(
+			m.global.field, 5,
+			"capture_snapshots is the last global field"
+		);
+		assert!(!m.global.capture_snapshots);
+		m.apply(Key::Char(' '));
+		assert!(
+			m.global.capture_snapshots,
+			"space should flip the capture_snapshots toggle"
+		);
+		assert!(!m.global.nerd_font, "only the focused toggle flips");
+		m.apply(Key::Back);
+		assert!(m.dirty);
+
+		let out = m.to_settings(&Settings::default());
+		assert!(out.capture_snapshots);
+
+		let mut reopened = EditorModel::from_settings(&out);
+		reopened.apply(Key::Global);
+		assert!(
+			reopened.global.capture_snapshots,
+			"a saved value reloads into the toggle"
+		);
 	}
 
 	#[test]

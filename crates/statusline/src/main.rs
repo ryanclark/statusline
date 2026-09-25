@@ -2,6 +2,7 @@ mod accounts;
 mod browser;
 mod install;
 mod profiles;
+mod session;
 mod subagent;
 mod update;
 mod usage;
@@ -143,6 +144,18 @@ fn main() {
 			profile,
 		}) => usage_cache::run_refresh(&org, browser, profile.as_deref()),
 		None => {
+			let stdin = std::io::stdin();
+			let is_tty = std::io::IsTerminal::is_terminal(&stdin);
+			let mut raw = Vec::new();
+			if !is_tty && let Err(e) = std::io::Read::read_to_end(&mut stdin.lock(), &mut raw) {
+				eprintln!("{} {e}", "failed to read input".red().bold());
+			}
+
+			if let Some(session_id) = session::requested(&raw) {
+				session::print_report(&session_id);
+				return;
+			}
+
 			let settings = match Settings::load() {
 				Ok(s) => s,
 				Err(e) => {
@@ -163,16 +176,17 @@ fn main() {
 				.seven_day_reset_threshold
 				.unwrap_or(settings.seven_day_reset_threshold);
 
-			let stdin = std::io::stdin();
-			let is_tty = std::io::IsTerminal::is_terminal(&stdin);
 			let input = if is_tty {
 				InputData::default()
 			} else {
-				InputData::from_reader(stdin.lock()).unwrap_or_else(|e| {
+				InputData::from_reader(raw.as_slice()).unwrap_or_else(|e| {
 					eprintln!("{} {e}", "failed to parse input".red().bold());
 					InputData::default()
 				})
 			};
+			if settings.capture_snapshots {
+				session::capture(&raw);
+			}
 			let is_fresh = input.context_window.used_percentage == 0.0.into();
 			let update = if is_fresh && !settings.skip_update_check {
 				update::check()

@@ -174,7 +174,7 @@ fn write_cache(reply: &UsageReply) {
 	}
 }
 
-fn cache_path() -> Option<PathBuf> {
+pub fn cache_path() -> Option<PathBuf> {
 	crate::util::app_data_dir()
 		.ok()
 		.map(|d| d.join("usage.json"))

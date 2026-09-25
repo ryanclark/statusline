@@ -34,6 +34,10 @@ pub struct Settings {
 	pub browser: Option<Browser>,
 	#[serde(default)]
 	pub skip_update_check: bool,
+	/// Save each piped-in status line JSON to `sessions/<session_id>.json` so Claude can read its own
+	/// session state by running `statusline`.
+	#[serde(default)]
+	pub capture_snapshots: bool,
 	/// Lay the agent panel rows out as aligned columns instead of one free-form line per task.
 	#[serde(default = "enabled")]
 	pub subagent_grid: bool,
@@ -56,6 +60,7 @@ impl Default for Settings {
 			nerd_font: false,
 			browser: None,
 			skip_update_check: false,
+			capture_snapshots: false,
 			subagent_grid: true,
 			extra: serde_json::Map::default(),
 		}
@@ -163,6 +168,7 @@ mod tests {
 			nerd_font: false,
 			browser: None,
 			skip_update_check: false,
+			capture_snapshots: false,
 			subagent_grid: true,
 			extra: Default::default(),
 		};
@@ -260,6 +266,7 @@ mod tests {
 			nerd_font: false,
 			browser: None,
 			skip_update_check: false,
+			capture_snapshots: false,
 			subagent_grid: true,
 			extra: Default::default(),
 		};
@@ -288,6 +295,31 @@ mod tests {
 		}"#;
 		let loaded: Settings = serde_json::from_str(json).unwrap();
 		assert!(loaded.skip_update_check);
+	}
+
+	#[test]
+	fn settings_capture_snapshots_default_false() {
+		let json = r#"{
+			"five_hour_reset_threshold": 70,
+			"seven_day_reset_threshold": 100
+		}"#;
+		let loaded: Settings = serde_json::from_str(json).unwrap();
+		assert!(!loaded.capture_snapshots);
+	}
+
+	#[test]
+	fn settings_capture_snapshots_explicit_true() {
+		let json = r#"{
+			"five_hour_reset_threshold": 70,
+			"seven_day_reset_threshold": 100,
+			"capture_snapshots": true
+		}"#;
+		let loaded: Settings = serde_json::from_str(json).unwrap();
+		assert!(loaded.capture_snapshots);
+		assert!(
+			!loaded.extra.contains_key("capture_snapshots"),
+			"a known key must not also land in the flattened extras"
+		);
 	}
 
 	#[test]

@@ -580,6 +580,7 @@ fn global_body(model: &EditorModel) -> Vec<Body> {
 		("5h reset at".to_owned(), format!("{}%", g.five.value())),
 		("7d reset at".to_owned(), format!("{}%", g.seven.value())),
 		("subagent_grid".to_owned(), on_off(g.grid)),
+		("capture_snapshots".to_owned(), on_off(g.capture_snapshots)),
 	];
 	let mut out = Vec::with_capacity(fields.len() + 1);
 
@@ -588,7 +589,7 @@ fn global_body(model: &EditorModel) -> Vec<Body> {
 	for (i, (label, value)) in fields.iter().enumerate() {
 		let on = i == g.field;
 		let pointer = if on { '\u{276f}' } else { ' ' };
-		let text = format!("  {pointer} {label:<13} {value}");
+		let text = format!("  {pointer} {label:<17} {value}");
 
 		if on {
 			out.push(Body::cursor_sub(text));
@@ -1133,6 +1134,7 @@ mod tests {
 		let block = block(&m, &SampleData::representative(), 24);
 		let texts: Vec<&str> = block.iter().map(|r| r.text.as_str()).collect();
 		assert!(texts.iter().any(|t| t.contains("nerd_font")));
+		assert!(texts.iter().any(|t| t.contains("capture_snapshots")));
 		assert!(texts.iter().any(|t| t.contains("divider")));
 		assert!(
 			texts.iter().any(|t| t.contains("global options")),

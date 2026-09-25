@@ -8,6 +8,7 @@ repository = "https://github.com/ryanclark/statusline"
 license = "MIT"
 
 [dependencies]
+chrono.workspace = true
 clap.workspace = true
 eyre = "0.6.12"
 owo-colors.workspace = true

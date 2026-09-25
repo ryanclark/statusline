@@ -338,6 +338,18 @@ Set `skip_update_check` in `~/.statusline/settings.json` to suppress the once-a-
 }
 ```
 
+### Letting Claude see its own session
+
+Set `capture_snapshots` in `~/.statusline/settings.json` (or toggle it under `g` in `statusline configure`) to save the JSON Claude Code pipes in on every render to `~/.statusline/sessions/<session_id>.json`. Snapshots untouched for 7 days are deleted when a new session starts.
+
+```json
+{
+  "capture_snapshots": true
+}
+```
+
+When Claude runs `statusline` itself from inside Claude Code (`CLAUDECODE` and `CLAUDE_CODE_SESSION_ID` set, nothing on stdin), it prints a JSON report for that session instead of a status line: model, context window, cost, the 5-hour and 7-day rate limits with reset countdowns, plus the account's claude.ai limits (including Fable), extra usage and credits from the usage cache.
+
 ### Data sources
 
 Most segments read from the JSON that Claude Code pipes via stdin — no external calls needed. The exceptions:
