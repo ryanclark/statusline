@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.1](https://github.com/ryanclark/statusline/compare/v2.2.0...v2.2.1) - 2026-10-07
+
+### Fixed
+
+- address review findings across the plugin work ([#29](https://github.com/ryanclark/statusline/pull/29))
+
 ### Changed
 
 - `cache_last_miss` hides once the last miss is older than its `within` window, 30m by default, on the native
