@@ -18,6 +18,8 @@ pub struct UsageResponse {
 	pub extra_usage: Option<ExtraUsage>,
 	#[serde(default, deserialize_with = "null_as_default")]
 	pub limits: Vec<Limit>,
+	#[serde(default)]
+	pub spend: Option<Spend>,
 }
 
 impl UsageResponse {
@@ -35,6 +37,15 @@ impl UsageResponse {
 	#[must_use]
 	pub fn fable(&self) -> Option<&Limit> {
 		self.model_limit("Fable")
+	}
+
+	/// The credit balance the OAuth usage response carries, which the cookie path fetches separately.
+	#[must_use]
+	pub fn credits(&self) -> Option<PrepaidCredits> {
+		let balance = self.spend.as_ref()?.balance.as_ref()?;
+		Some(PrepaidCredits {
+			amount: balance.as_cents().into(),
+		})
 	}
 }
 
@@ -130,6 +141,34 @@ impl ExtraUsage {
 	}
 }
 
+/// A missing `balance` means the account has no purchasable credit balance.
+#[derive(Debug, Deserialize)]
+pub struct Spend {
+	#[serde(default)]
+	pub balance: Option<Money>,
+}
+
+/// Minor units plus the exponent that scales them, e.g. `{"amount_minor": 3690, "exponent": 2}` is $36.90.
+#[derive(Debug, Deserialize)]
+pub struct Money {
+	#[serde(default)]
+	pub amount_minor: f64,
+	#[serde(default = "cents_exponent")]
+	pub exponent: i32,
+}
+
+fn cents_exponent() -> i32 {
+	2
+}
+
+impl Money {
+	/// The amount in cents, which is what [`Cents`] stores.
+	#[must_use]
+	pub fn as_cents(&self) -> f64 {
+		self.amount_minor * 10f64.powi(2 - self.exponent)
+	}
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PrepaidCredits {
 	pub amount: Cents,
@@ -162,6 +201,30 @@ mod tests {
 
 	fn strip_ansi(s: String) -> String {
 		String::from_utf8(strip_ansi_escapes::strip(s)).unwrap()
+	}
+
+	#[test]
+	fn money_scales_minor_units_to_cents() {
+		let m: Money = serde_json::from_str(r#"{"amount_minor": 3690, "exponent": 2}"#).unwrap();
+		assert!((m.as_cents() - 3690.0).abs() < 1e-6);
+		// A whole-dollar exponent must scale up to cents rather than read as cents directly.
+		let d: Money = serde_json::from_str(r#"{"amount_minor": 50, "exponent": 0}"#).unwrap();
+		assert!((d.as_cents() - 5000.0).abs() < 1e-6);
+	}
+
+	#[test]
+	fn credits_come_from_the_spend_balance() {
+		let with: UsageResponse = serde_json::from_str(
+			r#"{"spend": {"balance": {"amount_minor": 5000, "currency": "USD", "exponent": 2}}}"#,
+		)
+		.unwrap();
+		assert_eq!(with.credits().unwrap().balance().to_string(), "$50");
+
+		let null: UsageResponse = serde_json::from_str(r#"{"spend": {"balance": null}}"#).unwrap();
+		assert!(null.credits().is_none());
+
+		let absent: UsageResponse = serde_json::from_str("{}").unwrap();
+		assert!(absent.credits().is_none());
 	}
 
 	#[test]

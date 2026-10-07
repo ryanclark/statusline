@@ -234,6 +234,23 @@ pub struct ModInfo {
 	pub compaction: Option<CompactionInfo>,
 	#[serde(default)]
 	pub autocompact: Option<AutocompactInfo>,
+	#[serde(default)]
+	pub usage: Option<PluginUsage>,
+}
+
+/// The OAuth usage response the plugin fetched with the session's own login, shared by every open chat.
+#[derive(Debug, Default, Deserialize)]
+pub struct PluginUsage {
+	#[serde(default, deserialize_with = "lenient_i64")]
+	pub fetched_at_ms: Option<i64>,
+	/// Kept as JSON so a response that drifts from the usage types fails those segments, not the whole input.
+	#[serde(default)]
+	pub body: serde_json::Value,
+}
+
+// The time comes from a file every chat writes, so one that is not a whole i64 costs only the staleness check.
+fn lenient_i64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error> {
+	Ok(serde_json::Value::deserialize(d)?.as_i64())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -510,7 +527,7 @@ mod tests {
 				.is_none()
 		);
 		let json = r#"{"mod": {"tools": null, "turn": null, "permission": null, "last_error": null,
-			"todos": null, "agents": null, "compaction": null, "autocompact": null}}"#;
+			"todos": null, "agents": null, "compaction": null, "autocompact": null, "usage": null}}"#;
 		let m = InputData::from_reader(json.as_bytes())
 			.unwrap()
 			.mod_info
@@ -518,7 +535,7 @@ mod tests {
 		assert!(m.tools.is_empty());
 		assert!(m.turn.is_none() && m.permission.is_none() && m.last_error.is_none());
 		assert!(m.todos.is_none() && m.agents.is_none());
-		assert!(m.compaction.is_none() && m.autocompact.is_none());
+		assert!(m.compaction.is_none() && m.autocompact.is_none() && m.usage.is_none());
 		let empty = InputData::from_reader(r#"{"mod": {}}"#.as_bytes())
 			.unwrap()
 			.mod_info
@@ -673,6 +690,33 @@ mod tests {
 			resets_at: 999000,
 		};
 		assert_eq!(period.countdown(now), None);
+	}
+
+	#[test]
+	fn mod_usage_keeps_the_body_as_json_whatever_its_shape() {
+		let json = r#"{"mod": {"usage": {"fetched_at_ms": 1791280000000, "body": {"limits": "drifted"}}}}"#;
+		let usage = InputData::from_reader(json.as_bytes())
+			.unwrap()
+			.mod_info
+			.unwrap()
+			.usage
+			.unwrap();
+		assert_eq!(usage.fetched_at_ms, Some(1_791_280_000_000));
+		assert_eq!(usage.body["limits"], "drifted");
+	}
+
+	#[test]
+	fn a_mod_usage_time_that_is_not_an_i64_drops_only_the_time() {
+		for at in ["1.5", "1e20", "\"soon\""] {
+			let json = format!(
+				r#"{{"model": {{"display_name": "Opus"}}, "mod": {{"usage": {{"fetched_at_ms": {at}, "body": {{}}}}}}}}"#
+			);
+			let input = InputData::from_reader(json.as_bytes()).unwrap();
+			assert_eq!(input.model.display_name, "Opus");
+			let usage = input.mod_info.unwrap().usage.unwrap();
+			assert_eq!(usage.fetched_at_ms, None, "{at}");
+			assert!(usage.body.is_object());
+		}
 	}
 
 	#[test]

@@ -596,6 +596,8 @@ pub struct RenderContext<'a> {
 	pub input: &'a InputData,
 	pub usage: Option<Result<&'a UsageResponse, &'a UsageError>>,
 	pub credits: Option<Result<&'a PrepaidCredits, &'a UsageError>>,
+	/// The usage and credits are old enough that their segments draw dimmed.
+	pub usage_stale: bool,
 	pub git: Option<&'a GitCache>,
 	pub five_threshold: Percentage,
 	pub seven_threshold: Percentage,

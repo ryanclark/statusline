@@ -34,6 +34,11 @@ statusline install --plugin
 The plugin draws the line under the prompt and refreshes it on its own clock, so countdowns tick between turns, and it
 adds the [live activity](#live-activity) segments. Needs Claude Code 2.1.287 or later.
 
+The plugin also fetches your usage with the session's own claude.ai login, about once a minute shared across every open
+chat, so `extra_usage`, `fable_usage` and `credits` need no Chrome cookie or Keychain access. Sessions on an API key or
+a third-party provider, and sessions where Claude Code refuses plugins network access, fall back to the cookie path
+below.
+
 This creates `~/.statusline/settings.json` if it is missing, adds the `ryanclark` marketplace and installs the plugin at
 user scope, pointed at the binary you ran. Pass `--dry-run` to see what would change, and `--claude <PATH>` when
 `claude` is not on your `PATH`. If you installed the plugin with statusline 2.0.0, upgrade and run it again so the
@@ -82,10 +87,12 @@ Claude Code redraws it, and the live activity segments stay empty.
 
 ### Keychain access (API segments only)
 
-If you include `extra_usage`, `fable_usage`, or `credits`, statusline reads your Chrome session cookie to fetch usage
-data from claude.ai. On first run, macOS will prompt you to allow access to "Chrome Safe Storage" in Keychain. Select
-**Always Allow** so it doesn't prompt on every invocation. The organization is read from Claude Code's own
-`~/.claude.json`, so it always matches the active account.
+The plugin fetches usage with the session's login, so this applies to the native `statusLine`, and to plugin sessions on
+an API key or a third-party provider, with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` set, or whose organization's
+policy blocks plugins' network access. If you include `extra_usage`, `fable_usage`, or `credits`, statusline reads your
+Chrome session cookie to fetch usage data from claude.ai. On first run, macOS will prompt you to allow access to "Chrome
+Safe Storage" in Keychain. Select **Always Allow** so it doesn't prompt on every invocation. The organization is read
+from Claude Code's own `~/.claude.json`, so it always matches the active account.
 
 ## Examples
 
@@ -130,7 +137,7 @@ By default:
 - **Context window** — percentage used, input/output token counts
 - **5-hour rate limit** — current utilization with reset countdown when above threshold
 - **7-day rate limit** — same as above
-- **Extra usage** — spend against monthly limit (requires Chrome cookie auth)
+- **Extra usage** — spend against monthly limit (fetched by the plugin, or with Chrome cookie auth)
 
 ## Customising segments
 
@@ -431,10 +438,10 @@ When Claude runs `statusline` itself from inside Claude Code (`CLAUDECODE` and `
 
 Most segments read from the JSON that Claude Code pipes via stdin — no external calls needed. The exceptions:
 
-- `extra_usage`, `fable_usage`, `credits` — call the claude.ai API (requires Chrome session cookie)
+- `extra_usage`, `fable_usage`, `credits` — the plugin fetches them with the session's login. The native `statusLine` calls the claude.ai API with your Chrome session cookie
 - `git_branch`, `git_ahead_behind`, `git_stash` — run git commands in the project directory
 
-If you don't include `extra_usage`, `fable_usage`, or `credits` in your segments, the API call and Chrome cookie auth are skipped entirely.
+If you don't include `extra_usage`, `fable_usage`, or `credits` in your segments, the native `statusLine` skips the API call and Chrome cookie auth entirely. The plugin fetches usage either way.
 
 ## Subagent status line
 

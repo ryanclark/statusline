@@ -1,6 +1,6 @@
 import { mock } from 'claude-code/testing'
 import type { MockClock, TestBody } from 'claude-code/testing'
-import type { AgentInfo, On, SessionUsage } from 'claude-code'
+import type { AgentInfo, HttpInit, HttpResponse, On, SessionAuthorization, SessionUsage } from 'claude-code'
 
 import type { LastUsage, Span } from '../types'
 
@@ -86,6 +86,19 @@ type Host = {
   tool?: { holds?: string; wait?: Promise<void>; result?: (e: { tool: string }) => unknown }
   compact?: { wait?: Promise<void>; result?: { skip: string } }
   system?: () => string
+  // What `$.session.authorize()` answers each time it is asked, null (no claude.ai login) when not given.
+  authorize?: () => SessionAuthorization
+  // The files beneath the plugin. A test holding the same map stands in for another chat reading and writing them.
+  files?: Map<string, string>
+  // The modification time `fs.stat` reports for any of `files`.
+  mtimeMs?: number
+  // Answers `$.http.fetch`, or rejects it with `{ reject }`, the message the engine's own fetch throws.
+  fetch?: (
+    url: string,
+    init: HttpInit | undefined,
+  ) => HttpResponse | { reject: string } | Promise<HttpResponse | { reject: string }>
+  // Paths whose `fs.write` fails, as on a full disk or a read-only home.
+  unwritable?: Set<string>
 }
 
 export const transcript = [{ role: 'user' as const, text: 'Summary of the conversation so far', toolUses: [] }]
@@ -97,6 +110,8 @@ type Seen = {
   runs?: (readonly string[])[]
   // Heartbeat writes and binary runs, in the order the plugin made them.
   events?: string[]
+  fetches?: { url: string; init: HttpInit | undefined }[]
+  authorizes?: number
 }
 
 // Stands in for the engine beneath the plugin: a fixed clock, the session's live figures, and the binary.
@@ -106,8 +121,31 @@ function host(on: On, cfg: Host, seen: Seen = {}): MockClock {
   const clock = mock.clock(on, { now: T0 })
   mock.env(on, { HOME: '/home/me' })
   on('fs.write', (_$, e) => {
+    if (cfg.unwritable?.has(e.path)) {
+      throw new Error(`EROFS: ${e.path}`)
+    }
     seen.events = [...(seen.events ?? []), `write ${e.path} ${e.text}`]
+    cfg.files?.set(e.path, e.text)
     return { value: undefined }
+  })
+  on('fs.read', (_$, e) => {
+    const text = cfg.files?.get(e.path)
+    if (text === undefined) {
+      throw new Error(`ENOENT: ${e.path}`)
+    }
+    return { value: text }
+  })
+  on('session.authorize', () => {
+    seen.authorizes = (seen.authorizes ?? 0) + 1
+    return { value: cfg.authorize?.() ?? null }
+  })
+  on('http.fetch', async (_$, e) => {
+    seen.fetches = [...(seen.fetches ?? []), { url: e.url, init: e.init }]
+    if (!cfg.fetch) {
+      throw new Error(`no network in tests: ${e.url}`)
+    }
+    const res = await cfg.fetch(e.url, e.init)
+    return 'reject' in res ? { deny: res.reject } : { value: res }
   })
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -163,6 +201,10 @@ function host(on: On, cfg: Host, seen: Seen = {}): MockClock {
   on('classic.PostToolUseFailure', () => ({}))
   on('classic.StopFailure', () => ({}))
   on('fs.stat', (_$, e) => {
+    const file = cfg.files?.get(e.path)
+    if (file !== undefined) {
+      return { value: { kind: 'file' as const, size: file.length, mtimeMs: cfg.mtimeMs ?? 0, isLink: false } }
+    }
     if (cfg.realPath === undefined) {
       throw new Error(`ENOENT: ${e.path}`)
     }

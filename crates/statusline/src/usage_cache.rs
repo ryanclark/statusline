@@ -1,5 +1,7 @@
 use crate::usage::{PrepaidCredits, UsageError, UsageResponse, fetch_credits_raw, fetch_usage_raw};
+use serde::Deserialize;
 use statusline_core::browser::Browser;
+use statusline_core::input::PluginUsage;
 use statusline_core::usage_bridge::{ERROR_NOT_LOGGED_IN, UsageReply, UsageRequest};
 use std::fs;
 use std::path::PathBuf;
@@ -7,9 +9,53 @@ use std::time::{Duration, SystemTime};
 
 const REFRESH_TTL: Duration = Duration::from_secs(15);
 const BRIDGE_TIMEOUT: Duration = Duration::from_secs(7);
+// The plugin refetches every minute, so data this old means its fetches are failing or backing off.
+const PLUGIN_STALE_MS: i64 = 5 * 60_000;
+// A little ahead is skew between chats' clock reads. Much more means the clock stepped back since the fetch.
+const PLUGIN_AHEAD_MS: i64 = 60_000;
 
 type UsageResult = Option<Result<UsageResponse, UsageError>>;
 type CreditsResult = Option<Result<PrepaidCredits, UsageError>>;
+
+pub struct Resolved {
+	pub usage: UsageResult,
+	pub credits: CreditsResult,
+	pub stale: bool,
+}
+
+/// The plugin's usage wins whenever it is sent, and then the cookie cache is not read at all. A null body is a login
+/// whose first fetch has not landed, which hides the segments as an empty cookie cache does.
+pub fn resolve(
+	plugin: Option<&PluginUsage>,
+	cookie: impl FnOnce() -> Option<UsageReply>,
+	needs_usage: bool,
+	needs_credits: bool,
+	now_ms: i64,
+) -> Resolved {
+	let Some(plugin) = plugin else {
+		let (usage, credits) = results(cookie().as_ref(), needs_usage, needs_credits);
+		return Resolved {
+			usage,
+			credits,
+			stale: false,
+		};
+	};
+
+	let parsed = (!plugin.body.is_null() && (needs_usage || needs_credits)).then(|| {
+		UsageResponse::deserialize(&plugin.body)
+			.map_err(|e| UsageError::Other(format!("parsing usage: {e}")))
+	});
+	let credits = needs_credits
+		.then(|| parsed.as_ref()?.as_ref().ok()?.credits().map(Ok))
+		.flatten();
+	Resolved {
+		usage: parsed.filter(|_| needs_usage),
+		credits,
+		stale: plugin
+			.fetched_at_ms
+			.is_none_or(|at| now_ms - at > PLUGIN_STALE_MS || at - now_ms > PLUGIN_AHEAD_MS),
+	}
+}
 
 #[must_use]
 pub fn read() -> Option<UsageReply> {
@@ -224,6 +270,164 @@ mod tests {
 
 	fn usage_body() -> String {
 		r#"{"extra_usage":{"monthly_limit":5000,"used_credits":1200}}"#.to_owned()
+	}
+
+	const NOW_MS: i64 = 1_791_280_000_000;
+
+	// Every top-level key the OAuth usage endpoint answers with, with a Fable row among the limits.
+	fn oauth_body() -> serde_json::Value {
+		serde_json::json!({
+			"five_hour": {"utilization": 12.0, "resets_at": "2026-10-06T13:00:00+00:00"},
+			"seven_day": {"utilization": 40.0, "resets_at": "2026-10-10T09:00:00+00:00"},
+			"seven_day_oauth_apps": null,
+			"seven_day_opus": null,
+			"seven_day_sonnet": {"utilization": 3.0, "resets_at": "2026-10-10T09:00:00+00:00"},
+			"extra_usage": {
+				"is_enabled": true,
+				"monthly_limit": 10000,
+				"used_credits": 2500.0,
+				"utilization": 25.0,
+				"currency": "USD",
+				"disabled_reason": null
+			},
+			"limits": [
+				{"kind": "session", "group": "plan", "percent": 12, "resets_at": "2026-10-06T13:00:00+00:00",
+				 "severity": "normal", "is_active": true, "scope": null},
+				{"kind": "weekly_all", "group": "plan", "percent": 40, "resets_at": "2026-10-10T09:00:00+00:00",
+				 "severity": "normal", "is_active": true, "scope": null},
+				{"kind": "weekly_scoped", "group": "plan", "percent": 63, "resets_at": "2026-10-10T09:00:00+00:00",
+				 "severity": "warning", "is_active": true,
+				 "scope": {"model": {"id": null, "display_name": "Fable"}, "surface": null}}
+			],
+			"spend": {
+				"used": {"amount_minor": 3690, "currency": "USD", "exponent": 2},
+				"balance": {"amount_minor": 4210, "currency": "USD", "exponent": 2}
+			}
+		})
+	}
+
+	fn plugin(fetched_at_ms: Option<i64>) -> PluginUsage {
+		PluginUsage {
+			fetched_at_ms,
+			body: oauth_body(),
+		}
+	}
+
+	#[test]
+	fn plugin_usage_feeds_fable_extra_usage_and_credits() {
+		let r = resolve(
+			Some(&plugin(Some(NOW_MS - 30_000))),
+			|| None,
+			true,
+			true,
+			NOW_MS,
+		);
+		let usage = r.usage.unwrap().unwrap();
+		assert_eq!(usage.fable().unwrap().percent, 63.0.into());
+		assert_eq!(
+			usage.extra_usage.unwrap().format(false).unwrap(),
+			"$25/$100"
+		);
+		assert_eq!(r.credits.unwrap().unwrap().balance().to_string(), "$42");
+		assert!(!r.stale);
+	}
+
+	#[test]
+	fn plugin_usage_wins_over_the_cookie_cache_without_reading_it() {
+		let r = resolve(
+			Some(&plugin(Some(NOW_MS))),
+			|| panic!("the cookie cache was read"),
+			true,
+			true,
+			NOW_MS,
+		);
+		assert_eq!(r.credits.unwrap().unwrap().balance().to_string(), "$42");
+
+		let cookie = UsageReply {
+			usage: Some(usage_body()),
+			credits: Some(r#"{"amount":3304}"#.to_owned()),
+			error: None,
+		};
+		let r = resolve(None, || Some(cookie), true, true, NOW_MS);
+		assert_eq!(r.credits.unwrap().unwrap().balance().to_string(), "$33");
+		assert!(r.usage.unwrap().unwrap().fable().is_none());
+		assert!(!r.stale);
+	}
+
+	#[test]
+	fn a_plugin_login_with_no_body_yet_hides_the_segments_without_cookies() {
+		let pending = PluginUsage {
+			fetched_at_ms: None,
+			body: serde_json::Value::Null,
+		};
+		let r = resolve(
+			Some(&pending),
+			|| panic!("the cookie cache was read"),
+			true,
+			true,
+			NOW_MS,
+		);
+		assert!(r.usage.is_none() && r.credits.is_none());
+	}
+
+	#[test]
+	fn plugin_usage_older_than_five_minutes_is_stale() {
+		let fresh = resolve(
+			Some(&plugin(Some(NOW_MS - 300_000))),
+			|| None,
+			true,
+			false,
+			NOW_MS,
+		);
+		assert!(!fresh.stale);
+		let old = resolve(
+			Some(&plugin(Some(NOW_MS - 300_001))),
+			|| None,
+			true,
+			false,
+			NOW_MS,
+		);
+		assert!(old.stale);
+		assert!(resolve(Some(&plugin(None)), || None, true, false, NOW_MS).stale);
+	}
+
+	#[test]
+	fn plugin_usage_dated_ahead_of_the_clock_is_stale() {
+		let skewed = resolve(
+			Some(&plugin(Some(NOW_MS + 5_000))),
+			|| None,
+			true,
+			false,
+			NOW_MS,
+		);
+		assert!(!skewed.stale);
+		let stepped_back = resolve(
+			Some(&plugin(Some(NOW_MS + 2 * 3_600_000))),
+			|| None,
+			true,
+			false,
+			NOW_MS,
+		);
+		assert!(stepped_back.stale);
+	}
+
+	#[test]
+	fn a_plugin_body_that_does_not_parse_fails_only_the_usage_segments() {
+		let odd = PluginUsage {
+			fetched_at_ms: Some(NOW_MS),
+			body: serde_json::json!({"limits": "not a list"}),
+		};
+		let r = resolve(Some(&odd), || None, true, true, NOW_MS);
+		assert!(matches!(r.usage, Some(Err(UsageError::Other(_)))));
+		assert!(r.credits.is_none());
+	}
+
+	#[test]
+	fn plugin_usage_honors_the_needs_flags() {
+		let r = resolve(Some(&plugin(Some(NOW_MS))), || None, false, false, NOW_MS);
+		assert!(r.usage.is_none() && r.credits.is_none());
+		let r = resolve(Some(&plugin(Some(NOW_MS))), || None, false, true, NOW_MS);
+		assert!(r.usage.is_none() && r.credits.is_some());
 	}
 
 	#[test]

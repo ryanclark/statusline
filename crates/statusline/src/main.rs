@@ -312,7 +312,10 @@ fn main() {
 				.any(|s| s.is_extra_usage() || s.is_fable_usage());
 			let needs_credits = segments.iter().any(SegmentConfig::is_credits);
 
-			let resolved = if needs_usage || needs_credits {
+			let plugin_usage = input.mod_info.as_ref().and_then(|m| m.usage.as_ref());
+			let from_cookies = plugin_usage.is_none() && (needs_usage || needs_credits);
+
+			let resolved = if from_cookies {
 				match &identity {
 					Some((_, org_uuid)) => {
 						let browser = account
@@ -330,15 +333,23 @@ fn main() {
 				None
 			};
 
-			let cached = usage_cache::read();
-			let (mut usage_result, credits_result) =
-				usage_cache::results(cached.as_ref(), needs_usage, needs_credits);
+			let usage_cache::Resolved {
+				usage: mut usage_result,
+				credits: credits_result,
+				stale: usage_stale,
+			} = usage_cache::resolve(
+				plugin_usage,
+				usage_cache::read,
+				needs_usage,
+				needs_credits,
+				chrono::Utc::now().timestamp_millis(),
+			);
 
 			match resolved {
 				Some((org_uuid, browser, profile)) => {
 					usage_cache::maybe_spawn_refresh(org_uuid, browser, profile);
 				}
-				None if needs_usage => {
+				None if needs_usage && plugin_usage.is_none() => {
 					let err = usage::UsageError::Other("no active Claude account".to_owned());
 					eprintln!("{}", format_args!("usage error: {err}").color(RED).dimmed());
 					usage_result = Some(Err(err));
@@ -360,6 +371,7 @@ fn main() {
 					input: &input,
 					usage: usage_result.as_ref().map(|r| r.as_ref()),
 					credits: credits_result.as_ref().map(|r| r.as_ref()),
+					usage_stale,
 					git: git_cache.as_ref(),
 					five_threshold: five,
 					seven_threshold: seven,

@@ -2,6 +2,8 @@ use super::{
 	RenderContext, SegmentConfig, SegmentType, account, activity, context, cost, credits, env, git,
 	rate_limit, task,
 };
+use crate::text::plain;
+use owo_colors::OwoColorize;
 
 #[must_use]
 pub fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
@@ -76,6 +78,17 @@ pub fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Optio
 		SegmentType::AutocompactHeadroom => activity::autocompact_headroom(segment, ctx),
 	};
 
+	let from_usage = matches!(
+		segment.segment_type(),
+		SegmentType::FableUsage | SegmentType::ExtraUsage | SegmentType::Credits
+	);
+	let result = if ctx.usage_stale && from_usage {
+		// The segment's own resets would end an outer dim early, so its colours go and the plain text is dimmed.
+		result.map(|s| plain(&s).dimmed().to_string())
+	} else {
+		result
+	};
+
 	result.filter(|s| !s.is_empty())
 }
 
@@ -97,6 +110,7 @@ mod tests {
 			input,
 			usage: None,
 			credits: None,
+			usage_stale: false,
 			git: None,
 			five_threshold: 70.0.into(),
 			seven_threshold: 100.0.into(),
@@ -859,6 +873,43 @@ mod tests {
 		let seg = SegmentConfig::Simple(SegmentType::FableUsage);
 		let output = strip_ansi(&render_segment(&seg, &ctx).unwrap());
 		assert!(output.contains("42%"), "got: {output}");
+	}
+
+	#[test]
+	fn stale_usage_dims_every_span_of_the_usage_segments_only() {
+		let input = default_input();
+		let usage: crate::usage::UsageResponse = serde_json::from_str(
+			r#"{"extra_usage": {"monthly_limit": 10000, "used_credits": 2500},
+				"limits": [{"kind": "weekly_scoped", "percent": 42, "scope": {"model": {"display_name": "Fable"}}}],
+				"spend": {"balance": {"amount_minor": 5000, "exponent": 2}}}"#,
+		)
+		.unwrap();
+		let credits = usage.credits().unwrap();
+		let mut ctx = default_ctx(&input);
+		ctx.usage = Some(Ok(&usage));
+		ctx.credits = Some(Ok(&credits));
+		ctx.usage_stale = true;
+		for ty in [
+			SegmentType::FableUsage,
+			SegmentType::ExtraUsage,
+			SegmentType::Credits,
+		] {
+			let out = render_segment(&SegmentConfig::Simple(ty.clone()), &ctx).unwrap();
+			let spans: Vec<_> = crate::spans::ansi_to_spans(&out)
+				.into_iter()
+				.flatten()
+				.collect();
+			assert!(!spans.is_empty(), "{ty:?} drew nothing");
+			assert!(
+				spans.iter().all(|s| s.style.dim),
+				"{ty:?} not dimmed throughout: {out:?}"
+			);
+		}
+		let divider = render_segment(&SegmentConfig::Simple(SegmentType::Divider), &ctx).unwrap();
+		assert!(
+			!divider.starts_with("\u{1b}[2m"),
+			"only usage segments dim: {divider:?}"
+		);
 	}
 
 	#[test]
