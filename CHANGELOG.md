@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0](https://github.com/ryanclark/statusline/compare/v2.1.0...v2.2.0) - 2026-10-07
+
+### Added
+
+- show waiting subagents as waiting in the agent panel ([#24](https://github.com/ryanclark/statusline/pull/24))
+- add a background_tasks segment ([#25](https://github.com/ryanclark/statusline/pull/25))
+- *(plugin)* draw Claude Code's background task pills in the line ([#26](https://github.com/ryanclark/statusline/pull/26))
+
 ## [2.1.0](https://github.com/ryanclark/statusline/compare/v2.0.1...v2.1.0) - 2026-10-07
 
 ### Added
