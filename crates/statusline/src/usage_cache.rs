@@ -21,7 +21,8 @@ pub struct Resolved {
 	pub stale: bool,
 }
 
-/// The plugin's usage wins whenever it is sent, and then the cookie cache is not read at all.
+/// The plugin's usage wins whenever it is sent, and then the cookie cache is not read at all. A null body is a login
+/// whose first fetch has not landed, which hides the segments as an empty cookie cache does.
 pub fn resolve(
 	plugin: Option<&PluginUsage>,
 	cookie: impl FnOnce() -> Option<UsageReply>,
@@ -38,7 +39,7 @@ pub fn resolve(
 		};
 	};
 
-	let parsed = (needs_usage || needs_credits).then(|| {
+	let parsed = (!plugin.body.is_null() && (needs_usage || needs_credits)).then(|| {
 		UsageResponse::deserialize(&plugin.body)
 			.map_err(|e| UsageError::Other(format!("parsing usage: {e}")))
 	});
@@ -349,6 +350,22 @@ mod tests {
 		assert_eq!(r.credits.unwrap().unwrap().balance().to_string(), "$33");
 		assert!(r.usage.unwrap().unwrap().fable().is_none());
 		assert!(!r.stale);
+	}
+
+	#[test]
+	fn a_plugin_login_with_no_body_yet_hides_the_segments_without_cookies() {
+		let pending = PluginUsage {
+			fetched_at_ms: None,
+			body: serde_json::Value::Null,
+		};
+		let r = resolve(
+			Some(&pending),
+			|| panic!("the cookie cache was read"),
+			true,
+			true,
+			NOW_MS,
+		);
+		assert!(r.usage.is_none() && r.credits.is_none());
 	}
 
 	#[test]

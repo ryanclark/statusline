@@ -37,6 +37,8 @@ const bearer = (handle = 'h1'): (() => SessionAuthorization) => () => ({ handle,
 
 const shared = (files: Map<string, string>): UsageFile => parseUsageFile(files.get(PATH) ?? '') as UsageFile
 
+const EMPTY = { fetched_at_ms: null, body: null }
+
 const file = (f: Partial<UsageFile>) =>
   JSON.stringify({ fetched_at_ms: null, body: null, backoff_until_ms: 0, backoff_ms: 0, ...f })
 
@@ -89,6 +91,8 @@ describe('usage', () => {
     })
     expect(seen.fetches).toHaveLength(1)
     expect(fetchDue(shared(files), clock.now())).toBe(false)
+    // The binary is told the plugin owns usage before a body lands, so it never reads the browser's cookies meanwhile.
+    expect(modOf(seen).usage).toEqual(EMPTY)
     await clock.advance(5000)
     expect(seen.fetches).toHaveLength(1)
     held.open()
@@ -101,9 +105,18 @@ describe('usage', () => {
     const { seen, clock } = await boot($, on, { authorize: bearer(), files, fetch: () => reply(500, 'oops') })
     await clock.advance(MIN - 1000)
     expect(seen.fetches).toHaveLength(1)
-    expect(modOf(seen).usage).toBeUndefined()
+    expect(modOf(seen).usage).toEqual(EMPTY)
     await clock.advance(1000)
     expect(seen.fetches).toHaveLength(2)
+  })
+
+  test('a torn read keeps showing the last body this chat read', async ($, on) => {
+    const files = new Map([[PATH, file({ fetched_at_ms: T0, body: BODY })]])
+    const { seen, clock } = await boot($, on, { authorize: bearer(), files, mtimeMs: T0, fetch: () => reply(200) })
+    files.set(PATH, '{"fetched_at_ms": 17912')
+    await clock.advance(1000)
+    expect(seen.fetches ?? []).toHaveLength(0)
+    expect(modOf(seen).usage).toEqual({ fetched_at_ms: T0, body: BODY })
   })
 
   test(

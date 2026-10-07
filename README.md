@@ -135,7 +135,7 @@ By default:
 - **Context window** — percentage used, input/output token counts
 - **5-hour rate limit** — current utilization with reset countdown when above threshold
 - **7-day rate limit** — same as above
-- **Extra usage** — spend against monthly limit (requires Chrome cookie auth)
+- **Extra usage** — spend against monthly limit (fetched by the plugin, or with Chrome cookie auth)
 
 ## Customising segments
 
@@ -436,10 +436,10 @@ When Claude runs `statusline` itself from inside Claude Code (`CLAUDECODE` and `
 
 Most segments read from the JSON that Claude Code pipes via stdin — no external calls needed. The exceptions:
 
-- `extra_usage`, `fable_usage`, `credits` — call the claude.ai API (requires Chrome session cookie)
+- `extra_usage`, `fable_usage`, `credits` — the plugin fetches them with the session's login. The native `statusLine` calls the claude.ai API with your Chrome session cookie
 - `git_branch`, `git_ahead_behind`, `git_stash` — run git commands in the project directory
 
-If you don't include `extra_usage`, `fable_usage`, or `credits` in your segments, the API call and Chrome cookie auth are skipped entirely.
+If you don't include `extra_usage`, `fable_usage`, or `credits` in your segments, the native `statusLine` skips the API call and Chrome cookie auth entirely. The plugin fetches usage either way.
 
 ## Subagent status line
 

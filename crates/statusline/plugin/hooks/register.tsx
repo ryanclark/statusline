@@ -261,7 +261,10 @@ async function pollUsage($: EngineInterface, now: number): Promise<UsageInput | 
         memo.polling = false
       })
   }
-  return shown(file)
+  if (file) {
+    memo.last = shown(file)
+  }
+  return memo.last
 }
 
 async function run($: EngineInterface): Promise<Rendered> {

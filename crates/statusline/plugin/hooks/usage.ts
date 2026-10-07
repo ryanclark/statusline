@@ -20,12 +20,26 @@ export type UsageFile = {
   backoff_ms: number
 }
 
-export type UsageInput = { fetched_at_ms: number; body: Json }
+// Sent whenever this chat holds a login, empty until a body lands, so the binary never falls back to cookies for it.
+export type UsageInput = { fetched_at_ms: number | null; body: Json | null }
 
-// One chat's own share. The handle is minted once and reused, since each plugin holds at most four.
-export type UsageMemo = { handle: string | null; off: boolean; polling: boolean; reauthorized: boolean }
+// One chat's own share. The handle is minted once and reused, since each plugin holds at most four. `last` stands in
+// for a torn read.
+export type UsageMemo = {
+  handle: string | null
+  off: boolean
+  polling: boolean
+  reauthorized: boolean
+  last: UsageInput
+}
 
-export const newUsageMemo = (): UsageMemo => ({ handle: null, off: false, polling: false, reauthorized: false })
+export const newUsageMemo = (): UsageMemo => ({
+  handle: null,
+  off: false,
+  polling: false,
+  reauthorized: false,
+  last: { fetched_at_ms: null, body: null },
+})
 
 export const EMPTY_USAGE: UsageFile = { fetched_at_ms: null, body: null, backoff_until_ms: 0, backoff_ms: 0 }
 
@@ -86,5 +100,4 @@ export function answered(file: UsageFile, res: HttpResponse, now: number): Usage
   return body ? { fetched_at_ms: now, body, backoff_until_ms: 0, backoff_ms: 0 } : null
 }
 
-export const shown = (file: UsageFile | null): UsageInput | null =>
-  file?.body && file.fetched_at_ms !== null ? { fetched_at_ms: file.fetched_at_ms, body: file.body } : null
+export const shown = (file: UsageFile): UsageInput => ({ fetched_at_ms: file.fetched_at_ms, body: file.body })
