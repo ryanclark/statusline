@@ -22,21 +22,25 @@ for (const surface of ['terminal', 'desktop'] as const) {
     })
 
     test('below: the line leaves room for the mode label beside it', async ($, on) => {
-      const { clock } = await boot($, on)
+      await boot($, on)
       const viewport = { columns: 100, rows: 40, isFullscreen: false }
-      const mode = (modes: string[]) =>
-        $.ui.mount({ plugin: 'statusline', surface, component: 'SessionMode', props: { modes } })
       const line = await $.ui.mount({ plugin: 'statusline', surface, component: 'PromptHint', props: hint(), viewport })
-      // 100 less padding (4), "⏵⏵ bypass permissions on" (24), " · " (3) and slack (2).
-      expect(await line.find({ type: 'Box' })).toMatchObject({ props: { width: 67 } })
+      const width = async () => (await line.find({ type: 'Box' }))?.props.width
+      // 100 less padding (4), "⏵⏵ " (3), "bypass permissions on" (21), " · " (3) and slack (2).
+      expect(await width()).toBe(67)
 
-      await mode(['auto mode on'])
-      await clock.advance(1000)
-      expect(await line.find({ type: 'Box' })).toMatchObject({ props: { width: 76 } })
+      await $.classic.UserPromptSubmit({ prompt: 'hi', permission_mode: 'auto' })
+      expect(await width()).toBe(76)
 
-      await mode([])
-      await clock.advance(1000)
-      expect(await line.find({ type: 'Box' })).toMatchObject({ props: { width: 91 } })
+      await $.classic.Stop({ stop_hook_active: false, permission_mode: 'acceptEdits' })
+      expect(await width()).toBe(73)
+
+      // A subagent runs under its own mode, which the footer does not show.
+      await $.classic.Stop({ stop_hook_active: false, permission_mode: 'plan', agent_id: 'a1' })
+      expect(await width()).toBe(73)
+
+      await $.classic.UserPromptSubmit({ prompt: 'hi', permission_mode: 'someNewMode' })
+      expect(await width()).toBe(67)
 
       const unsized = await $.ui.mount({ plugin: 'statusline', surface, component: 'PromptHint', props: hint() })
       expect((await unsized.find({ type: 'Box' }))?.props.width).toBeUndefined()

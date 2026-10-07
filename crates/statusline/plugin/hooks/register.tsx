@@ -54,7 +54,7 @@ import type { Json } from './util'
 const rendered = atom({ plugin: 'statusline', key: 'rendered' } as const, null)
 const tracker = atom({ plugin: 'statusline', key: 'tracker' } as const, EMPTY_TRACKER)
 const live = atom({ plugin: 'statusline', key: 'live' } as const, EMPTY_LIVE)
-const modes = atom({ plugin: 'statusline', key: 'modes' } as const, null)
+const mode = atom({ plugin: 'statusline', key: 'mode' } as const, null)
 
 type State = {
   binary: string
@@ -73,8 +73,6 @@ type State = {
   // A subagent request may have taken the main loop's compose or left its own.
   composeAmbiguous: boolean
   handshake: Promise<Verdict> | null
-  // The mode labels Claude Code last drew. A render hook may not write state, so the next refresh stores them.
-  seenModes: readonly string[] | null
   tooOld: string | null
   usage: UsageMemo
   // The agents map last written for the binary and when, so an unchanged map is not written every tick.
@@ -108,7 +106,6 @@ function fresh(options: PluginOptions): State {
     pendingCompose: null,
     composeAmbiguous: false,
     handshake: null,
-    seenModes: null,
     tooOld: null,
     usage: newUsageMemo(),
     agentsKey: NO_AGENTS,
@@ -370,9 +367,6 @@ async function run($: EngineInterface): Promise<Rendered> {
     : { rows: [], error: `statusline: ${binary} did not print span rows, it needs --format spans` }
 }
 
-const sameLabels = (a: readonly string[], b: readonly string[] | null) =>
-  b !== null && a.length === b.length && a.every((label, i) => label === b[i])
-
 async function refresh($: EngineInterface) {
   if (state.inFlight) {
     state.again = true
@@ -391,10 +385,6 @@ async function refresh($: EngineInterface) {
     if (key !== state.last) {
       await update($, rendered, () => next)
       state.last = key
-    }
-    const seen = state.seenModes
-    if (seen !== null && !sameLabels(seen, await read($, modes))) {
-      await update($, modes, () => [...seen])
     }
   } catch {
     // Left unmarked so the next refresh stores the line again.
@@ -477,6 +467,19 @@ async function settlePermission<E extends { tool_name: string; agent_id?: string
   next: (e: E) => Promise<R>,
 ): Promise<R> {
   await clearPermission($, e.tool_name, e.agent_id)
+  return next(e)
+}
+
+// No event reports a shift+tab, so the mode is as of the last hook that carried it.
+async function noteMode<E extends { permission_mode?: string; agent_id?: string }, R>(
+  $: EngineInterface,
+  e: E,
+  next: (e: E) => Promise<R>,
+): Promise<R> {
+  const seen = e.permission_mode
+  if (seen && !e.agent_id && seen !== (await read($, mode))) {
+    await update($, mode, () => seen)
+  }
   return next(e)
 }
 
@@ -618,10 +621,12 @@ export const register: Register = (on, options) => {
     void refresh($)
     return next(e)
   }).catch(passThrough)
-  on('classic.PostToolUse', settlePermission).catch(passThrough)
+  on('classic.PostToolUse', ($, e, next) => noteMode($, e, seen => settlePermission($, seen, next))).catch(passThrough)
+  on('classic.UserPromptSubmit', noteMode).catch(passThrough)
+  on('classic.SessionStart', noteMode).catch(passThrough)
   on('prompt.submit', noteTaskEnd).catch(passThrough)
   // A notification can end a task before this plugin loaded or while a build without the prompt hook ran.
-  on('classic.Stop', settleBackground).catch(passThrough)
+  on('classic.Stop', ($, e, next) => noteMode($, e, seen => settleBackground($, seen, next))).catch(passThrough)
   on('classic.SubagentStop', settleBackground).catch(passThrough)
   on('classic.PostToolUseFailure', settlePermission).catch(passThrough)
   on('classic.PermissionDenied', settlePermission).catch(passThrough)
@@ -685,16 +690,11 @@ export const register: Register = (on, options) => {
     if (state.placement !== 'below') {
       return next(e)
     }
-    const width = hintWidth(e.viewport?.columns, await read($, modes))
+    const width = hintWidth(e.viewport?.columns, await read($, mode))
     // The hint line is the only place the engine says how to interrupt, so it is carried over while a turn runs.
     return (await drawLine($, e, e.props.isWorking, e.props.hint, width)) ?? next(e)
   })
 
-  // Watched only for the labels' width, so Claude Code still draws them.
-  on('ui.render', { component: 'SessionMode' }, async (_$, e, next) => {
-    state.seenModes = e.props.modes
-    return next(e)
-  })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (state.placement !== 'above' || e.props.hasSurvey) {

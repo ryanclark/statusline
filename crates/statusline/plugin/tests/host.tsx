@@ -205,6 +205,8 @@ function host(on: On, cfg: Host, seen: Seen = {}): MockClock {
   on('classic.StopFailure', () => ({}))
   on('classic.Stop', () => ({}))
   on('classic.SubagentStop', () => ({}))
+  on('classic.UserPromptSubmit', () => ({}))
+  on('classic.SessionStart', () => ({}))
   on('fs.stat', (_$, e) => {
     const file = cfg.files?.get(e.path)
     if (file !== undefined) {

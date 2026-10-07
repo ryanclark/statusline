@@ -10,25 +10,34 @@ const DEFAULT_FG = 'inactive'
 // The components `$.ui.resolve` hands back for the surface being drawn.
 type Ui = ReturnType<EngineInterface['ui']['resolve']>
 
-// The hint row's padding, the "⏵⏵ " before each mode label, and the " · " Claude Code draws between the labels and
-// this line.
+// The hint row's padding, the "⏵⏵ " before the mode label, and the " · " Claude Code draws between it and this line.
 const ROW_PADDING = 4
 const MODE_GLYPHS = 3
 const SEPARATOR = 3
 // Terminals disagree on whether ⏵ and ⏸ take one cell or two.
 const GLYPH_SLACK = 2
-// Assumed until Claude Code draws its first label, so the line never wraps before the real one is known.
-const LONGEST_MODE = 'bypass permissions on'
+
+// The label Claude Code draws for each permission mode. Default mode is reserved too, since what it draws there is
+// unconfirmed and a few spare columns beat a wrapped row.
+const MODE_LABELS: Record<string, string> = {
+  default: 'manual mode on',
+  acceptEdits: 'accept edits on',
+  plan: 'plan mode on',
+  auto: 'auto mode on',
+  dontAsk: "don't ask on",
+  bypassPermissions: 'bypass permissions on',
+}
+// Assumed for a mode not seen yet or not in the table, so the line never wraps.
+const LONGEST_LABEL = Math.max(...Object.values(MODE_LABELS).map(label => label.length))
 
 // Claude Code lays the mode label and this line out in one row and shrinks both when the line overflows, which wraps
 // the label's " · " onto a second row. A fixed width keeps the line to what the label leaves.
-export function hintWidth(columns: number | undefined, modes: readonly string[] | null): number | undefined {
+export function hintWidth(columns: number | undefined, mode: string | null): number | undefined {
   if (columns === undefined) {
     return undefined
   }
-  const labels = modes ?? [LONGEST_MODE]
-  const label = labels.reduce((n, m) => n + MODE_GLYPHS + m.length, 0) + SEPARATOR * Math.max(labels.length - 1, 0)
-  return Math.max(1, columns - ROW_PADDING - label - SEPARATOR - GLYPH_SLACK)
+  const label = (mode === null ? undefined : MODE_LABELS[mode])?.length ?? LONGEST_LABEL
+  return Math.max(1, columns - ROW_PADDING - MODE_GLYPHS - label - SEPARATOR - GLYPH_SLACK)
 }
 
 // A line with no text and no error leaves the slot to Claude Code.
