@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0](https://github.com/ryanclark/statusline/compare/v2.0.1...v2.1.0) - 2026-10-07
+
+### Added
+
+- *(plugin)* fetch usage with the session login instead of browser cookies ([#21](https://github.com/ryanclark/statusline/pull/21))
+
 ## [2.0.1](https://github.com/ryanclark/statusline/compare/v2.0.0...v2.0.1) - 2026-10-07
 
 ### Fixed
