@@ -13,6 +13,7 @@ describe('activity', () => {
       last_error: null,
       todos: null,
       agents: null,
+      background_tasks: [],
       compaction: null,
       autocompact: { enabled: true, headroom_tokens: 38000 },
     })
@@ -347,6 +348,78 @@ describe('activity', () => {
     expect(modOf(seen).agents).toBeNull()
   })
 
+  const AGENTS_FILE = '/home/me/.statusline/sessions/abc.agents.json'
+  const agentWrites = (events: string[] | undefined) =>
+    (events ?? [])
+      .filter(e => e.startsWith(`write ${AGENTS_FILE} `))
+      .map(e => JSON.parse(e.slice(`write ${AGENTS_FILE} `.length)))
+
+  test('waiting agents are written for the agent panel, again only on a change or to stay fresh', async ($, on) => {
+    const agent = (id: string, status: AgentInfo['status']): AgentInfo => ({
+      id,
+      description: id,
+      type: 'Explore',
+      status,
+    })
+    const cfg = {
+      agents: [
+        agent('c91ef5c9d5ef1262b', 'running'),
+        agent('b91ef5c9d5ef1262b', 'waiting'),
+        agent('a91ef5c9d5ef1262b', 'waiting'),
+      ],
+    }
+    const { seen, clock } = await boot($, on, cfg)
+    const first = { a91ef5c9d5ef1262b: 'waiting', b91ef5c9d5ef1262b: 'waiting' }
+    expect(agentWrites(seen.events)).toEqual([{ written_at_ms: T0, agents: first }])
+    // The same agents in another order are no change.
+    cfg.agents = [...cfg.agents].reverse()
+    await clock.advance(9000)
+    expect(agentWrites(seen.events)).toHaveLength(1)
+    await clock.advance(1000)
+    expect(agentWrites(seen.events)).toEqual([
+      { written_at_ms: T0, agents: first },
+      { written_at_ms: T0 + 10_000, agents: first },
+    ])
+    cfg.agents = [agent('a91ef5c9d5ef1262b', 'completed'), agent('b91ef5c9d5ef1262b', 'waiting')]
+    await clock.advance(1000)
+    expect(agentWrites(seen.events).at(-1)).toEqual({
+      written_at_ms: T0 + 11_000,
+      agents: { b91ef5c9d5ef1262b: 'waiting' },
+    })
+    // Once nothing waits the map is written empty once, so the binary stops seeing the last waiting agent.
+    cfg.agents = [agent('b91ef5c9d5ef1262b', 'completed')]
+    await clock.advance(30_000)
+    expect(agentWrites(seen.events).slice(-1)).toEqual([{ written_at_ms: T0 + 12_000, agents: {} }])
+    expect(agentWrites(seen.events)).toHaveLength(4)
+  })
+
+  test('agents that are not waiting are not written, as the binary reads only waiting ones', async ($, on) => {
+    const agents: AgentInfo[] = [
+      { id: 'a', description: 'a', type: 'Explore', status: 'completed' },
+      { id: 'b', description: 'b', type: 'Explore', status: 'running' },
+    ]
+    const { seen, clock } = await boot($, on, { agents })
+    await clock.advance(30_000)
+    expect(agentWrites(seen.events)).toEqual([])
+  })
+
+  test('a session without agents writes no agents file', async ($, on) => {
+    const { seen, clock } = await boot($, on)
+    await clock.advance(30_000)
+    expect(agentWrites(seen.events)).toEqual([])
+  })
+
+  test('a failed agents write is tried again on the next refresh', { options: quiet }, async ($, on) => {
+    const unwritable = new Set([AGENTS_FILE])
+    const agents: AgentInfo[] = [{ id: 'a', description: 'a', type: 'Explore', status: 'waiting' }]
+    const { seen, clock } = await boot($, on, { agents, unwritable })
+    expect(agentWrites(seen.events)).toEqual([])
+    unwritable.clear()
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    await clock.settle()
+    expect(agentWrites(seen.events)).toEqual([{ written_at_ms: T0, agents: { a: 'waiting' } }])
+  })
+
   test('a main-loop compaction shows while it runs, then its counts', { options: quiet }, async ($, on) => {
     const summarising = gate()
     const { seen, clock } = await boot($, on, { compact: { wait: summarising.wait } })
@@ -441,6 +514,7 @@ describe('activity', () => {
       last_error: { kind: 'overloaded', detail: '529 Overloaded', at_ms: T0 },
       todos: { done: 3, total: 7, active: 'Running tests' },
       agents: { running: 3, idle: 1 },
+      background_tasks: [],
       compaction: {
         count: 1,
         last_at_ms: T0,

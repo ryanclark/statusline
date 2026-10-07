@@ -36,6 +36,11 @@ const AGENTS_ICON: Icon = Icon {
 	nerd: "\u{f0c0}",
 };
 
+const BACKGROUND_ICON: Icon = Icon {
+	unicode: "\u{29d7}",
+	nerd: "\u{f085}",
+};
+
 const COMPACTION_ICON: Icon = Icon {
 	unicode: "\u{27f3}",
 	nerd: "\u{f01e}",
@@ -228,6 +233,55 @@ pub(super) fn agents(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option
 	))
 }
 
+/// Claude Code's task type as a word, its underscores read as spaces.
+fn task_kind(kind: &str, count: usize) -> String {
+	let word = if kind.is_empty() {
+		"task".to_owned()
+	} else {
+		kind.replace('_', " ")
+	};
+	if count > 1 { format!("{word}s") } else { word }
+}
+
+pub(super) fn background_tasks(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
+	let tasks = &ctx.input.mod_info.as_ref()?.background_tasks;
+	let icon = format_icon(segment, BACKGROUND_ICON, CYAN, ctx.nerd_font);
+
+	if let [only] = tasks.as_slice() {
+		let kind = paint(segment, &task_kind(&only.kind, 1), CYAN);
+		let description = if only.description.is_empty() {
+			String::new()
+		} else {
+			dim(segment, &format!("{SEPARATOR}{}", only.description))
+		};
+		return Some(apply_style(
+			&format!("{icon}{kind}{description}"),
+			segment.style(),
+		));
+	}
+
+	// Grouped in the order each kind first started, so the line keeps its shape as tasks come and go.
+	let mut counts: Vec<(&str, usize)> = Vec::new();
+	for task in tasks {
+		match counts.iter_mut().find(|(kind, _)| *kind == task.kind) {
+			Some((_, n)) => *n += 1,
+			None => counts.push((&task.kind, 1)),
+		}
+	}
+	if counts.is_empty() {
+		return None;
+	}
+	let parts: Vec<String> = counts
+		.into_iter()
+		.map(|(kind, n)| paint(segment, &format!("{n} {}", task_kind(kind, n)), CYAN))
+		.collect();
+
+	Some(apply_style(
+		&format!("{icon}{}", parts.join(SEPARATOR)),
+		segment.style(),
+	))
+}
+
 pub(super) fn compaction(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
 	let compaction = ctx.input.mod_info.as_ref()?.compaction.as_ref()?;
 	let now = Utc::now();
@@ -285,13 +339,14 @@ mod tests {
 	use crate::input::InputData;
 	use crate::segment::{SegmentType, render_segment};
 
-	const ALL: [SegmentType; 8] = [
+	const ALL: [SegmentType; 9] = [
 		SegmentType::CurrentTool,
 		SegmentType::TurnElapsed,
 		SegmentType::PermissionPending,
 		SegmentType::LastApiError,
 		SegmentType::TodoProgress,
 		SegmentType::Agents,
+		SegmentType::BackgroundTasks,
 		SegmentType::Compaction,
 		SegmentType::AutocompactHeadroom,
 	];
@@ -353,6 +408,10 @@ mod tests {
 			(SegmentType::LastApiError, r#"{"last_error": null}"#),
 			(SegmentType::TodoProgress, r#"{"todos": null}"#),
 			(SegmentType::Agents, r#"{"agents": null}"#),
+			(
+				SegmentType::BackgroundTasks,
+				r#"{"background_tasks": null}"#,
+			),
 			(SegmentType::Compaction, r#"{"compaction": null}"#),
 			(SegmentType::AutocompactHeadroom, r#"{"autocompact": null}"#),
 		] {
@@ -530,6 +589,38 @@ mod tests {
 	}
 
 	#[test]
+	fn background_tasks_describe_one_and_count_several_by_kind() {
+		for (body, want) in [
+			(
+				r#"{"background_tasks": [{"type": "shell", "description": "npm run dev"}]}"#,
+				Some("\u{29d7} shell \u{b7} npm run dev"),
+			),
+			(
+				r#"{"background_tasks": [{"type": "workflow", "description": null}]}"#,
+				Some("\u{29d7} workflow"),
+			),
+			(
+				r#"{"background_tasks": [{"type": "shell", "description": "npm run dev"},
+					{"type": "monitor", "description": "CI on #42"},
+					{"type": "shell", "description": "tail -f log"}]}"#,
+				Some("\u{29d7} 2 shells \u{b7} 1 monitor"),
+			),
+			(
+				r#"{"background_tasks": [{"type": "remote_agent", "description": "Fix the flake"},
+					{"type": "remote_agent", "description": "Bump deps"}, {"type": null, "description": null}]}"#,
+				Some("\u{29d7} 2 remote agents \u{b7} 1 task"),
+			),
+			(r#"{"background_tasks": []}"#, None),
+		] {
+			assert_eq!(
+				render(SegmentType::BackgroundTasks, body).as_deref(),
+				want,
+				"{body}"
+			);
+		}
+	}
+
+	#[test]
 	fn compaction_shows_running_then_the_history() {
 		assert_eq!(
 			render(
@@ -651,6 +742,7 @@ mod tests {
 			ERROR_ICON,
 			TODO_ICON,
 			AGENTS_ICON,
+			BACKGROUND_ICON,
 			COMPACTION_ICON,
 			AUTOCOMPACT_ICON,
 		];

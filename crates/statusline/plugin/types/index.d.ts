@@ -82,6 +82,9 @@ export type Compaction = {
   trigger: 'auto' | 'manual' | null
 }
 
+// What a background shell, monitor or workflow is shown as. Subagents are left to the agents segment.
+export type BackgroundTask = { type: string; description: string | null }
+
 export type Autocompact = { enabled: boolean; headroom_tokens: number | null }
 
 // Sources of the input's `mod` object, apart from the agents and autocompact figures polled on each refresh.
@@ -95,6 +98,9 @@ export type Live = {
   // Task tools report one task per call, so the list is rebuilt here to count it.
   tasks: Record<string, TaskItem>
   compaction: Compaction | null
+  // Keyed by task id. Tool results and end notifications add and remove tasks as they happen, and each Stop's snapshot
+  // replaces the lot.
+  background: Record<string, BackgroundTask>
 }
 
 declare module 'claude-code' {

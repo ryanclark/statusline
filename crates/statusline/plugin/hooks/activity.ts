@@ -1,6 +1,6 @@
 import type { AgentInfo } from 'claude-code'
 
-import type { Compaction, LastError, Live, PendingPermission, TaskItem, TodoProgress } from '../types'
+import type { BackgroundTask, Compaction, LastError, Live, PendingPermission, TaskItem, TodoProgress } from '../types'
 import { cut, obj, plain, str } from './util'
 import type { Json } from './util'
 
@@ -27,6 +27,7 @@ export const EMPTY_LIVE: Live = {
   todos: null,
   tasks: {},
   compaction: null,
+  background: {},
 }
 
 export const TODO_TOOLS: ReadonlySet<string> = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'])
@@ -118,6 +119,100 @@ export function foldTodos(l: Live, tool: string, args: Json, result: Json, main:
   return tasks === undefined ? undefined : { ...l, tasks, todos: progress(Object.values(tasks)) }
 }
 
+export const BACKGROUND_TOOLS: ReadonlySet<string> = new Set(['Bash', 'Monitor', 'Workflow', 'TaskStop'])
+
+// The kinds a tool result can add. A remote agent or teammate in Stop's list is agent work, not a local task.
+const BACKGROUND_KINDS: ReadonlySet<string> = new Set(['shell', 'monitor', 'workflow'])
+
+// The same rule for a tool's own result and a Stop snapshot, so the line does not change when the snapshot lands.
+function backgroundTask(type: string, description: unknown, command: unknown, name: unknown): BackgroundTask {
+  const label = (type === 'workflow' ? str(name) : null) || str(description) || str(command)
+  const text = label === null ? '' : plain(label)
+  return { type, description: text ? cut(text, DETAIL_MAX, '…') : null }
+}
+
+// Folds one tool result into the background tasks. Returns undefined when the result changes nothing.
+export function foldBackground(l: Live, tool: string, args: Json, result: Json): Live | undefined {
+  // A session that ran an older build of the plugin keeps its live value across the reload, without this field.
+  const background = l.background ?? {}
+  let id: string | null
+  let task: BackgroundTask
+  switch (tool) {
+    case 'Bash':
+      id = str(result.backgroundTaskId)
+      // A synchronous subagent's shell is killed with that agent's answer, so it is not work the session waits on.
+      if (result.backgroundEndsWithFinalResponse === true) {
+        return undefined
+      }
+      task = backgroundTask('shell', args.description, args.command, null)
+      break
+    case 'Monitor':
+      id = str(result.taskId)
+      task = backgroundTask('monitor', args.description, args.command, null)
+      break
+    case 'Workflow':
+      if (result.taskType === 'remote_agent' || result.status === 'remote_launched') {
+        return undefined
+      }
+      id = str(result.taskId)
+      task = backgroundTask('workflow', null, null, result.workflowName ?? args.name)
+      break
+    case 'TaskStop': {
+      const stopped = str(result.task_id)
+      return stopped === null ? undefined : withoutBackground(l, [stopped])
+    }
+    default:
+      return undefined
+  }
+  return id === null ? undefined : { ...l, background: { ...background, [id]: task } }
+}
+
+// Stop's list of the session's work still in flight. Undefined when the event carries none, as an older engine's.
+export function backgroundSnapshot(list: unknown): Record<string, BackgroundTask> | undefined {
+  if (!Array.isArray(list)) {
+    return undefined
+  }
+  const background: Record<string, BackgroundTask> = {}
+  for (const t of list.map(obj)) {
+    const id = str(t?.id)
+    const type = str(t?.type)
+    if (t && id !== null && type !== null && BACKGROUND_KINDS.has(type)) {
+      background[id] = backgroundTask(type, t.description, t.command, t.name)
+    }
+  }
+  return background
+}
+
+export function withoutBackground(l: Live, ids: readonly string[]): Live | undefined {
+  const background = l.background ?? {}
+  const gone = ids.filter(id => id in background)
+  if (gone.length === 0) {
+    return undefined
+  }
+  const rest = { ...background }
+  for (const id of gone) {
+    delete rest[id]
+  }
+  return { ...l, background: rest }
+}
+
+const NOTIFICATION = /<task-notification>([\s\S]*?)<\/task-notification>/g
+const ENDED = new Set(['completed', 'failed', 'killed'])
+
+// The tasks a notification prompt reports ended. Several queued notifications can arrive as one prompt, and one with
+// any other status, or none, may come from a monitor that keeps running.
+export function endedTasks(text: string): string[] {
+  const ids: string[] = []
+  for (const [, body = ''] of text.matchAll(NOTIFICATION)) {
+    const id = /<task-id>([^<]+)<\/task-id>/.exec(body)?.[1]?.trim()
+    const status = /<status>([^<]+)<\/status>/.exec(body)?.[1]?.trim()
+    if (id && status && ENDED.has(status)) {
+      ids.push(id)
+    }
+  }
+  return ids
+}
+
 // PermissionRequest carries no tool_use_id, so a call's end settles the oldest wait on the same tool in the same loop.
 export function withoutPermission(list: PendingPermission[], tool: string, agent: string | null): PendingPermission[] {
   const i = list.findIndex(p => p.tool === tool && p.agent === agent)
@@ -165,3 +260,19 @@ export function agentCounts(list: readonly AgentInfo[]): { running: number; idle
   const idle = list.filter(a => a.status === 'idle' || a.status === 'waiting').length
   return running + idle === 0 ? null : { running, idle }
 }
+
+// The agent panel's command is told an agent held on its own background work has completed, so the binary takes the
+// waiting ones from this map instead (subagent.rs). Only waiting agents are kept, as the binary reads nothing else and
+// a finished agent stays listed for the rest of the session. Sorted so a reordered list is not a change.
+export function agentStatuses(list: readonly AgentInfo[]): Record<string, AgentInfo['status']> {
+  const out: Record<string, AgentInfo['status']> = {}
+  for (const a of [...list].sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))) {
+    if (a.status === 'waiting') {
+      out[a.id] = a.status
+    }
+  }
+  return out
+}
+
+// The binary trusts the map for 30s, so an unchanged one is written again well before then.
+export const AGENTS_REWRITE_MS = 10_000
