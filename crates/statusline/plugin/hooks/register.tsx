@@ -24,10 +24,13 @@ import {
   FETCH_EVERY_MS,
   newUsageMemo,
   parseUsageFile,
+  REFUSED,
   shown,
+  UNKNOWN_HANDLE,
   USAGE_HEADERS,
   USAGE_URL,
   usagePath,
+  waiting,
 } from './usage'
 import type { UsageFile, UsageInput, UsageMemo } from './usage'
 import { cut, obj, plain, str } from './util'
@@ -206,37 +209,41 @@ async function fetchUsage($: EngineInterface, memo: UsageMemo, path: string, fil
   if (handle === null) {
     return false
   }
-  await writeUsage($, path, claimed(file, await $.clock.now()))
+  const start = await $.clock.now()
+  memo.nextAt = start + FETCH_EVERY_MS
+  await writeUsage($, path, claimed(file, start))
   let res
   try {
     res = await $.http.fetch(USAGE_URL, { auth: handle, headers: USAGE_HEADERS })
-    if (res.status === 401 && !memo.reauthorized) {
-      memo.reauthorized = true
+    // A handle keeps the token it was minted with, so one minted before the session refreshed its login fails until
+    // it is minted again. Once per fetch keeps that to a handle a minute.
+    if (res.status === 401) {
       handle = await authorizeUsage($, memo)
       if (handle === null) {
         return false
       }
       res = await $.http.fetch(USAGE_URL, { auth: handle, headers: USAGE_HEADERS })
     }
-  } catch {
-    // Refused outright: nonessential traffic is off, or the organization's policy blocks the host.
-    memo.off = true
+  } catch (err) {
+    const message = String(err)
+    if (REFUSED.test(message)) {
+      memo.off = true
+    } else if (UNKNOWN_HANDLE.test(message)) {
+      memo.handle = null
+    }
     return false
   }
   const next = answered(file, res, await $.clock.now())
   if (next === null) {
     return false
   }
+  memo.nextAt = Math.max(memo.nextAt, next.backoff_until_ms)
   await writeUsage($, path, next)
-  if (!res.ok) {
-    return false
-  }
-  memo.reauthorized = false
-  return true
+  return res.ok
 }
 
-// The shared usage for this refresh, starting a fetch when it is due. The fetch is not awaited, since the request has
-// no timeout of its own and the line should not wait on it.
+// The shared usage for this refresh, starting a fetch when it is due. The fetch is not awaited, since the engine gives
+// it up to 30s and the line should not wait on it.
 async function pollUsage($: EngineInterface, now: number): Promise<UsageInput | null> {
   const memo = state.usage
   if (memo.off || (memo.handle === null && (await authorizeUsage($, memo)) === null)) {
@@ -248,7 +255,7 @@ async function pollUsage($: EngineInterface, now: number): Promise<UsageInput | 
   }
   const path = usagePath(home)
   const file = await readUsage($, path, now)
-  if (file && !memo.polling && fetchDue(file, now)) {
+  if (file && !memo.polling && !waiting(memo.nextAt, now) && fetchDue(file, now)) {
     memo.polling = true
     void fetchUsage($, memo, path, file)
       .then(fetched => {

@@ -241,11 +241,16 @@ pub struct ModInfo {
 /// The OAuth usage response the plugin fetched with the session's own login, shared by every open chat.
 #[derive(Debug, Default, Deserialize)]
 pub struct PluginUsage {
-	#[serde(default)]
+	#[serde(default, deserialize_with = "lenient_i64")]
 	pub fetched_at_ms: Option<i64>,
 	/// Kept as JSON so a response that drifts from the usage types fails those segments, not the whole input.
 	#[serde(default)]
 	pub body: serde_json::Value,
+}
+
+// The time comes from a file every chat writes, so one that is not a whole i64 costs only the staleness check.
+fn lenient_i64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error> {
+	Ok(serde_json::Value::deserialize(d)?.as_i64())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -698,6 +703,20 @@ mod tests {
 			.unwrap();
 		assert_eq!(usage.fetched_at_ms, Some(1_791_280_000_000));
 		assert_eq!(usage.body["limits"], "drifted");
+	}
+
+	#[test]
+	fn a_mod_usage_time_that_is_not_an_i64_drops_only_the_time() {
+		for at in ["1.5", "1e20", "\"soon\""] {
+			let json = format!(
+				r#"{{"model": {{"display_name": "Opus"}}, "mod": {{"usage": {{"fetched_at_ms": {at}, "body": {{}}}}}}}}"#
+			);
+			let input = InputData::from_reader(json.as_bytes()).unwrap();
+			assert_eq!(input.model.display_name, "Opus");
+			let usage = input.mod_info.unwrap().usage.unwrap();
+			assert_eq!(usage.fetched_at_ms, None, "{at}");
+			assert!(usage.body.is_object());
+		}
 	}
 
 	#[test]

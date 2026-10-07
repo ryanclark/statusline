@@ -92,8 +92,13 @@ type Host = {
   files?: Map<string, string>
   // The modification time `fs.stat` reports for any of `files`.
   mtimeMs?: number
-  // Answers `$.http.fetch`, or refuses it with `{ deny }` as the engine does when nonessential traffic is off.
-  fetch?: (url: string, init: HttpInit | undefined) => HttpResponse | { deny: string } | Promise<HttpResponse>
+  // Answers `$.http.fetch`, or rejects it with `{ reject }`, the message the engine's own fetch throws.
+  fetch?: (
+    url: string,
+    init: HttpInit | undefined,
+  ) => HttpResponse | { reject: string } | Promise<HttpResponse | { reject: string }>
+  // Paths whose `fs.write` fails, as on a full disk or a read-only home.
+  unwritable?: Set<string>
 }
 
 export const transcript = [{ role: 'user' as const, text: 'Summary of the conversation so far', toolUses: [] }]
@@ -116,6 +121,9 @@ function host(on: On, cfg: Host, seen: Seen = {}): MockClock {
   const clock = mock.clock(on, { now: T0 })
   mock.env(on, { HOME: '/home/me' })
   on('fs.write', (_$, e) => {
+    if (cfg.unwritable?.has(e.path)) {
+      throw new Error(`EROFS: ${e.path}`)
+    }
     seen.events = [...(seen.events ?? []), `write ${e.path} ${e.text}`]
     cfg.files?.set(e.path, e.text)
     return { value: undefined }
@@ -137,7 +145,7 @@ function host(on: On, cfg: Host, seen: Seen = {}): MockClock {
       throw new Error(`no network in tests: ${e.url}`)
     }
     const res = await cfg.fetch(e.url, e.init)
-    return 'deny' in res ? res : { value: res }
+    return 'reject' in res ? { deny: res.reject } : { value: res }
   })
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)

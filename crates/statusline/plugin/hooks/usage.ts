@@ -11,8 +11,9 @@ export const FETCH_EVERY_MS = 60_000
 const MAX_BACKOFF_MS = 30 * 60_000
 export const BACKOFF_STEPS_MS = [5 * 60_000, 10 * 60_000, 20 * 60_000, MAX_BACKOFF_MS]
 
-// Shared by every open chat, so the endpoint sees one request a minute however many are open. The fs API has no rename
-// to write it atomically, so a torn read counts as no file.
+// Shared by every open chat, so the endpoint sees about one request a minute however many are open. Two chats that find
+// it due within the same few milliseconds can both fetch, as the fs API has no rename or lock. For the same reason a
+// torn read counts as no file.
 export type UsageFile = {
   fetched_at_ms: number | null
   body: Json | null
@@ -23,13 +24,13 @@ export type UsageFile = {
 // Sent whenever this chat holds a login, empty until a body lands, so the binary never falls back to cookies for it.
 export type UsageInput = { fetched_at_ms: number | null; body: Json | null }
 
-// One chat's own share. The handle is minted once and reused, since each plugin holds at most four. `last` stands in
-// for a torn read.
+// One chat's own share. The handle is minted once and reused, since each plugin holds at most four. `nextAt` keeps
+// this chat to the shared pace when the file cannot be written. `last` stands in for a torn read.
 export type UsageMemo = {
   handle: string | null
   off: boolean
   polling: boolean
-  reauthorized: boolean
+  nextAt: number
   last: UsageInput
 }
 
@@ -37,7 +38,7 @@ export const newUsageMemo = (): UsageMemo => ({
   handle: null,
   off: false,
   polling: false,
-  reauthorized: false,
+  nextAt: 0,
   last: { fetched_at_ms: null, body: null },
 })
 
@@ -45,7 +46,8 @@ export const EMPTY_USAGE: UsageFile = { fetched_at_ms: null, body: null, backoff
 
 export const usagePath = (home: string) => `${home}/.statusline/cache/plugin-usage.json`
 
-const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+// The binary reads these as i64 and fails the whole line on anything else.
+const num = (v: unknown): number | null => (Number.isSafeInteger(v) ? (v as number) : null)
 
 export function parseUsageFile(text: string): UsageFile | null {
   let v: unknown
@@ -66,9 +68,21 @@ export function parseUsageFile(text: string): UsageFile | null {
   }
 }
 
+// A wait further off than any this plugin sets was dated before the clock stepped back, and would hold every chat until
+// the clock caught up.
+export const waiting = (until: number, now: number): boolean => now < until && until - now <= MAX_BACKOFF_MS
+
 export function fetchDue(file: UsageFile, now: number): boolean {
-  return now >= file.backoff_until_ms && (file.fetched_at_ms === null || now - file.fetched_at_ms >= FETCH_EVERY_MS)
+  const at = file.fetched_at_ms
+  const stale = at === null || now - at >= FETCH_EVERY_MS || at - now > FETCH_EVERY_MS
+  return stale && !waiting(file.backoff_until_ms, now)
 }
+
+// The engine's own refusals: nonessential traffic is off, the organization's policy blocks plugins' network access, or
+// the session withholds its credential. Timeouts and network errors say `aborted` or `failed` and are retried.
+export const REFUSED = /\$\.http\.fetch: refused: /
+// The handle was evicted by newer ones the plugin minted, or the engine forgot it.
+export const UNKNOWN_HANDLE = /\$\.http\.fetch: unknown auth handle/
 
 // Written before the request, so a chat polling meanwhile waits, and a failure is not retried on every refresh.
 export const claimed = (file: UsageFile, now: number): UsageFile => ({
@@ -86,7 +100,7 @@ export function answered(file: UsageFile, res: HttpResponse, now: number): Usage
     const retryAfter = Number(res.headers['retry-after'])
     // The endpoint has answered `retry-after: 0` while still limiting, so only a positive one is believed.
     const wait = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.max(step, retryAfter * 1000) : step
-    return { ...file, backoff_until_ms: now + wait, backoff_ms: step }
+    return { ...file, backoff_until_ms: now + Math.min(wait, MAX_BACKOFF_MS), backoff_ms: step }
   }
   if (!res.ok) {
     return null

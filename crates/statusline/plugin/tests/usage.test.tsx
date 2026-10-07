@@ -6,6 +6,7 @@ import type { UsageFile } from '../hooks/usage'
 import { boot, gate, modOf, T0 } from './host'
 
 const PATH = '/home/me/.statusline/cache/plugin-usage.json'
+const FETCH = 'statusline: $.http.fetch'
 const MIN = 60_000
 
 // The endpoint's top-level keys, with a Fable row among the limits.
@@ -190,25 +191,111 @@ describe('usage', () => {
     expect(seen.authorizes).toBe(2)
   })
 
-  test('a 401 that survives the new handle waits for the next minute', async ($, on) => {
+  test('a 401 streak mints a new handle each minute until the session refreshes its login', async ($, on) => {
+    // A handle carries the token it was minted with, so one minted before the session refreshes keeps failing.
+    let refreshed = false
+    let n = 0
+    const authorize = (): SessionAuthorization => ({ handle: `h${++n}${refreshed ? 'ok' : ''}`, kind: 'bearer' })
+    const fetch = (_url: string, init: { auth?: string } | undefined) => reply(init?.auth?.endsWith('ok') ? 200 : 401)
     const files = new Map<string, string>()
-    const { seen, clock } = await boot($, on, { authorize: bearer(), files, fetch: () => reply(401, {}) })
-    expect(seen.fetches).toHaveLength(2)
+    const { seen, clock } = await boot($, on, { authorize, files, fetch })
+    expect(seen.fetches?.map(f => f.init?.auth)).toEqual(['h1', 'h2'])
     await clock.advance(MIN - 1000)
     expect(seen.fetches).toHaveLength(2)
-    // Each handle counts against the plugin's four, so a streak of 401s mints only one more.
     await clock.advance(1000)
-    expect(seen.fetches).toHaveLength(3)
-    expect(seen.authorizes).toBe(2)
+    expect(seen.fetches?.map(f => f.init?.auth)).toEqual(['h1', 'h2', 'h2', 'h3'])
+    refreshed = true
+    await clock.advance(MIN)
+    expect(seen.fetches?.map(f => f.init?.auth)).toEqual(['h1', 'h2', 'h2', 'h3', 'h3', 'h4ok'])
+    expect(modOf(seen).usage.body).toEqual(BODY)
+    await clock.advance(MIN)
+    expect(seen.fetches?.at(-1)?.init?.auth).toBe('h4ok')
+    expect(seen.authorizes).toBe(4)
   })
 
   test('a refused request stops this chat fetching', async ($, on) => {
     const files = new Map<string, string>()
-    const fetch = () => ({ deny: 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is set' })
+    const fetch = () => ({ reject: `${FETCH}: refused: nonessential network traffic is disabled for this session` })
     const { seen, clock } = await boot($, on, { authorize: bearer(), files, fetch })
     await clock.advance(3 * MIN)
     expect(seen.fetches).toHaveLength(1)
     expect(modOf(seen).usage).toBeUndefined()
+  })
+
+  for (const reason of [
+    `aborted: no complete answer within 30000ms`,
+    `failed: ECONNRESET: socket hang up`,
+    `refused: body of 5000000 bytes is over the 4194304-byte limit`,
+  ]) {
+    test(`a request that ${reason.split(':')[0]} is retried the next minute`, async ($, on) => {
+      const files = new Map<string, string>()
+      let calls = 0
+      const fetch = () => (++calls === 1 ? { reject: `${FETCH}(${USAGE_URL}) ${reason}` } : reply(200))
+      const { seen, clock } = await boot($, on, { authorize: bearer(), files, fetch })
+      expect(seen.fetches).toHaveLength(1)
+      expect(modOf(seen).usage).toEqual(EMPTY)
+      await clock.advance(MIN)
+      expect(seen.fetches).toHaveLength(2)
+      expect(modOf(seen).usage.body).toEqual(BODY)
+    })
+  }
+
+  test('a handle the engine no longer knows is minted again', async ($, on) => {
+    const files = new Map<string, string>()
+    let n = 0
+    const authorize = (): SessionAuthorization => ({ handle: `h${++n}`, kind: 'bearer' })
+    const fetch = (_url: string, init: { auth?: string } | undefined) =>
+      init?.auth === 'h1' ? { reject: `${FETCH}: unknown auth handle; $.session.authorize() mints one` } : reply(200)
+    const { seen, clock } = await boot($, on, { authorize, files, fetch })
+    await clock.advance(MIN)
+    expect(seen.fetches?.map(f => f.init?.auth)).toEqual(['h1', 'h2'])
+    expect(modOf(seen).usage.body).toEqual(BODY)
+  })
+
+  test('a cache that cannot be written still fetches once a minute', async ($, on) => {
+    const files = new Map<string, string>()
+    let calls = 0
+    // Past a handful the answer never comes, so a chain of back-to-back fetches ends rather than spinning.
+    const fetch = () => (++calls <= 5 ? reply(200) : new Promise<HttpResponse>(() => {}))
+    const { seen, clock } = await boot($, on, { authorize: bearer(), files, unwritable: new Set([PATH]), fetch })
+    expect(seen.fetches).toHaveLength(1)
+    await clock.advance(MIN - 1000)
+    expect(seen.fetches).toHaveLength(1)
+    await clock.advance(1000)
+    expect(seen.fetches).toHaveLength(2)
+  })
+
+  test('a 429 holds this chat back even when the backoff cannot be written', async ($, on) => {
+    const files = new Map<string, string>()
+    const fetch = () => reply(429, {}, { 'retry-after': '0' })
+    const { seen, clock } = await boot($, on, { authorize: bearer(), files, unwritable: new Set([PATH]), fetch })
+    await clock.advance(5 * MIN - 1000)
+    expect(seen.fetches).toHaveLength(1)
+    await clock.advance(1000)
+    expect(seen.fetches).toHaveLength(2)
+  })
+
+  for (const [name, f] of [
+    ['a fetch', { fetched_at_ms: T0 + 2 * 60 * MIN, body: BODY }],
+    ['a backoff', { fetched_at_ms: T0 - 2 * MIN, body: BODY, backoff_until_ms: T0 + 2 * 60 * MIN }],
+  ] as const) {
+    test(`${name} dated after the clock stepped back is fetched over`, async ($, on) => {
+      const files = new Map([[PATH, file(f)]])
+      const { seen } = await boot($, on, { authorize: bearer(), files, fetch: () => reply(200) })
+      expect(seen.fetches).toHaveLength(1)
+    })
+  }
+
+  test('a retry-after longer than the longest backoff is held to it', async ($, on) => {
+    const files = new Map<string, string>()
+    await boot($, on, { authorize: bearer(), files, fetch: () => reply(429, {}, { 'retry-after': '7200' }) })
+    expect(shared(files)).toMatchObject({ backoff_until_ms: T0 + 30 * MIN, backoff_ms: 5 * MIN })
+  })
+
+  test('a time that is not a whole millisecond count is dropped', () => {
+    for (const at of [1.5, 1e20]) {
+      expect(parseUsageFile(file({ fetched_at_ms: at, body: BODY }))?.fetched_at_ms).toBeNull()
+    }
   })
 
   for (const [age, fetches] of [

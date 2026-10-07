@@ -11,6 +11,8 @@ const REFRESH_TTL: Duration = Duration::from_secs(15);
 const BRIDGE_TIMEOUT: Duration = Duration::from_secs(7);
 // The plugin refetches every minute, so data this old means its fetches are failing or backing off.
 const PLUGIN_STALE_MS: i64 = 5 * 60_000;
+// A little ahead is skew between chats' clock reads. Much more means the clock stepped back since the fetch.
+const PLUGIN_AHEAD_MS: i64 = 60_000;
 
 type UsageResult = Option<Result<UsageResponse, UsageError>>;
 type CreditsResult = Option<Result<PrepaidCredits, UsageError>>;
@@ -51,7 +53,7 @@ pub fn resolve(
 		credits,
 		stale: plugin
 			.fetched_at_ms
-			.is_none_or(|at| now_ms - at > PLUGIN_STALE_MS),
+			.is_none_or(|at| now_ms - at > PLUGIN_STALE_MS || at - now_ms > PLUGIN_AHEAD_MS),
 	}
 }
 
@@ -387,6 +389,26 @@ mod tests {
 		);
 		assert!(old.stale);
 		assert!(resolve(Some(&plugin(None)), || None, true, false, NOW_MS).stale);
+	}
+
+	#[test]
+	fn plugin_usage_dated_ahead_of_the_clock_is_stale() {
+		let skewed = resolve(
+			Some(&plugin(Some(NOW_MS + 5_000))),
+			|| None,
+			true,
+			false,
+			NOW_MS,
+		);
+		assert!(!skewed.stale);
+		let stepped_back = resolve(
+			Some(&plugin(Some(NOW_MS + 2 * 3_600_000))),
+			|| None,
+			true,
+			false,
+			NOW_MS,
+		);
+		assert!(stepped_back.stale);
 	}
 
 	#[test]
