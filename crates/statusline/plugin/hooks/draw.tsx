@@ -10,7 +10,8 @@ const DEFAULT_FG = 'inactive'
 // The components `$.ui.resolve` hands back for the surface being drawn.
 type Ui = ReturnType<EngineInterface['ui']['resolve']>
 
-// The hint row's padding, the "⏵⏵ " before the mode label, and the " · " Claude Code draws between it and this line.
+// The hint row's padding, the "⏵⏵ " before the mode label, and the " · " Claude Code draws between it and this
+// line.
 const ROW_PADDING = 4
 const MODE_GLYPHS = 3
 const SEPARATOR = 3
