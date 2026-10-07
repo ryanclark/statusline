@@ -34,6 +34,9 @@ statusline install --plugin
 The plugin draws the line under the prompt and refreshes it on its own clock, so countdowns tick between turns, and it
 adds the [live activity](#live-activity) segments. Needs Claude Code 2.1.287 or later.
 
+Claude Code's background task pills, such as `1 shell`, show in the same row as the line. Its keyboard keeps working:
+press ↓ twice to select a pill, Enter to view the tasks and ← for agents.
+
 The plugin also fetches your usage with the session's own claude.ai login, about once a minute shared across every open
 chat, so `extra_usage`, `fable_usage` and `credits` need no Chrome cookie or Keychain access. Sessions on an API key or
 a third-party provider, and sessions where Claude Code refuses plugins network access, fall back to the cookie path
