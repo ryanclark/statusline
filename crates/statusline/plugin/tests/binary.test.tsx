@@ -116,4 +116,29 @@ describe('binary', () => {
     await boot($, on, { help, out: { exitCode: 3, stdout: '', stderr: 'bad input' } })
     expect(await (await mountHint($)).find({ text: /^statusline: .* exited 3: bad input$/ })).toBeDefined()
   })
+
+  test('a line that could not be stored is stored again on the next refresh', async ($, on) => {
+    let broken = true
+    let fail = false
+    on('state.set', (_$, e, next) => {
+      if (e.key === 'rendered' && fail) {
+        fail = false
+        return { deny: 'state.set: store unavailable' }
+      }
+      return next(e)
+    })
+    const reject = (argv: readonly string[]) =>
+      broken ? `EACCES: permission denied, posix_spawn '${argv[0]}'` : undefined
+    const { clock } = await boot($, on, { reject })
+    broken = false
+    fail = true
+    await clock.advance(1000)
+    await clock.advance(1000)
+    expect(await (await mountHint($)).find({ text: /12%/ })).toBeDefined()
+  })
+
+  test('a failure gathering the input is not taken for a missing binary', async ($, on) => {
+    await boot($, on, { modelError: 'model not found' })
+    expect(await (await mountHint($)).find({ text: /^statusline: .*model not found/ })).toBeDefined()
+  })
 })

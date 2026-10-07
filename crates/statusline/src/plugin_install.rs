@@ -2,14 +2,15 @@
 //! `subagentStatusLine` are edited directly.
 
 use crate::format::Percentage;
-use crate::install::{Ask, offer_subagent, prompt_yes_no};
+use crate::install::{Ask, ok, prompt_yes_no, save_edits, skip, wants_subagent, warn};
 use crate::settings::Settings;
 use crate::util::home_dir;
 use eyre::{Result, WrapErr, bail, eyre};
 use owo_colors::OwoColorize;
+use serde::Deserialize;
 use serde_json::Value;
 use statusline_core::claude_settings::{
-	Edit, Entry, Outcome, Removal, ensure_entries, is_ours, read_settings, remove_entry, replay,
+	Edit, Entry, Outcome, Removal, ensure_entries, is_ours, read_settings, remove_entry,
 	restore_entry, write_settings,
 };
 use std::ffi::OsStr;
@@ -49,6 +50,7 @@ impl Context {
 		Claude {
 			program: &self.claude,
 			cwd: &self.home,
+			dry_run: self.dry_run,
 		}
 	}
 }
@@ -119,10 +121,7 @@ fn install_plugin(
 
 	if settings.get(Entry::Subagent.key()).is_some() {
 		ok(out, "Kept subagent status line")?;
-	} else if opts.subagent
-		|| offer_subagent(ctx.interactive, || {
-			ask("Also install the subagent status line?", true)
-		}) {
+	} else if wants_subagent(&settings, opts.subagent, ctx.interactive, ask) {
 		ensure_entries(&mut settings, &[Entry::Subagent], &mut |_| false)?;
 		actions.push(Action::new(
 			Entry::Subagent,
@@ -191,33 +190,32 @@ fn ensure_marketplace(ctx: &Context, claude: &Claude<'_>, out: &mut dyn Write) -
 				"user",
 				"--json",
 			];
-			if ctx.dry_run {
-				would_run(out, &ctx.claude, &args)?;
-			} else {
-				claude.mutate(&args, None)?;
-			}
+			claude.mutate(out, &args, None)?;
 			Some(old_paths)
 		} else {
 			None
 		};
-	let args = marketplace_add_args(SPARSE_PATHS);
-	if ctx.dry_run {
-		return would_run(out, &ctx.claude, &args);
-	}
-	if let Err(err) = claude.mutate(&args, None) {
-		let Some(old_paths) = old_paths else {
-			return Err(err);
-		};
-		// The add clones from GitHub, so it can fail after the remove. Restoring the old entry keeps the installed
-		// plugin backed by a marketplace until a rerun moves it.
-		let _ = claude.mutate(
-			&marketplace_add_args(old_paths.iter().map(String::as_str)),
-			None,
-		);
-		return Err(err.wrap_err(format!(
-			"re-adding marketplace {MARKETPLACE} with the moved plugin path failed. Run `statusline install --plugin` \
-			 again to retry"
-		)));
+	let ran = match claude.mutate(out, &marketplace_add_args(SPARSE_PATHS), None) {
+		Ok(ran) => ran,
+		Err(err) => {
+			let Some(old_paths) = old_paths else {
+				return Err(err);
+			};
+			// The add clones from GitHub, so it can fail after the remove. Restoring the old entry keeps the
+			// installed plugin backed by a marketplace until a rerun moves it.
+			let _ = claude.mutate(
+				out,
+				&marketplace_add_args(old_paths.iter().map(String::as_str)),
+				None,
+			);
+			return Err(err.wrap_err(format!(
+				"re-adding marketplace {MARKETPLACE} with the moved plugin path failed. Run `statusline install \
+				 --plugin` again to retry"
+			)));
+		}
+	};
+	if ran == Ran::Planned {
+		return Ok(());
 	}
 	if old_paths.is_some() {
 		ok(
@@ -251,22 +249,20 @@ fn ensure_plugin(
 	out: &mut dyn Write,
 ) -> Result<bool> {
 	let binary = binary.to_string_lossy();
-	let Some(plugin) = find_plugin(&claude.list(&["plugin", "list", "--json"])?).cloned() else {
+	let plugins = claude.list(&["plugin", "list", "--json"])?;
+	let Some(plugin) = find_plugin(&plugins) else {
 		let config = format!("binary={binary}");
 		let args = [
 			"plugin", "install", PLUGIN_ID, "-s", "user", "--config", &config, "--json",
 		];
-		if ctx.dry_run {
-			would_run(out, &ctx.claude, &args)?;
-		} else {
-			claude.mutate(&args, None)?;
+		if claude.mutate(out, &args, None)? == Ran::Done {
 			ok(out, format_args!("Installed {PLUGIN_ID} (binary={binary})"))?;
 		}
 		// A fresh install is enabled, so only a plugin that was already installed can be disabled.
 		return Ok(true);
 	};
 
-	let enabled = plugin.get("enabled").and_then(Value::as_bool) != Some(false);
+	let enabled = plugin.enabled != Some(false);
 	if !enabled {
 		warn(
 			out,
@@ -288,11 +284,7 @@ fn ensure_plugin(
 
 	let args = ["plugin", "configure", PLUGIN_ID, "--values-stdin"];
 	let values = serde_json::json!({ "binary": binary }).to_string();
-	if ctx.dry_run {
-		would_run(out, &ctx.claude, &args)?;
-		writeln!(out, "    with stdin {values}")?;
-	} else {
-		claude.mutate(&args, Some(&values))?;
+	if claude.mutate(out, &args, Some(&values))? == Ran::Done {
 		ok(
 			out,
 			format_args!("Configured {PLUGIN_ID} (binary={binary})"),
@@ -389,7 +381,7 @@ fn install_native(
 	let mut settings = original.clone();
 	let saved = read_native(ctx)?;
 	let value = saved.clone().unwrap_or_else(|| Entry::StatusLine.desired());
-	let restored = restore_entry(&mut settings, Entry::StatusLine, value.clone(), &mut |_| {
+	let restored = restore_entry(&mut settings, Entry::StatusLine, &value, &mut |_| {
 		ctx.interactive
 			&& ask(
 				&format!(
@@ -403,11 +395,11 @@ fn install_native(
 	let mut actions = Vec::new();
 	match restored {
 		Outcome::Written if saved.is_some() => {
-			actions.push(Action {
-				entry: Entry::StatusLine,
-				done: format!("Restored native statusLine ({})", describe(&value)),
-				planned: format!("restore native statusLine ({})", describe(&value)),
-			});
+			actions.push(Action::new(
+				Entry::StatusLine,
+				format!("Restored native statusLine ({})", describe(&value)),
+				format!("restore native statusLine ({})", describe(&value)),
+			));
 		}
 		Outcome::Written => actions.push(Action::new(
 			Entry::StatusLine,
@@ -422,11 +414,11 @@ fn install_native(
 	// Rollback must work when `claude` is missing or broken, so plugin failures are reported and the rest still runs.
 	let claude = ctx.claude();
 	let mut failed = None;
-	if let Err(e) = uninstall_plugin(ctx, &claude, out) {
+	if let Err(e) = uninstall_plugin(&claude, out) {
 		warn(out, format_args!("Skipped the plugin uninstall: {e}"))?;
 		failed = Some(e);
 	}
-	if remove_marketplace && let Err(e) = drop_marketplace(ctx, &claude, out) {
+	if remove_marketplace && let Err(e) = drop_marketplace(&claude, out) {
 		warn(out, format_args!("Skipped the marketplace removal: {e}"))?;
 		failed = failed.or(Some(e));
 	}
@@ -444,21 +436,19 @@ fn install_native(
 	failed.map_or(Ok(()), Err)
 }
 
-fn uninstall_plugin(ctx: &Context, claude: &Claude<'_>, out: &mut dyn Write) -> Result<()> {
+fn uninstall_plugin(claude: &Claude<'_>, out: &mut dyn Write) -> Result<()> {
 	if find_plugin(&claude.list(&["plugin", "list", "--json"])?).is_none() {
 		return skip(out, format_args!("{PLUGIN_ID} is not installed"));
 	}
 	let args = ["plugin", "uninstall", PLUGIN_ID, "-s", "user", "--json"];
-	if ctx.dry_run {
-		would_run(out, &ctx.claude, &args)
-	} else if claude.mutate_unless(&args, "not_installed")? {
-		ok(out, format_args!("Uninstalled {PLUGIN_ID}"))
-	} else {
-		skip(out, format_args!("{PLUGIN_ID} is not installed"))
+	match claude.mutate_unless(out, &args, "not_installed")? {
+		Ran::Done => ok(out, format_args!("Uninstalled {PLUGIN_ID}")),
+		Ran::Already => skip(out, format_args!("{PLUGIN_ID} is not installed")),
+		Ran::Planned => Ok(()),
 	}
 }
 
-fn drop_marketplace(ctx: &Context, claude: &Claude<'_>, out: &mut dyn Write) -> Result<()> {
+fn drop_marketplace(claude: &Claude<'_>, out: &mut dyn Write) -> Result<()> {
 	if !has_marketplace(&claude.list(&["plugin", "marketplace", "list", "--json"])?) {
 		return skip(out, format_args!("Marketplace {MARKETPLACE} is not added"));
 	}
@@ -471,17 +461,15 @@ fn drop_marketplace(ctx: &Context, claude: &Claude<'_>, out: &mut dyn Write) -> 
 		"user",
 		"--json",
 	];
-	if ctx.dry_run {
-		would_run(out, &ctx.claude, &args)
-	} else if claude.mutate_unless(&args, "not_configured")? {
-		ok(out, format_args!("Removed marketplace {MARKETPLACE}"))
-	} else {
-		skip(out, format_args!("Marketplace {MARKETPLACE} is not added"))
+	match claude.mutate_unless(out, &args, "not_configured")? {
+		Ran::Done => ok(out, format_args!("Removed marketplace {MARKETPLACE}")),
+		Ran::Already => skip(out, format_args!("Marketplace {MARKETPLACE} is not added")),
+		Ran::Planned => Ok(()),
 	}
 }
 
-/// Backs up and writes Claude Code's settings only when something changed. Edits are replayed onto the file as it is
-/// now, and one whose entry changed underneath is skipped.
+/// Backs up and writes Claude Code's settings only when something changed. An edit whose entry changed underneath is
+/// skipped.
 fn commit(
 	ctx: &Context,
 	path: &Path,
@@ -501,9 +489,7 @@ fn commit(
 		return would(out, format_args!("back up and update {}", path.display()));
 	}
 
-	let current = read_settings(path)?;
-	let mut next = current.clone();
-	let stale = replay(&mut next, &edits)?;
+	let stale = save_edits(path, &edits, || back_up(ctx, path, out))?;
 	for entry in &stale {
 		warn(
 			out,
@@ -513,24 +499,9 @@ fn commit(
 			),
 		)?;
 	}
-	if next == current {
+	if stale.len() == edits.len() {
 		return Ok(());
 	}
-
-	if path.exists() {
-		let backups = ctx.data_dir().join("backups");
-		std::fs::create_dir_all(&backups)?;
-		let millis = std::time::SystemTime::now()
-			.duration_since(std::time::UNIX_EPOCH)
-			.map_or(0, |d| d.as_millis());
-		let backup = backups.join(format!("claude-settings.{millis}.json"));
-		std::fs::copy(path, &backup).wrap_err_with(|| format!("backing up {}", path.display()))?;
-		ok(
-			out,
-			format_args!("Backed up {} to {}", path.display(), backup.display()),
-		)?;
-	}
-	write_settings(path, &next)?;
 	for action in actions.iter().filter(|a| !stale.contains(&a.entry)) {
 		ok(out, &action.done)?;
 	}
@@ -538,10 +509,30 @@ fn commit(
 	Ok(())
 }
 
-/// Saves the user's line, ours or not, for `--native` to restore. A rerun finds no statusLine, so the saved one is
-/// never overwritten.
+fn back_up(ctx: &Context, path: &Path, out: &mut dyn Write) -> Result<()> {
+	if !path.exists() {
+		return Ok(());
+	}
+	let backups = ctx.data_dir().join("backups");
+	std::fs::create_dir_all(&backups)?;
+	let millis = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map_or(0, |d| d.as_millis());
+	let backup = backups.join(format!("claude-settings.{millis}.json"));
+	std::fs::copy(path, &backup).wrap_err_with(|| format!("backing up {}", path.display()))?;
+	ok(
+		out,
+		format_args!("Backed up {} to {}", path.display(), backup.display()),
+	)
+}
+
+/// Saves the user's line, ours or not, for `--native` to restore. A saved line of their own is never replaced by ours,
+/// since a plain `statusline install` between two plugin installs would otherwise lose it.
 fn save_native(ctx: &Context, current: &Value, out: &mut dyn Write) -> Result<()> {
-	if read_native(ctx)?.as_ref() == Some(current) {
+	if let Some(saved) = read_native(ctx)?
+		&& (saved == *current
+			|| (is_ours(Entry::StatusLine, current) && !is_ours(Entry::StatusLine, &saved)))
+	{
 		return Ok(());
 	}
 	let file = ctx.native_file();
@@ -551,8 +542,7 @@ fn save_native(ctx: &Context, current: &Value, out: &mut dyn Write) -> Result<()
 			format_args!("save the native statusLine to {}", file.display()),
 		);
 	}
-	std::fs::create_dir_all(ctx.data_dir())?;
-	std::fs::write(&file, serde_json::to_string_pretty(current)?)?;
+	write_settings(&file, current).wrap_err_with(|| format!("saving {}", file.display()))?;
 	ok(
 		out,
 		format_args!("Saved the native statusLine to {}", file.display()),
@@ -585,9 +575,8 @@ fn locate_binary(path_var: Option<&OsStr>, exe: &Path) -> PathBuf {
 		.unwrap_or_else(|| exe.to_path_buf())
 }
 
-fn has_marketplace(list: &[Value]) -> bool {
-	list.iter()
-		.any(|m| m.get("name").and_then(Value::as_str) == Some(MARKETPLACE))
+fn has_marketplace(list: &[Marketplace]) -> bool {
+	list.iter().any(|m| m.name == MARKETPLACE)
 }
 
 /// Returns the recorded sparse paths when they miss one we need. A full checkout, with none, always has the plugin.
@@ -607,13 +596,9 @@ fn stale_sparse_paths(settings: &Value) -> Option<Vec<String>> {
 }
 
 /// Only the user-scope install is ours, since that is the scope `--plugin` installs into and `--native` removes from.
-fn find_plugin(list: &[Value]) -> Option<&Value> {
-	list.iter().find(|p| {
-		p.get("id").and_then(Value::as_str) == Some(PLUGIN_ID)
-			&& p.get("scope")
-				.and_then(Value::as_str)
-				.is_none_or(|s| s == "user")
-	})
+fn find_plugin(list: &[InstalledPlugin]) -> Option<&InstalledPlugin> {
+	list.iter()
+		.find(|p| p.id == PLUGIN_ID && p.scope.as_deref().is_none_or(|s| s == "user"))
 }
 
 fn configured_binary(settings: &Value) -> Option<&str> {
@@ -630,9 +615,9 @@ fn parse_version(stdout: &str) -> Option<semver::Version> {
 }
 
 /// The `--json` result of a mutating command, printed as the last line of stdout.
-fn result_line(stdout: &str) -> Option<Value> {
+fn result_line(stdout: &str) -> Option<CliResult> {
 	let line = stdout.lines().rev().find(|l| !l.trim().is_empty())?;
-	serde_json::from_str(line).ok().filter(Value::is_object)
+	serde_json::from_str(line).ok()
 }
 
 fn describe(value: &Value) -> String {
@@ -648,6 +633,30 @@ fn settings_value(settings: &Value) -> String {
 		.map_or_else(|| "nothing".to_owned(), describe)
 }
 
+/// An entry of `claude plugin marketplace list --json`.
+#[derive(Debug, Deserialize)]
+struct Marketplace {
+	#[serde(default)]
+	name: String,
+}
+
+/// An entry of `claude plugin list --json`.
+#[derive(Debug, Deserialize)]
+struct InstalledPlugin {
+	#[serde(default)]
+	id: String,
+	scope: Option<String>,
+	enabled: Option<bool>,
+}
+
+/// The `--json` result line of a mutating `claude plugin` command.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CliResult {
+	message: Option<String>,
+	failure_code: Option<String>,
+}
+
 /// A settings edit, worded for both the applied message and the dry run.
 struct Action {
 	entry: Entry,
@@ -656,19 +665,30 @@ struct Action {
 }
 
 impl Action {
-	fn new(entry: Entry, done: &str, planned: &str) -> Self {
+	fn new(entry: Entry, done: impl Into<String>, planned: impl Into<String>) -> Self {
 		Self {
 			entry,
-			done: done.to_owned(),
-			planned: planned.to_owned(),
+			done: done.into(),
+			planned: planned.into(),
 		}
 	}
+}
+
+/// What a mutating `claude` call did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ran {
+	Done,
+	/// A dry run printed the command instead.
+	Planned,
+	/// It failed because the thing was already gone.
+	Already,
 }
 
 struct Claude<'a> {
 	program: &'a Path,
 	/// The home dir, so project settings from the current directory do not leak into the lists.
 	cwd: &'a Path,
+	dry_run: bool,
 }
 
 impl Claude<'_> {
@@ -720,66 +740,59 @@ impl Claude<'_> {
 		})
 	}
 
-	fn list(&self, args: &[&str]) -> Result<Vec<Value>> {
+	fn list<T: serde::de::DeserializeOwned>(&self, args: &[&str]) -> Result<Vec<T>> {
 		serde_json::from_str(&self.ok_stdout(args, None)?)
 			.wrap_err_with(|| format!("parsing `claude {}`", args.join(" ")))
 	}
 
-	fn mutate(&self, args: &[&str], stdin: Option<&str>) -> Result<()> {
-		self.ok_stdout(args, stdin).map(drop)
+	fn mutate(&self, out: &mut dyn Write, args: &[&str], stdin: Option<&str>) -> Result<Ran> {
+		if self.dry_run {
+			return self.plan(out, args, stdin);
+		}
+		self.ok_stdout(args, stdin)?;
+		Ok(Ran::Done)
 	}
 
-	/// Returns `Ok(false)` when the command fails with the `failureCode` `already`, meaning the thing was already gone.
-	fn mutate_unless(&self, args: &[&str], already: &str) -> Result<bool> {
+	/// Returns [`Ran::Already`] when the command fails with the `failureCode` `already`.
+	fn mutate_unless(&self, out: &mut dyn Write, args: &[&str], already: &str) -> Result<Ran> {
+		if self.dry_run {
+			return self.plan(out, args, None);
+		}
 		let output = self.run(args, None)?;
 		if output.status.success() {
-			return Ok(true);
+			return Ok(Ran::Done);
 		}
-		let code = result_line(&String::from_utf8_lossy(&output.stdout)).and_then(|r| {
-			r.get("failureCode")
-				.and_then(Value::as_str)
-				.map(str::to_owned)
-		});
+		let code =
+			result_line(&String::from_utf8_lossy(&output.stdout)).and_then(|r| r.failure_code);
 		if code.as_deref() == Some(already) {
-			return Ok(false);
+			return Ok(Ran::Already);
 		}
 		Err(failure(args, &output))
+	}
+
+	fn plan(&self, out: &mut dyn Write, args: &[&str], stdin: Option<&str>) -> Result<Ran> {
+		would(
+			out,
+			format_args!("run {} {}", self.program.display(), args.join(" ")),
+		)?;
+		if let Some(input) = stdin {
+			writeln!(out, "    with stdin {input}")?;
+		}
+		Ok(Ran::Planned)
 	}
 }
 
 /// Prefers the `--json` result's message, since stderr also carries warnings about unrelated settings.
 fn failure(args: &[&str], output: &Output) -> eyre::Report {
 	let message = result_line(&String::from_utf8_lossy(&output.stdout))
-		.and_then(|r| r.get("message").and_then(Value::as_str).map(str::to_owned))
+		.and_then(|r| r.message)
 		.unwrap_or_else(|| String::from_utf8_lossy(&output.stderr).trim().to_owned());
 	eyre!("`claude {}` failed: {message}", args.join(" "))
-}
-
-fn ok(out: &mut dyn Write, msg: impl std::fmt::Display) -> Result<()> {
-	writeln!(out, "{} {msg}", "✓".green())?;
-	Ok(())
-}
-
-fn skip(out: &mut dyn Write, msg: impl std::fmt::Display) -> Result<()> {
-	writeln!(out, "{} {msg}", "–".dimmed())?;
-	Ok(())
-}
-
-fn warn(out: &mut dyn Write, msg: impl std::fmt::Display) -> Result<()> {
-	writeln!(out, "{} {msg}", "!".yellow().bold())?;
-	Ok(())
 }
 
 fn would(out: &mut dyn Write, msg: impl std::fmt::Display) -> Result<()> {
 	writeln!(out, "{} would {msg}", "→".cyan())?;
 	Ok(())
-}
-
-fn would_run(out: &mut dyn Write, program: &Path, args: &[&str]) -> Result<()> {
-	would(
-		out,
-		format_args!("run {} {}", program.display(), args.join(" ")),
-	)
 }
 
 #[cfg(test)]
@@ -861,24 +874,27 @@ mod tests {
 
 	#[test]
 	fn recorded_lists_are_matched_by_name_id_and_scope() {
-		let marketplaces: Vec<Value> = serde_json::from_str(MARKETPLACE_LIST).unwrap();
+		let marketplaces: Vec<Marketplace> = serde_json::from_str(MARKETPLACE_LIST).unwrap();
 		assert!(has_marketplace(&marketplaces));
 		assert!(!has_marketplace(&[]));
 
-		let plugins: Vec<Value> = serde_json::from_str(PLUGIN_LIST).unwrap();
-		assert_eq!(find_plugin(&plugins).unwrap()["version"], "0.1.0");
+		let plugins: Vec<InstalledPlugin> = serde_json::from_str(PLUGIN_LIST).unwrap();
+		assert_eq!(find_plugin(&plugins).unwrap().enabled, Some(true));
 
-		let project_only = json!([{"id": "statusline@ryanclark", "scope": "project"}]);
-		assert!(find_plugin(project_only.as_array().unwrap()).is_none());
-		let other = json!([{"id": "statusline@someone-else", "scope": "user"}]);
-		assert!(find_plugin(other.as_array().unwrap()).is_none());
+		let parse = |v: Value| serde_json::from_value::<Vec<InstalledPlugin>>(v).unwrap();
+		let project_only = parse(json!([{"id": "statusline@ryanclark", "scope": "project"}]));
+		assert!(find_plugin(&project_only).is_none());
+		let other = parse(json!([{"id": "statusline@someone-else", "scope": "user"}]));
+		assert!(find_plugin(&other).is_none());
 	}
 
 	#[test]
 	fn result_line_reads_the_last_json_line_and_its_failure_code() {
 		let r = result_line(&format!("noise\n{UNINSTALL_MISSING}\n\n")).unwrap();
-		assert_eq!(r["failureCode"], "not_installed");
-		assert_eq!(result_line(INSTALL).unwrap()["outcome"], "ok");
+		assert_eq!(r.failure_code.as_deref(), Some("not_installed"));
+		let r = result_line(INSTALL).unwrap();
+		assert_eq!(r.failure_code, None);
+		assert!(r.message.unwrap().starts_with("Successfully installed"));
 		assert!(result_line("Configuration saved. Restart Claude Code to apply it.\n").is_none());
 	}
 
@@ -1035,13 +1051,13 @@ esac
 			fs::read_dir(self.home.join(".statusline/backups")).map_or(0, Iterator::count)
 		}
 
-		fn plugin(&self, dry_run: bool, remove_native: bool) -> (Result<()>, String) {
+		fn plugin(&self, dry_run: bool, keep_native: bool) -> (Result<()>, String) {
 			let mut out = Vec::new();
 			let result = install_plugin(
 				&self.ctx(dry_run),
 				Path::new("/opt/homebrew/bin/statusline"),
 				&PluginOptions {
-					keep_native: !remove_native,
+					keep_native,
 					subagent: false,
 					five_hour_reset_threshold: None,
 					seven_day_reset_threshold: None,
@@ -1090,7 +1106,7 @@ esac
 		)
 		.unwrap();
 
-		let (result, out) = fake.plugin(false, false);
+		let (result, out) = fake.plugin(false, true);
 		result.unwrap();
 		assert_eq!(
 			fake.calls(),
@@ -1124,7 +1140,7 @@ esac
 		);
 
 		let saved = fs::read_to_string(fake.settings_path()).unwrap();
-		let (result, out) = fake.plugin(false, false);
+		let (result, out) = fake.plugin(false, true);
 		result.unwrap();
 		assert_eq!(
 			fake.calls(),
@@ -1151,7 +1167,7 @@ esac
 			.clone();
 		fs::write(fake.settings_path(), settings.to_string()).unwrap();
 
-		let (result, out) = fake.plugin(true, false);
+		let (result, out) = fake.plugin(true, true);
 		result.unwrap();
 		let calls = fake.calls();
 		assert_eq!(
@@ -1172,7 +1188,7 @@ esac
 			"{out}"
 		);
 
-		let (result, out) = fake.plugin(false, false);
+		let (result, out) = fake.plugin(false, true);
 		result.unwrap();
 		assert_eq!(
 			fake.calls(),
@@ -1190,7 +1206,7 @@ esac
 		settings["extraKnownMarketplaces"]["ryanclark"]["source"]["sparsePaths"] =
 			json!([".claude-plugin", "crates/statusline/plugin"]);
 		fs::write(fake.settings_path(), settings.to_string()).unwrap();
-		let (result, out) = fake.plugin(false, false);
+		let (result, out) = fake.plugin(false, true);
 		result.unwrap();
 		assert_eq!(
 			fake.calls(),
@@ -1219,7 +1235,7 @@ esac
 			.clone();
 		fs::write(fake.settings_path(), settings.to_string()).unwrap();
 
-		let (result, _) = fake.plugin(false, false);
+		let (result, _) = fake.plugin(false, true);
 		let err = format!("{:?}", result.unwrap_err());
 		assert!(
 			err.contains("Failed to clone ryanclark/statusline"),
@@ -1254,7 +1270,7 @@ esac
 		});
 		fs::write(fake.settings_path(), original.to_string()).unwrap();
 
-		let (result, out) = fake.plugin(false, true);
+		let (result, out) = fake.plugin(false, false);
 		result.unwrap();
 		let calls = fake.calls();
 		assert_eq!(
@@ -1289,7 +1305,7 @@ esac
 		);
 
 		// A rerun finds no statusLine and must keep the saved one for --native.
-		let (result, _) = fake.plugin(false, true);
+		let (result, _) = fake.plugin(false, false);
 		result.unwrap();
 		fake.calls();
 		assert_eq!(fake.backups(), 1);
@@ -1338,11 +1354,37 @@ esac
 		)
 		.unwrap();
 
-		let (result, out) = fake.plugin(false, true);
+		let (result, out) = fake.plugin(false, false);
 		result.unwrap();
 		let mut expected: Value = serde_json::from_str(SETTINGS_AFTER_INSTALL).unwrap();
 		expected.as_object_mut().unwrap().remove("statusLine");
 		assert_eq!(fake.settings(), expected, "{out}");
+	}
+
+	#[test]
+	fn a_saved_foreign_line_is_not_replaced_by_ours() {
+		let fake = Fake::new("keepsaved");
+		fs::write(fake.root.join("installed"), "").unwrap();
+		fs::write(fake.root.join("has-marketplace"), "").unwrap();
+		let theirs = json!({"type": "command", "command": "~/bin/my-line.sh"});
+		fs::create_dir_all(fake.home.join(".statusline")).unwrap();
+		let saved = fake.home.join(".statusline/native-statusline.json");
+		fs::write(&saved, theirs.to_string()).unwrap();
+		// A plain `statusline install` after `--plugin` wrote ours over the line that was saved.
+		fs::write(
+			fake.settings_path(),
+			json!({"statusLine": {"type": "command", "command": "statusline"}, "subagentStatusLine": {"type": "command", "command": "x"}})
+				.to_string(),
+		)
+		.unwrap();
+
+		let (result, out) = fake.plugin(false, true);
+		result.unwrap();
+		assert_eq!(
+			serde_json::from_str::<Value>(&fs::read_to_string(&saved).unwrap()).unwrap(),
+			theirs,
+			"{out}"
+		);
 	}
 
 	#[test]
@@ -1357,7 +1399,7 @@ esac
 		)
 		.unwrap();
 
-		let (result, out) = fake.plugin(false, true);
+		let (result, out) = fake.plugin(false, false);
 		result.unwrap();
 		assert_eq!(fake.settings()["statusLine"], theirs);
 		assert!(out.contains("draws alongside the plugin"), "{out}");
@@ -1382,7 +1424,7 @@ esac
 		)
 		.unwrap();
 
-		let (result, out) = fake.plugin(false, true);
+		let (result, out) = fake.plugin(false, false);
 		result.unwrap();
 		assert_eq!(fake.settings()["statusLine"], ours, "{out}");
 		assert!(out.contains("is installed but disabled"), "{out}");
@@ -1404,7 +1446,7 @@ esac
 		)
 		.unwrap();
 
-		let (result, out) = fake.plugin(false, false);
+		let (result, out) = fake.plugin(false, true);
 		result.unwrap();
 		assert!(
 			out.contains("Kept native statusLine as the fallback"),
@@ -1412,7 +1454,7 @@ esac
 		);
 		assert!(!out.contains("draws alongside"), "{out}");
 
-		let (result, out) = fake.plugin(false, true);
+		let (result, out) = fake.plugin(false, false);
 		result.unwrap();
 		assert!(fake.settings().get("statusLine").is_none(), "{out}");
 		assert!(out.contains("Removed native statusLine"), "{out}");
@@ -1445,86 +1487,6 @@ esac
 		assert_eq!(fake.settings(), json!({"model": "opus"}));
 	}
 
-	/// Stands in for an open Claude Code session that rewrites settings.json while a prompt waits on the user.
-	fn rewrite_model(path: &Path) {
-		let mut settings: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
-		settings["model"] = json!("sonnet");
-		fs::write(path, settings.to_string()).unwrap();
-	}
-
-	#[test]
-	fn plugin_writes_onto_what_claude_code_saved_during_a_prompt() {
-		let fake = Fake::new("promptrace");
-		fs::write(fake.root.join("installed"), "").unwrap();
-		fs::write(fake.root.join("has-marketplace"), "").unwrap();
-		fs::write(
-			fake.settings_path(),
-			json!({"model": "opus", "statusLine": {"type": "command", "command": "~/bin/my-line.sh"}}).to_string(),
-		)
-		.unwrap();
-
-		let path = fake.settings_path();
-		let mut out = Vec::new();
-		install_plugin(
-			&Context {
-				interactive: true,
-				..fake.ctx(false)
-			},
-			Path::new("/opt/homebrew/bin/statusline"),
-			&PluginOptions {
-				keep_native: false,
-				subagent: false,
-				five_hour_reset_threshold: None,
-				seven_day_reset_threshold: None,
-			},
-			&mut out,
-			&mut |q, _| {
-				rewrite_model(&path);
-				q.starts_with("Remove your own statusLine")
-			},
-		)
-		.unwrap();
-		let out = String::from_utf8(out).unwrap();
-		let settings = fake.settings();
-		assert_eq!(settings["model"], "sonnet", "{out}");
-		assert!(settings.get("statusLine").is_none(), "{out}");
-	}
-
-	#[test]
-	fn native_writes_onto_what_claude_code_saved_during_a_prompt() {
-		let fake = Fake::new("nativerace");
-		fs::write(
-			fake.settings_path(),
-			json!({"model": "opus", "statusLine": {"type": "command", "command": "other"}})
-				.to_string(),
-		)
-		.unwrap();
-
-		let path = fake.settings_path();
-		let mut out = Vec::new();
-		install_native(
-			&Context {
-				interactive: true,
-				..fake.ctx(false)
-			},
-			false,
-			&mut out,
-			&mut |_, _| {
-				rewrite_model(&path);
-				true
-			},
-		)
-		.unwrap();
-		let out = String::from_utf8(out).unwrap();
-		let settings = fake.settings();
-		assert_eq!(settings["model"], "sonnet", "{out}");
-		assert_eq!(
-			settings["statusLine"],
-			json!({"type": "command", "command": "statusline"}),
-			"{out}"
-		);
-	}
-
 	#[test]
 	fn a_failed_install_leaves_settings_untouched() {
 		let fake = Fake::new("fails");
@@ -1532,7 +1494,7 @@ esac
 		let before = r#"{"statusLine": {"type": "command", "command": "statusline"}}"#;
 		fs::write(fake.settings_path(), before).unwrap();
 
-		let (result, _) = fake.plugin(false, true);
+		let (result, _) = fake.plugin(false, false);
 		let err = format!("{:#}", result.unwrap_err());
 		assert!(err.contains("not found in marketplace"), "{err}");
 		assert_eq!(fs::read_to_string(fake.settings_path()).unwrap(), before);
@@ -1548,7 +1510,7 @@ esac
 	fn an_old_claude_is_refused_before_anything_runs() {
 		let fake = Fake::new("old");
 		fs::write(fake.root.join("version"), "2.1.286 (Claude Code)\n").unwrap();
-		let (result, _) = fake.plugin(false, false);
+		let (result, _) = fake.plugin(false, true);
 		assert!(format!("{:#}", result.unwrap_err()).contains("2.1.287"));
 		assert_eq!(fake.calls(), ["--version"]);
 		assert!(!fake.home.join(".statusline").exists());
@@ -1563,7 +1525,7 @@ esac
 		)
 		.unwrap();
 
-		let (result, out) = fake.plugin(true, true);
+		let (result, out) = fake.plugin(true, false);
 		result.unwrap();
 		assert_eq!(
 			fake.calls(),

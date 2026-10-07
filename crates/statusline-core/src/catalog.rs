@@ -42,6 +42,7 @@ pub struct OptionSet {
 	pub cache_state: bool,
 	/// Countdown and clock time options, for segments that count down to a reset or expiry.
 	pub countdown: bool,
+	/// The `within` window the cache miss segments look back over.
 	pub within: bool,
 	/// Whether the last cache miss spells out the tool and system prompt deltas.
 	pub details: bool,
@@ -228,7 +229,7 @@ static CATALOG: &[SegmentMeta] = &[
 		id: "cache_misses",
 		label: "Cache misses",
 		category: Category::Context,
-		description: "Prompt cache misses in the last 30m, or the `within` window",
+		description: "Prompt cache misses in the last 30m or the `within` window, or the session total without the plugin",
 		options: OptionSet {
 			within: true,
 			..COLORED_TEXT

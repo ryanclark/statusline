@@ -2,6 +2,7 @@
 //!
 //! Segments keep rendering ANSI and this module parses it back, so spans match what the terminal path prints.
 
+use crate::text::{AnsiToken, AnsiTokens};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,25 +20,20 @@ pub struct Style {
 	pub fg: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub bg: Option<String>,
-	#[serde(skip_serializing_if = "is_false")]
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
 	pub bold: bool,
-	#[serde(skip_serializing_if = "is_false")]
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
 	pub dim: bool,
-	#[serde(skip_serializing_if = "is_false")]
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
 	pub italic: bool,
-	#[serde(skip_serializing_if = "is_false")]
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
 	pub underline: bool,
-	#[serde(skip_serializing_if = "is_false")]
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
 	pub strikethrough: bool,
-	#[serde(skip_serializing_if = "is_false")]
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
 	pub inverse: bool,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub href: Option<String>,
-}
-
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_false(b: &bool) -> bool {
-	!*b
 }
 
 /// Splits `s` into rows on `\n` and each row into runs of identically styled text. Unknown escape sequences and
@@ -48,74 +44,32 @@ pub fn ansi_to_spans(s: &str) -> Vec<Vec<Span>> {
 	let mut row = Vec::new();
 	let mut style = Style::default();
 	let mut text = String::new();
-	let mut chars = s.chars().peekable();
 
-	while let Some(c) = chars.next() {
-		// 0x9B and 0x9D are the 8-bit forms of `ESC [` and `ESC ]`.
-		let intro = match c {
-			'\u{1b}' => chars.next(),
-			'\u{9b}' => Some('['),
-			'\u{9d}' => Some(']'),
-			_ => None,
-		};
-		if c == '\u{1b}' || intro.is_some() {
-			let before = style.clone();
-			match intro {
-				Some('[') => {
-					let mut params = String::new();
-					let mut final_byte = None;
-					for c in chars.by_ref() {
-						if ('\u{40}'..='\u{7e}').contains(&c) {
-							final_byte = Some(c);
-							break;
-						}
-						params.push(c);
-					}
-					if final_byte == Some('m') {
-						apply_sgr(&mut style, &params);
-					}
-				}
-				Some(']') => {
-					let mut body = String::new();
-					while let Some(c) = chars.next() {
-						if c == '\u{07}' || c == '\u{9c}' {
-							break;
-						}
-						if c == '\u{1b}' && chars.peek() == Some(&'\\') {
-							chars.next();
-							break;
-						}
-						body.push(c);
-					}
-					// OSC 8 is `8;params;target`, and an empty target closes the link.
-					if let Some(rest) = body.strip_prefix("8;") {
-						let target = rest.split_once(';').map_or("", |(_, t)| t);
-						style.href = (!target.is_empty()).then(|| target.to_owned());
-					}
-				}
-				// Intermediate bytes (0x20..=0x2F) run until a final byte, as in charset designations like `ESC ( B`.
-				Some(c) if ('\u{20}'..='\u{2f}').contains(&c) => {
-					while chars
-						.next_if(|c| ('\u{20}'..='\u{2f}').contains(c))
-						.is_some()
-					{}
-					chars.next();
-				}
-				Some(_) | None => {}
-			}
-			if style != before {
-				flush(&mut row, &mut text, &before);
-			}
-			continue;
-		}
-		match c {
-			'\n' => {
+	for token in AnsiTokens::new(s) {
+		match token {
+			AnsiToken::Text('\n') => {
 				flush(&mut row, &mut text, &style);
 				rows.push(std::mem::take(&mut row));
 			}
-			'\t' => text.push(' '),
-			c if c.is_control() => {}
-			c => text.push(c),
+			AnsiToken::Text('\t') => text.push(' '),
+			AnsiToken::Text(c) if c.is_control() => {}
+			AnsiToken::Text(c) => text.push(c),
+			AnsiToken::Csi {
+				params,
+				final_byte: Some('m'),
+			} => {
+				flush(&mut row, &mut text, &style);
+				apply_sgr(&mut style, params);
+			}
+			// OSC 8 is `8;params;target`, and an empty target closes the link.
+			AnsiToken::Osc(body) => {
+				if let Some(rest) = body.strip_prefix("8;") {
+					flush(&mut row, &mut text, &style);
+					let target = rest.split_once(';').map_or("", |(_, t)| t);
+					style.href = (!target.is_empty()).then(|| target.to_owned());
+				}
+			}
+			AnsiToken::Csi { .. } | AnsiToken::Escape => {}
 		}
 	}
 	flush(&mut row, &mut text, &style);

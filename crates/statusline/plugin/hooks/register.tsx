@@ -29,6 +29,7 @@ import {
 import { isSpanRows, MISSING, NOT_FOUND, REQUIRED_FLAGS, tooOldMessage, UNKNOWN_FLAG } from './binary'
 import type { Verdict } from './binary'
 import { EMPTY_TRACKER, observeStep, TTL_MS } from './cache'
+import { blank, draw } from './draw'
 import { autocompactOf, inputJson } from './input'
 import {
   answered,
@@ -47,8 +48,7 @@ import {
   waiting,
 } from './usage'
 import type { UsageFile, UsageInput, UsageMemo } from './usage'
-import { parsePills } from './pills'
-import { cut, obj, plain, str } from './util'
+import { cut, dataPath, obj, plain, str } from './util'
 import type { Json } from './util'
 
 const rendered = atom({ plugin: 'statusline', key: 'rendered' } as const, null)
@@ -190,7 +190,7 @@ async function writeHeartbeat($: EngineInterface, sessionId: string, expiresMs: 
   try {
     const home = await $.env.get('HOME')
     if (home) {
-      await $.fs.write(`${home}/.statusline/sessions/${sessionId}.plugin`, String(Math.floor(expiresMs)))
+      await $.fs.write(dataPath(home, `sessions/${sessionId}.plugin`), String(Math.floor(expiresMs)))
     }
   } catch {
     // A missed write leaves the native line drawing until the next refresh, as if the plugin were not installed.
@@ -208,7 +208,7 @@ async function writeAgents($: EngineInterface, sessionId: string, now: number, a
     const home = await $.env.get('HOME')
     if (home) {
       const file = { written_at_ms: now, agents: statuses }
-      await $.fs.write(`${home}/.statusline/sessions/${sessionId}.agents.json`, JSON.stringify(file))
+      await $.fs.write(dataPath(home, `sessions/${sessionId}.agents.json`), JSON.stringify(file))
       state.agentsKey = key
       state.agentsAt = now
     }
@@ -243,7 +243,14 @@ async function writeUsage($: EngineInterface, path: string, file: UsageFile) {
 }
 
 async function authorizeUsage($: EngineInterface, memo: UsageMemo): Promise<string | null> {
-  const auth = await $.session.authorize().catch(() => null)
+  let auth
+  try {
+    auth = await $.session.authorize()
+  } catch {
+    // Says nothing about the login, so the next refresh asks again.
+    memo.handle = null
+    return null
+  }
   // An API key or a third-party provider has no claude.ai usage, and the binary keeps its cookie path for those.
   memo.handle = auth?.kind === 'bearer' ? auth.handle : null
   memo.off = memo.handle === null
@@ -330,10 +337,11 @@ async function run($: EngineInterface): Promise<Rendered> {
     return { rows: [], error: verdict.error }
   }
   const { binary } = state
+  const stdin = await buildInput($)
   let out
   try {
     out = await $.process.run([binary, '--format', 'spans', '--heartbeat-ms', String(state.heartbeatMs)], {
-      stdin: await buildInput($),
+      stdin,
       timeoutMs: 5000,
     })
   } catch (err) {
@@ -374,9 +382,11 @@ async function refresh($: EngineInterface) {
     }
     const key = JSON.stringify(next)
     if (key !== state.last) {
-      state.last = key
       await update($, rendered, () => next)
+      state.last = key
     }
+  } catch {
+    // Left unmarked so the next refresh stores the line again.
   } finally {
     state.inFlight = false
     if (state.again) {
@@ -385,78 +395,14 @@ async function refresh($: EngineInterface) {
   }
 }
 
-// Claude Code draws a statusLine command's uncoloured text in the theme's muted grey, not the terminal foreground,
-// so spans without their own colour take that theme key to match the native line.
-const DEFAULT_FG = 'inactive'
-
-async function draw(
+async function drawLine(
   $: EngineInterface,
   e: Parameters<EngineInterface['ui']['resolve']>[0],
   working: boolean,
   hint?: unknown,
 ) {
   const r = await read($, rendered)
-  if (!r || (!r.error && r.rows.every(row => row.length === 0))) {
-    return null
-  }
-  const { Box, Text, Link } = $.ui.resolve(e)
-  if (r.error) {
-    return (
-      <Text color="error" wrap="truncate-end">
-        {r.error}
-      </Text>
-    )
-  }
-  const lastRow = r.rows.length - 1
-  const { pills, selected } = parsePills(hint)
-  return (
-    <Box flexDirection="column">
-      {r.rows.map((row, i) => (
-        // One Text per row so an overflowing row is cut once at its end rather than every span shrinking on its own.
-        <Text key={`row${i}`} wrap="truncate-end">
-          {i === 0 && pills.length > 0 ? (
-            <Text key="pills">
-              {pills.map((p, k) => (
-                <Text key={`pill${k}`} color={selected ? 'inverseText' : 'cyan'} backgroundColor={selected ? 'cyan' : undefined}>
-                  {k > 0 ? ` ${p}` : p}
-                </Text>
-              ))}
-              <Text dimColor>{' · '}</Text>
-            </Text>
-          ) : null}
-          {row.map((s, j) => {
-            const text = (
-              <Text
-                key={`s${j}`}
-                color={s.fg ?? DEFAULT_FG}
-                backgroundColor={s.bg}
-                bold={s.bold}
-                dimColor={s.dim}
-                italic={s.italic}
-                underline={s.underline}
-                strikethrough={s.strikethrough}
-                inverse={s.inverse}
-              >
-                {s.text}
-              </Text>
-            )
-            return s.href ? (
-              <Link key={`l${j}`} href={s.href}>
-                {text}
-              </Link>
-            ) : (
-              text
-            )
-          })}
-          {working && i === lastRow ? (
-            <Text key="esc" dimColor>
-              {' · esc to interrupt'}
-            </Text>
-          ) : null}
-        </Text>
-      ))}
-    </Box>
-  )
+  return r && !blank(r) ? draw($.ui.resolve(e), r, working, hint) : null
 }
 
 async function noteTodos($: EngineInterface, tool: string, args: Json, result: Json, main: boolean) {
@@ -607,14 +553,8 @@ export const register: Register = (on, options) => {
       if (!u) {
         return stepped
       }
-      const usage = {
-        input_tokens: u.input_tokens,
-        output_tokens: u.output_tokens,
-        cache_creation_input_tokens: u.cache_creation_input_tokens,
-        cache_read_input_tokens: u.cache_read_input_tokens,
-      }
       const effort = typeof e.effort === 'string' ? e.effort : null
-      const s = { sentAt, model: u.model || e.model, usage, compose: composed, effort }
+      const s = { sentAt, model: u.model || e.model, usage: u, compose: composed, effort }
       return observeStep(stepped, s, TTL_MS[t.cacheTtl ?? state.defaultTtl], ambiguous)
     })
     void refresh($)
@@ -734,13 +674,13 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     // The hint line is the only place the engine says how to interrupt, so it is carried over while a turn runs.
-    return (await draw($, e, e.props.isWorking, e.props.hint)) ?? next(e)
+    return (await drawLine($, e, e.props.isWorking, e.props.hint)) ?? next(e)
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (state.placement !== 'above' || e.props.hasSurvey) {
       return next(e)
     }
-    return (await draw($, e, false)) ?? next(e)
+    return (await drawLine($, e, false)) ?? next(e)
   })
 }

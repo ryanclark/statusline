@@ -215,10 +215,15 @@ pub fn format_duration_ms(ms: u64) -> String {
 #[must_use]
 pub fn parse_duration(s: &str) -> Option<Duration> {
 	let mut total: u64 = 0;
-	let mut digits = String::new();
+	// None until a digit is seen, so a unit with no number before it is rejected.
+	let mut n: Option<u64> = None;
 	for c in s.chars() {
-		if c.is_ascii_digit() {
-			digits.push(c);
+		if let Some(digit) = c.to_digit(10) {
+			n = Some(
+				n.unwrap_or(0)
+					.checked_mul(10)?
+					.checked_add(u64::from(digit))?,
+			);
 			continue;
 		}
 		let unit = match c {
@@ -228,11 +233,9 @@ pub fn parse_duration(s: &str) -> Option<Duration> {
 			'd' => 86_400,
 			_ => return None,
 		};
-		let n: u64 = digits.parse().ok()?;
-		total = total.checked_add(n.checked_mul(unit)?)?;
-		digits.clear();
+		total = total.checked_add(n.take()?.checked_mul(unit)?)?;
 	}
-	if !digits.is_empty() || s.is_empty() {
+	if n.is_some() || s.is_empty() {
 		return None;
 	}
 
@@ -264,17 +267,10 @@ pub fn countdown_to(at: i64, now: DateTime<Utc>) -> Option<String> {
 	Some(format_duration_secs(total_secs as u64))
 }
 
-/// Time elapsed since the epoch second `at`, or `None` if it lies in the future.
+/// Time from `at` to `now`, or `None` if `at` lies in the future.
 #[must_use]
-pub fn elapsed_since(at: i64, now: DateTime<Utc>) -> Option<String> {
-	let at = DateTime::from_timestamp(at, 0)?;
-	let total_secs = now.signed_duration_since(at).num_seconds();
-	if total_secs < 0 {
-		return None;
-	}
-
-	#[allow(clippy::cast_sign_loss)] // guarded by total_secs >= 0 above
-	Some(format_duration_secs(total_secs as u64))
+pub fn elapsed(at: DateTime<Utc>, now: DateTime<Utc>) -> Option<Duration> {
+	now.signed_duration_since(at).to_std().ok()
 }
 
 pub const NAMED_COLORS: &[(&str, DynColors)] = &[
@@ -349,6 +345,8 @@ mod tests {
 			("1h30m", Some(5400)),
 			("0m", Some(0)),
 			("", None),
+			("m", None),
+			("1hm", None),
 			("30", None),
 			("soon", None),
 		] {

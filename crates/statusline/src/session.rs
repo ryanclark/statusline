@@ -18,12 +18,52 @@ const REPORTED_KEYS: [&str; 4] = ["model", "context_window", "cost", "exceeds_20
 /// for its report, so it never finds its own snapshot pruned.
 const SNAPSHOT_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-/// The longest a heartbeat may silence the native line, since a plugin that stops without a final heartbeat leaves
-/// the session with no line until it expires.
-const MAX_HEARTBEAT: Duration = Duration::from_secs(30);
+/// How often the directory is swept. The stamp's mtime records the last sweep, since the plugin creates a session's
+/// files itself and a session's first write by this binary is no sign that the session is new.
+const PRUNE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+const PRUNE_STAMP: &str = ".pruned";
 
 /// How long a native capture keeps the plugin's captures out, since native input is complete and the plugin's is not.
 const NATIVE_CAPTURE_FRESH: Duration = Duration::from_secs(30);
+
+/// How stale the native marker may grow before a render rewrites it. The plugin is kept out for this much longer than
+/// `NATIVE_CAPTURE_FRESH`, so the window still counts from the last native render.
+const NATIVE_MARKER_EVERY: Duration = Duration::from_secs(15);
+
+/// How much of the plugin's chosen `ttl` a skipped rewrite may spend, kept small since the plugin sizes it to outlast
+/// a few missed ticks.
+const HEARTBEAT_SLACK: Duration = Duration::from_secs(1);
+
+/// The files kept for each session, named `<session id>.<suffix>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionFile {
+	/// The last piped-in JSON, for Claude's report.
+	Snapshot,
+	/// The epoch ms until which the plugin draws the session. The plugin writes it too.
+	Heartbeat,
+	/// The epoch ms of the last native capture.
+	NativeMarker,
+	/// The plugin's view of the session's agents, written only by the plugin.
+	Agents,
+}
+
+impl SessionFile {
+	const ALL: [Self; 4] = [
+		Self::Snapshot,
+		Self::Heartbeat,
+		Self::NativeMarker,
+		Self::Agents,
+	];
+
+	const fn suffix(self) -> &'static str {
+		match self {
+			Self::Snapshot => "json",
+			Self::Heartbeat => "plugin",
+			Self::NativeMarker => "native",
+			Self::Agents => "agents.json",
+		}
+	}
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
@@ -70,33 +110,28 @@ fn capture_in(dir: &Path, raw: &[u8], now: SystemTime, origin: Origin) {
 		return;
 	};
 	let (Some(path), Some(marker)) = (
-		session_file(dir, &session_id, "json"),
-		session_file(dir, &session_id, "native"),
+		session_file(dir, &session_id, SessionFile::Snapshot),
+		session_file(dir, &session_id, SessionFile::NativeMarker),
 	) else {
 		return;
 	};
+	prepare(dir, now);
 	if origin == Origin::Plugin && captured_natively_since(&marker, now) {
 		return;
 	}
-	if !path.exists() {
-		prepare(dir, now);
-	}
 
-	// Renames are atomic, so a concurrent `statusline` run from Claude never reads a half-written file. The pid
-	// keeps overlapping renders from sharing a temp file.
-	let tmp = dir.join(format!(".{session_id}.{}.tmp", std::process::id()));
-	replace(&tmp, &path, raw);
-	if origin == Origin::Native {
-		let tmp = dir.join(format!(".{session_id}.{}.native.tmp", std::process::id()));
-		replace(&tmp, &marker, epoch_ms(now).to_string().as_bytes());
+	replace(&path, raw);
+	let written = read_epoch_ms(&marker).and_then(|at| now.duration_since(at).ok());
+	if origin == Origin::Native && written.is_none_or(|age| age >= NATIVE_MARKER_EVERY) {
+		replace(&marker, epoch_ms(now).to_string().as_bytes());
 	}
 }
 
 fn captured_natively_since(marker: &Path, now: SystemTime) -> bool {
-	fs::read_to_string(marker)
-		.ok()
-		.and_then(|text| text.trim().parse::<u64>().ok())
-		.is_some_and(|at| epoch_ms(now) < at.saturating_add(epoch_ms_of(NATIVE_CAPTURE_FRESH)))
+	read_epoch_ms(marker).is_some_and(|at| {
+		at.checked_add(NATIVE_CAPTURE_FRESH + NATIVE_MARKER_EVERY)
+			.is_none_or(|until| now < until)
+	})
 }
 
 /// Marks the session as drawn by the plugin until `ttl` from now, so the native line prints nothing. Best effort like
@@ -108,20 +143,22 @@ pub fn heartbeat(raw: &[u8], ttl: Duration) {
 }
 
 fn heartbeat_in(dir: &Path, raw: &[u8], now: SystemTime, ttl: Duration) {
-	let Some(session_id) = session_id(raw) else {
+	let Some(path) = session_id(raw).and_then(|id| session_file(dir, &id, SessionFile::Heartbeat))
+	else {
 		return;
 	};
-	let Some(path) = session_file(dir, &session_id, "plugin") else {
-		return;
-	};
-	// Snapshot capture is off by default, so this may be the first write to a directory that does not exist yet.
-	if !path.exists() {
-		prepare(dir, now);
-	}
+	prepare(dir, now);
 
-	let expires = epoch_ms(now).saturating_add(epoch_ms_of(ttl.min(MAX_HEARTBEAT)));
-	let tmp = dir.join(format!(".{session_id}.{}.plugin.tmp", std::process::id()));
-	replace(&tmp, &path, expires.to_string().as_bytes());
+	// A write under a second old is kept, which costs at most a second of the margin the plugin sizes `ttl` with. One
+	// further ahead than `ttl` is rewritten, or a clock stepped back would keep the native line silent past a stopped
+	// plugin.
+	let left = read_epoch_ms(&path).and_then(|expires| expires.duration_since(now).ok());
+	if left.is_some_and(|left| left > ttl.saturating_sub(HEARTBEAT_SLACK) && left <= ttl) {
+		return;
+	}
+	if let Some(expires) = now.checked_add(ttl) {
+		replace(&path, epoch_ms(expires).to_string().as_bytes());
+	}
 }
 
 /// A missing or unreadable heartbeat counts as expired, so a crashed plugin never leaves the session without a line.
@@ -132,10 +169,9 @@ pub fn drawn_by_plugin(raw: &[u8]) -> bool {
 
 fn drawn_by_plugin_in(dir: &Path, raw: &[u8], now: SystemTime) -> bool {
 	session_id(raw)
-		.and_then(|id| session_file(dir, &id, "plugin"))
-		.and_then(|path| fs::read_to_string(path).ok())
-		.and_then(|text| text.trim().parse::<u64>().ok())
-		.is_some_and(|expires| epoch_ms(now) < expires)
+		.and_then(|id| session_file(dir, &id, SessionFile::Heartbeat))
+		.and_then(|path| read_epoch_ms(&path))
+		.is_some_and(|expires| now < expires)
 }
 
 /// The plugin's view of the session's agents, when it wrote one recently enough to trust. Missing, stale and
@@ -146,10 +182,10 @@ pub fn plugin_agents(session_id: &str) -> Option<PluginAgents> {
 }
 
 fn plugin_agents_in(dir: &Path, session_id: &str, now: SystemTime) -> Option<PluginAgents> {
-	let text = fs::read(session_file(dir, session_id, "agents.json")?).ok()?;
+	let text = fs::read(session_file(dir, session_id, SessionFile::Agents)?).ok()?;
 	serde_json::from_slice::<PluginAgents>(&text)
 		.ok()
-		.filter(|agents| agents.fresh(epoch_ms(now)))
+		.filter(|agents| agents.fresh(now.into()))
 }
 
 fn session_id(raw: &[u8]) -> Option<String> {
@@ -158,29 +194,50 @@ fn session_id(raw: &[u8]) -> Option<String> {
 		.map(|e| e.session_id)
 }
 
-fn replace(tmp: &Path, path: &Path, contents: &[u8]) {
-	if fs::write(tmp, contents)
-		.and_then(|()| fs::rename(tmp, path))
+/// Renames are atomic, so a concurrent `statusline` run from Claude never reads a half-written file. The pid keeps
+/// overlapping renders from sharing a temp file.
+fn replace(path: &Path, contents: &[u8]) {
+	let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+		return;
+	};
+	let tmp = dir.join(format!(
+		".{}.{}.tmp",
+		name.to_string_lossy(),
+		std::process::id()
+	));
+	if fs::write(&tmp, contents)
+		.and_then(|()| fs::rename(&tmp, path))
 		.is_err()
 	{
-		let _ = fs::remove_file(tmp);
+		let _ = fs::remove_file(&tmp);
 	}
 }
 
+/// The heartbeat and native marker hold epoch ms as text, the format the plugin writes too.
+fn read_epoch_ms(path: &Path) -> Option<SystemTime> {
+	let ms = fs::read_to_string(path).ok()?.trim().parse().ok()?;
+	SystemTime::UNIX_EPOCH.checked_add(Duration::from_millis(ms))
+}
+
 fn epoch_ms(at: SystemTime) -> u64 {
-	epoch_ms_of(
-		at.duration_since(SystemTime::UNIX_EPOCH)
-			.unwrap_or_default(),
-	)
+	let since = at
+		.duration_since(SystemTime::UNIX_EPOCH)
+		.unwrap_or_default();
+	u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
 }
 
-fn epoch_ms_of(d: Duration) -> u64 {
-	u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
-}
-
-/// Runs once per session rather than per render. Snapshots carry paths and costs, so the directory is private,
-/// and abandoned sessions and killed renders would otherwise leave files behind forever.
+/// Snapshots carry paths and costs, so the directory is private, and abandoned sessions and killed renders would
+/// otherwise leave files behind forever.
 fn prepare(dir: &Path, now: SystemTime) {
+	let stamp = dir.join(PRUNE_STAMP);
+	let swept = fs::metadata(&stamp)
+		.and_then(|m| m.modified())
+		.ok()
+		.and_then(|at| now.duration_since(at).ok());
+	if swept.is_some_and(|age| age < PRUNE_EVERY) {
+		return;
+	}
+
 	let _ = fs::create_dir_all(dir);
 
 	#[cfg(unix)]
@@ -190,27 +247,33 @@ fn prepare(dir: &Path, now: SystemTime) {
 		let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
 	}
 
+	let _ = File::create(&stamp).and_then(|f| f.set_modified(now));
+
 	let (Ok(entries), Some(cutoff)) = (fs::read_dir(dir), now.checked_sub(SNAPSHOT_TTL)) else {
 		return;
 	};
 	for entry in entries.flatten() {
-		let path = entry.path();
-		let ours = path
-			.extension()
-			.is_some_and(|ext| ext == "json" || ext == "plugin" || ext == "native" || ext == "tmp");
+		let name = entry.file_name();
+		let ours = name.to_str().is_some_and(|name| {
+			name.ends_with(".tmp")
+				|| SessionFile::ALL.iter().any(|file| {
+					name.strip_suffix(file.suffix())
+						.is_some_and(|n| n.ends_with('.'))
+				})
+		});
 		let stale = entry
 			.metadata()
 			.and_then(|m| m.modified())
 			.is_ok_and(|at| at < cutoff);
 		if ours && stale {
-			let _ = fs::remove_file(&path);
+			let _ = fs::remove_file(entry.path());
 		}
 	}
 }
 
 pub fn print_report(session_id: &str) {
 	let snapshot = sessions_dir()
-		.and_then(|dir| session_file(&dir, session_id, "json"))
+		.and_then(|dir| session_file(&dir, session_id, SessionFile::Snapshot))
 		.and_then(|path| Snapshot::load(&path));
 	// usage.json is rewritten in place, so stat it first: a refresh landing in between then overstates the age
 	// rather than passing old limits off as fresh.
@@ -388,13 +451,13 @@ fn sessions_dir() -> Option<PathBuf> {
 
 /// The id comes from stdin or the environment and becomes a file name, so anything beyond a plain token
 /// could escape the sessions directory.
-fn session_file(dir: &Path, session_id: &str, ext: &str) -> Option<PathBuf> {
+fn session_file(dir: &Path, session_id: &str, file: SessionFile) -> Option<PathBuf> {
 	let valid = !session_id.is_empty()
 		&& session_id.len() <= 128
 		&& session_id
 			.bytes()
 			.all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
-	valid.then(|| dir.join(format!("{session_id}.{ext}")))
+	valid.then(|| dir.join(format!("{session_id}.{}", file.suffix())))
 }
 
 #[cfg(test)]
@@ -430,6 +493,7 @@ mod tests {
 		let mut names: Vec<String> = fs::read_dir(dir)
 			.unwrap()
 			.map(|e| e.unwrap().file_name().into_string().unwrap())
+			.filter(|name| name != PRUNE_STAMP)
 			.collect();
 		names.sort();
 		names
@@ -527,38 +591,41 @@ mod tests {
 	}
 
 	#[test]
-	fn a_new_session_prunes_stale_snapshots_and_orphaned_temp_files() {
-		let dir = temp_dir("capture-prune");
-		let now = SystemTime::now();
+	fn the_directory_is_swept_once_a_day() {
+		let dir = temp_dir("prune");
+		let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_738_400_000);
 		capture_in(&dir, &piped("live"), now, Origin::Plugin);
 
 		let stale = now - SNAPSHOT_TTL - HOUR;
-		for (name, modified) in [
-			("gone.json", stale),
-			("gone.agents.json", stale),
-			(".gone.123.tmp", stale),
-			("recent.json", now - HOUR),
-			("recent.agents.json", now - HOUR),
-			("notes.txt", stale),
-		] {
+		let mut files: Vec<(String, SystemTime)> = SessionFile::ALL
+			.iter()
+			.map(|file| (format!("gone.{}", file.suffix()), stale))
+			.collect();
+		files.extend([
+			(".gone.json.123.tmp".to_owned(), stale),
+			("recent.json".to_owned(), now - HOUR),
+			("recent.agents.json".to_owned(), now - HOUR),
+			("notes.txt".to_owned(), stale),
+		]);
+		for (name, modified) in &files {
 			File::create(dir.join(name))
 				.unwrap()
-				.set_modified(modified)
+				.set_modified(*modified)
 				.unwrap();
 		}
 
-		capture_in(&dir, &piped("live"), now, Origin::Plugin);
+		heartbeat_in(&dir, &piped("next"), now + HOUR, HOUR);
 		assert!(
 			dir.join("gone.json").exists(),
-			"a render of a known session must not scan the directory"
+			"a sweep within the day must not scan the directory again"
 		);
 
-		capture_in(&dir, &piped("next"), now, Origin::Plugin);
+		heartbeat_in(&dir, &piped("next"), now + PRUNE_EVERY, HOUR);
 		assert_eq!(
 			names(&dir),
 			[
 				"live.json",
-				"next.json",
+				"next.plugin",
 				"notes.txt",
 				"recent.agents.json",
 				"recent.json"
@@ -582,7 +649,7 @@ mod tests {
 			input
 				.tasks
 				.into_iter()
-				.map(|t| t.status)
+				.map(|t| t.status.as_str().to_owned())
 				.collect::<Vec<_>>()
 		};
 		let unchanged = ["running", "completed", "pending"];
@@ -647,19 +714,6 @@ mod tests {
 	}
 
 	#[test]
-	fn a_heartbeat_never_silences_the_native_line_past_the_cap() {
-		let dir = temp_dir("heartbeat-cap");
-		let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_738_400_000);
-		heartbeat_in(&dir, &piped("abc"), now, Duration::from_millis(1_802_000));
-		assert_eq!(
-			fs::read_to_string(dir.join("abc.plugin")).unwrap(),
-			"1738400030000"
-		);
-
-		fs::remove_dir_all(&dir).unwrap();
-	}
-
-	#[test]
 	fn a_fresh_native_capture_keeps_the_plugins_capture_out() {
 		let dir = temp_dir("capture-origin");
 		let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_738_400_000);
@@ -673,7 +727,7 @@ mod tests {
 		capture_in(
 			&dir,
 			&rebuilt,
-			now + Duration::from_secs(29),
+			now + Duration::from_secs(44),
 			Origin::Plugin,
 		);
 		assert_eq!(fs::read(dir.join("abc.json")).unwrap(), native);
@@ -681,7 +735,7 @@ mod tests {
 		capture_in(
 			&dir,
 			&rebuilt,
-			now + Duration::from_secs(30),
+			now + Duration::from_secs(45),
 			Origin::Plugin,
 		);
 		assert_eq!(
@@ -690,8 +744,126 @@ mod tests {
 			"a native line that stopped running hands capture back to the plugin"
 		);
 
-		capture_in(&dir, &native, now + Duration::from_secs(31), Origin::Native);
+		capture_in(&dir, &native, now + Duration::from_secs(46), Origin::Native);
 		assert_eq!(fs::read(dir.join("abc.json")).unwrap(), native);
+
+		fs::remove_dir_all(&dir).unwrap();
+	}
+
+	#[test]
+	fn a_heartbeat_is_rewritten_once_a_second_has_passed() {
+		let dir = temp_dir("heartbeat-skip");
+		let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_738_400_000);
+		let raw = piped("abc");
+		let ttl = Duration::from_secs(10);
+		let expiry = || fs::read_to_string(dir.join("abc.plugin")).unwrap();
+
+		let mut rewrites = Vec::new();
+		let mut last = String::new();
+		for tick in (0..6000).step_by(500) {
+			let poll = now + Duration::from_millis(tick);
+			heartbeat_in(&dir, &raw, poll, ttl);
+			if expiry() != last {
+				last = expiry();
+				rewrites.push(tick);
+			}
+			for native in [poll, poll + Duration::from_millis(999)] {
+				assert!(
+					drawn_by_plugin_in(&dir, &raw, native),
+					"the native line drew at {native:?}"
+				);
+			}
+		}
+		assert_eq!(rewrites, [0, 1000, 2000, 3000, 4000, 5000]);
+
+		for stored in ["0", "99999999999999", "not a number"] {
+			fs::write(dir.join("abc.plugin"), stored).unwrap();
+			heartbeat_in(&dir, &raw, now, ttl);
+			assert_eq!(expiry(), "1738400010000", "{stored} is rewritten");
+		}
+
+		fs::remove_dir_all(&dir).unwrap();
+	}
+
+	#[test]
+	fn a_heartbeat_ten_seconds_old_is_pushed_out_to_a_full_ttl() {
+		let dir = temp_dir("heartbeat-late");
+		let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_738_400_000);
+		let raw = piped("abc");
+		let ttl = Duration::from_secs(30);
+
+		heartbeat_in(&dir, &raw, now, ttl);
+		heartbeat_in(&dir, &raw, now + Duration::from_secs(10), ttl);
+		assert!(drawn_by_plugin_in(
+			&dir,
+			&raw,
+			now + Duration::from_secs(39)
+		));
+
+		fs::remove_dir_all(&dir).unwrap();
+	}
+
+	#[test]
+	fn a_native_capture_keeps_the_plugin_out_for_the_window_after_its_last_render() {
+		let dir = temp_dir("native-last-render");
+		let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_738_400_000);
+		let native = piped("abc");
+		let mut rebuilt = input("abc");
+		rebuilt["model"]["display_name"] = "".into();
+		let rebuilt = serde_json::to_vec(&rebuilt).unwrap();
+
+		capture_in(&dir, &native, now, Origin::Native);
+		let last_render = now + Duration::from_secs(10);
+		capture_in(&dir, &native, last_render, Origin::Native);
+		capture_in(
+			&dir,
+			&rebuilt,
+			last_render + Duration::from_secs(29),
+			Origin::Plugin,
+		);
+		assert_eq!(fs::read(dir.join("abc.json")).unwrap(), native);
+
+		fs::remove_dir_all(&dir).unwrap();
+	}
+
+	#[test]
+	fn a_running_native_line_keeps_the_plugin_out_between_marker_writes() {
+		let dir = temp_dir("native-skip");
+		let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_738_400_000);
+		let native = piped("abc");
+		let mut rebuilt = input("abc");
+		rebuilt["model"]["display_name"] = "".into();
+		let rebuilt = serde_json::to_vec(&rebuilt).unwrap();
+
+		let mut markers = Vec::new();
+		for tick in 0..60 {
+			let render = now + Duration::from_secs(tick);
+			capture_in(&dir, &native, render, Origin::Native);
+			capture_in(
+				&dir,
+				&rebuilt,
+				render + Duration::from_millis(500),
+				Origin::Plugin,
+			);
+			assert_eq!(
+				fs::read(dir.join("abc.json")).unwrap(),
+				native,
+				"at {tick}s"
+			);
+			let marker = fs::read_to_string(dir.join("abc.native")).unwrap();
+			if markers.last() != Some(&marker) {
+				markers.push(marker);
+			}
+		}
+		assert_eq!(
+			markers,
+			[
+				"1738400000000",
+				"1738400015000",
+				"1738400030000",
+				"1738400045000"
+			]
+		);
 
 		fs::remove_dir_all(&dir).unwrap();
 	}
@@ -708,37 +880,39 @@ mod tests {
 	}
 
 	#[test]
-	fn a_new_heartbeat_prunes_stale_ones_and_keeps_live_ones() {
-		let dir = temp_dir("heartbeat-prune");
-		let now = SystemTime::now();
+	fn a_session_the_plugin_started_still_prunes() {
+		let dir = temp_dir("prune-plugin-started");
+		let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_738_400_000);
 		fs::create_dir_all(&dir).unwrap();
-		for (name, modified) in [
-			("gone.plugin", now - SNAPSHOT_TTL - HOUR),
-			(".gone.123.plugin.tmp", now - SNAPSHOT_TTL - HOUR),
-			("recent.plugin", now - HOUR),
-		] {
+		fs::write(dir.join("live.plugin"), "1738400009000").unwrap();
+		fs::write(dir.join("live.json"), piped("live")).unwrap();
+		let stale = now - SNAPSHOT_TTL - HOUR;
+		for name in ["gone.plugin", "gone.agents.json", "gone.json"] {
 			File::create(dir.join(name))
 				.unwrap()
-				.set_modified(modified)
+				.set_modified(stale)
 				.unwrap();
 		}
 
-		heartbeat_in(&dir, &piped("next"), now, HOUR);
-		assert_eq!(names(&dir), ["next.plugin", "recent.plugin"]);
+		heartbeat_in(&dir, &piped("live"), now, Duration::from_secs(10));
+		assert!(!dir.join("gone.plugin").exists());
+		capture_in(&dir, &piped("live"), now, Origin::Plugin);
+		assert!(!dir.join("gone.json").exists());
 
 		fs::remove_dir_all(&dir).unwrap();
 	}
 
 	#[cfg(unix)]
 	#[test]
-	fn a_new_session_makes_the_directory_private() {
+	fn a_session_the_plugin_started_makes_the_directory_private() {
 		use std::os::unix::fs::PermissionsExt;
 
 		let dir = temp_dir("capture-private");
 		fs::create_dir_all(&dir).unwrap();
 		fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+		fs::write(dir.join("abc.plugin"), "0").unwrap();
 
-		capture_in(&dir, &piped("abc"), SystemTime::now(), Origin::Plugin);
+		heartbeat_in(&dir, &piped("abc"), SystemTime::now(), HOUR);
 		let mode = fs::metadata(&dir).unwrap().permissions().mode();
 		assert_eq!(mode & 0o777, 0o700);
 

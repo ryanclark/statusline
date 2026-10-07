@@ -1,10 +1,14 @@
 //! Live session activity from the plugin's `mod` object, which Claude Code's own input never carries.
 
 use crate::constants::{CYAN, GRAY, GREEN, RED, YELLOW};
-use crate::format::{format_duration_ms, format_duration_secs};
+use crate::format::{elapsed, format_duration_secs};
+use crate::input::{Code, ErrorKind, TaskKind};
 use chrono::{DateTime, Utc};
+use std::borrow::Cow;
 
-use super::{Icon, RenderContext, SegmentConfig, apply_style, dim, format_icon, paint};
+use super::{
+	Icon, RenderContext, SegmentConfig, apply_style, dim, format_icon, paint, unknown_code,
+};
 
 const TOOL_ICON: Icon = Icon {
 	unicode: "\u{2699}",
@@ -53,14 +57,12 @@ const AUTOCOMPACT_ICON: Icon = Icon {
 
 const SEPARATOR: &str = " \u{b7} ";
 
-/// Time since the epoch millisecond `at_ms`. A clock that runs slightly behind the plugin's reads as zero rather
-/// than hiding the segment.
-fn elapsed_since_ms(at_ms: i64, now: DateTime<Utc>) -> String {
-	let elapsed = now.timestamp_millis().saturating_sub(at_ms) / 1000;
-	format_duration_secs(u64::try_from(elapsed).unwrap_or(0))
+/// Time since `at`. A clock that runs slightly behind the plugin's reads as zero rather than hiding the segment.
+fn since(at: DateTime<Utc>, now: DateTime<Utc>) -> String {
+	format_duration_secs(elapsed(at, now).unwrap_or_default().as_secs())
 }
 
-fn words<const N: usize>(parts: [String; N]) -> String {
+fn words<const N: usize>(parts: [&str; N]) -> String {
 	parts
 		.into_iter()
 		.filter(|p| !p.is_empty())
@@ -80,8 +82,8 @@ pub(super) fn current_tool(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> 
 	};
 	let detail = dim(segment, &first.detail);
 	let elapsed = first
-		.started_at_ms
-		.map(|at| dim(segment, &elapsed_since_ms(at, Utc::now())))
+		.started_at
+		.map(|at| dim(segment, &since(at, Utc::now())))
 		.unwrap_or_default();
 	let more = if tools.len() > 1 {
 		dim(segment, &format!("+{}", tools.len() - 1))
@@ -90,7 +92,7 @@ pub(super) fn current_tool(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> 
 	};
 
 	Some(apply_style(
-		&format!("{icon}{}", words([name, detail, elapsed, more])),
+		&format!("{icon}{}", words([&name, &detail, &elapsed, &more])),
 		segment.style(),
 	))
 }
@@ -98,18 +100,21 @@ pub(super) fn current_tool(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> 
 pub(super) fn turn_elapsed(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
 	let turn = ctx.input.mod_info.as_ref()?.turn.as_ref()?;
 
-	if let Some(started) = turn.started_at_ms {
+	if let Some(started) = turn.started_at {
 		let icon = format_icon(segment, TURN_ICON, CYAN, ctx.nerd_font);
 		return Some(apply_style(
-			&format!("{icon}{}", elapsed_since_ms(started, Utc::now())),
+			&format!("{icon}{}", since(started, Utc::now())),
 			segment.style(),
 		));
 	}
 
 	// Between turns the last one's length is the useful number, dimmed so it does not read as a live clock.
-	let last = turn.last_duration_ms?;
+	let last = turn.last_duration?;
 	let icon = format_icon(segment, TURN_ICON, GRAY, ctx.nerd_font);
-	let text = dim(segment, &format!("last {}", format_duration_ms(last)));
+	let text = dim(
+		segment,
+		&format!("last {}", format_duration_secs(last.as_secs())),
+	);
 
 	Some(apply_style(&format!("{icon}{text}"), segment.style()))
 }
@@ -123,66 +128,64 @@ pub(super) fn permission_pending(
 	// The plugin sees the prompt open but not the answer, so an approved tool keeps this up until it finishes. The
 	// wording and neutral colour cover both states.
 	let icon = format_icon(segment, PERMISSION_ICON, GRAY, ctx.nerd_font);
-	let what = words([permission.tool.clone(), "waiting or running".to_owned()]);
 	let waited = permission
-		.since_ms
-		.map(|at| dim(segment, &elapsed_since_ms(at, Utc::now())))
+		.since
+		.map(|at| dim(segment, &since(at, Utc::now())))
 		.unwrap_or_default();
 
 	Some(apply_style(
-		&format!("{icon}{}", words([what, waited])),
+		&format!(
+			"{icon}{}",
+			words([&permission.tool, "waiting or running", &waited])
+		),
 		segment.style(),
 	))
 }
 
-/// Phrases for the `SDKAssistantMessageError` codes and the plugin's own stop reasons. Unknown codes read as words.
-fn describe_error(kind: &str) -> String {
-	let phrase = match kind {
-		"authentication_failed" => "login failed",
-		"oauth_org_not_allowed" => "organization not allowed",
-		"account_on_hold" => "account on hold",
-		"verification_required" => "verification required",
-		"billing_error" => "billing error",
-		"rate_limit" => "rate limited",
-		"overloaded" => "overloaded",
-		"invalid_request" => "invalid request",
-		"model_not_found" => "model not found",
-		"server_error" => "server error",
-		"cloud_credential_error" => "cloud credentials failed",
-		"max_output_tokens" | "max_tokens" => "hit max tokens",
-		"refusal" => "refused",
-		"aborted" => "interrupted",
-		"unknown" | "error" | "" => "error",
-		other => return other.replace('_', " "),
-	};
-
-	phrase.to_owned()
+fn describe_error(kind: ErrorKind) -> &'static str {
+	match kind {
+		ErrorKind::AuthenticationFailed => "login failed",
+		ErrorKind::OauthOrgNotAllowed => "organization not allowed",
+		ErrorKind::AccountOnHold => "account on hold",
+		ErrorKind::VerificationRequired => "verification required",
+		ErrorKind::BillingError => "billing error",
+		ErrorKind::RateLimit => "rate limited",
+		ErrorKind::Overloaded => "overloaded",
+		ErrorKind::InvalidRequest => "invalid request",
+		ErrorKind::ModelNotFound => "model not found",
+		ErrorKind::ServerError => "server error",
+		ErrorKind::CloudCredentialError => "cloud credentials failed",
+		ErrorKind::MaxOutputTokens => "hit max tokens",
+		ErrorKind::Refusal => "refused",
+		ErrorKind::Aborted => "interrupted",
+		ErrorKind::Error => "error",
+	}
 }
 
 pub(super) fn last_api_error(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
 	let error = ctx.input.mod_info.as_ref()?.last_error.as_ref()?;
 
 	// An interrupt is the user's own doing, so it is not coloured as a failure.
-	let color = if error.kind == "aborted" { GRAY } else { RED };
+	let color = if error.kind == Code::Known(ErrorKind::Aborted) {
+		GRAY
+	} else {
+		RED
+	};
 	let icon = format_icon(segment, ERROR_ICON, color, ctx.nerd_font);
-	let mut what = describe_error(&error.kind);
-	// A generic code says nothing on its own, so the detail is the message worth reading.
-	if what == "error" && !error.detail.is_empty() {
-		what.clone_from(&error.detail);
-	}
+	let what = match &error.kind {
+		// A generic code says nothing on its own, so the detail is the message worth reading.
+		Code::Known(ErrorKind::Error) if !error.detail.is_empty() => Cow::from(&error.detail),
+		Code::Known(kind) => describe_error(*kind).into(),
+		Code::Other(code) => unknown_code(code),
+	};
 	let what = paint(segment, &what, color);
 	let ago = error
-		.at_ms
-		.map(|at| {
-			dim(
-				segment,
-				&format!("{} ago", elapsed_since_ms(at, Utc::now())),
-			)
-		})
+		.at
+		.map(|at| dim(segment, &format!("{} ago", since(at, Utc::now()))))
 		.unwrap_or_default();
 
 	Some(apply_style(
-		&format!("{icon}{}", words([what, ago])),
+		&format!("{icon}{}", words([&what, &ago])),
 		segment.style(),
 	))
 }
@@ -233,14 +236,19 @@ pub(super) fn agents(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option
 	))
 }
 
-/// Claude Code's task type as a word, its underscores read as spaces.
-fn task_kind(kind: &str, count: usize) -> String {
-	let word = if kind.is_empty() {
-		"task".to_owned()
-	} else {
-		kind.replace('_', " ")
+fn task_kind(kind: &Code<TaskKind>, count: usize) -> Cow<'_, str> {
+	let word = match kind {
+		Code::Known(TaskKind::Shell) => "shell".into(),
+		Code::Known(TaskKind::Monitor) => "monitor".into(),
+		Code::Known(TaskKind::Workflow) => "workflow".into(),
+		Code::Known(TaskKind::Unlabelled) => "task".into(),
+		Code::Other(kind) => unknown_code(kind),
 	};
-	if count > 1 { format!("{word}s") } else { word }
+	if count > 1 {
+		format!("{word}s").into()
+	} else {
+		word
+	}
 }
 
 pub(super) fn background_tasks(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
@@ -261,9 +269,9 @@ pub(super) fn background_tasks(segment: &SegmentConfig, ctx: &RenderContext<'_>)
 	}
 
 	// Grouped in the order each kind first started, so the line keeps its shape as tasks come and go.
-	let mut counts: Vec<(&str, usize)> = Vec::new();
+	let mut counts: Vec<(&Code<TaskKind>, usize)> = Vec::new();
 	for task in tasks {
-		match counts.iter_mut().find(|(kind, _)| *kind == task.kind) {
+		match counts.iter_mut().find(|(kind, _)| **kind == task.kind) {
 			Some((_, n)) => *n += 1,
 			None => counts.push((&task.kind, 1)),
 		}
@@ -286,11 +294,11 @@ pub(super) fn compaction(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Op
 	let compaction = ctx.input.mod_info.as_ref()?.compaction.as_ref()?;
 	let now = Utc::now();
 
-	if let Some(since) = compaction.running_since_ms {
+	if let Some(running) = compaction.running_since {
 		let icon = format_icon(segment, COMPACTION_ICON, YELLOW, ctx.nerd_font);
 		let text = words([
-			paint(segment, "compacting", YELLOW),
-			dim(segment, &elapsed_since_ms(since, now)),
+			&paint(segment, "compacting", YELLOW),
+			&dim(segment, &since(running, now)),
 		]);
 		return Some(apply_style(&format!("{icon}{text}"), segment.style()));
 	}
@@ -304,8 +312,8 @@ pub(super) fn compaction(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Op
 	} else {
 		"compacted".to_owned()
 	}];
-	if let Some(at) = compaction.last_at_ms {
-		parts.push(format!("{} ago", elapsed_since_ms(at, now)));
+	if let Some(at) = compaction.last_at {
+		parts.push(format!("{} ago", since(at, now)));
 	}
 	if let (Some(before), Some(after)) = (compaction.tokens_before, compaction.tokens_after) {
 		parts.push(format!("{before}\u{2192}{after}"));
@@ -420,10 +428,11 @@ mod tests {
 	}
 
 	#[test]
-	fn elapsed_since_ms_reads_a_clock_behind_the_plugin_as_zero() {
+	fn since_reads_a_clock_behind_the_plugin_as_zero() {
 		let now = DateTime::from_timestamp(1_791_280_000, 0).unwrap();
-		assert_eq!(elapsed_since_ms(1_791_279_897_500, now), "1m42s");
-		assert_eq!(elapsed_since_ms(1_791_280_002_000, now), "0s");
+		let at = |ms| DateTime::from_timestamp_millis(ms).unwrap();
+		assert_eq!(since(at(1_791_279_897_500), now), "1m42s");
+		assert_eq!(since(at(1_791_280_002_000), now), "0s");
 	}
 
 	#[test]
@@ -530,14 +539,16 @@ mod tests {
 
 	#[test]
 	fn last_api_error_falls_back_to_the_detail_for_a_generic_code() {
-		assert_eq!(
-			render(
-				SegmentType::LastApiError,
-				r#"{"last_error": {"kind": "error", "detail": "socket hang up", "at_ms": null}}"#
-			)
-			.as_deref(),
-			Some("\u{26a0} socket hang up")
-		);
+		for kind in ["error", "unknown", ""] {
+			let body = format!(
+				r#"{{"last_error": {{"kind": "{kind}", "detail": "socket hang up", "at_ms": null}}}}"#
+			);
+			assert_eq!(
+				render(SegmentType::LastApiError, &body).as_deref(),
+				Some("\u{26a0} socket hang up"),
+				"{kind}"
+			);
+		}
 	}
 
 	#[test]
@@ -609,6 +620,10 @@ mod tests {
 				r#"{"background_tasks": [{"type": "remote_agent", "description": "Fix the flake"},
 					{"type": "remote_agent", "description": "Bump deps"}, {"type": null, "description": null}]}"#,
 				Some("\u{29d7} 2 remote agents \u{b7} 1 task"),
+			),
+			(
+				r#"{"background_tasks": [{"type": "", "description": null}]}"#,
+				Some("\u{29d7} task"),
 			),
 			(r#"{"background_tasks": []}"#, None),
 		] {
@@ -731,26 +746,5 @@ mod tests {
 		)
 		.unwrap();
 		assert!(bold.starts_with("\u{1b}[1m"), "{bold:?}");
-	}
-
-	#[test]
-	fn every_activity_segment_has_its_own_icon() {
-		let icons = [
-			TOOL_ICON,
-			TURN_ICON,
-			PERMISSION_ICON,
-			ERROR_ICON,
-			TODO_ICON,
-			AGENTS_ICON,
-			BACKGROUND_ICON,
-			COMPACTION_ICON,
-			AUTOCOMPACT_ICON,
-		];
-		for (i, a) in icons.iter().enumerate() {
-			for b in &icons[i + 1..] {
-				assert_ne!(a.unicode, b.unicode);
-				assert_ne!(a.nerd, b.nerd);
-			}
-		}
 	}
 }

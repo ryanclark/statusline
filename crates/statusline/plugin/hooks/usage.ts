@@ -1,6 +1,6 @@
 import type { HttpResponse } from 'claude-code'
 
-import { obj } from './util'
+import { dataPath, obj } from './util'
 import type { Json } from './util'
 
 export const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
@@ -9,7 +9,7 @@ export const USAGE_HEADERS = { 'anthropic-beta': 'oauth-2025-04-20' }
 export const FETCH_EVERY_MS = 60_000
 // After a 429 the endpoint kept answering 429 while it was polled, so the wait grows to half an hour.
 const MAX_BACKOFF_MS = 30 * 60_000
-export const BACKOFF_STEPS_MS = [5 * 60_000, 10 * 60_000, 20 * 60_000, MAX_BACKOFF_MS]
+const BACKOFF_STEPS_MS = [5 * 60_000, 10 * 60_000, 20 * 60_000, MAX_BACKOFF_MS]
 
 // Shared by every open chat, so the endpoint sees about one request a minute however many are open. Two chats that find
 // it due within the same few milliseconds can both fetch, as the fs API has no rename or lock. For the same reason a
@@ -44,7 +44,7 @@ export const newUsageMemo = (): UsageMemo => ({
 
 export const EMPTY_USAGE: UsageFile = { fetched_at_ms: null, body: null, backoff_until_ms: 0, backoff_ms: 0 }
 
-export const usagePath = (home: string) => `${home}/.statusline/cache/plugin-usage.json`
+export const usagePath = (home: string) => dataPath(home, 'cache/plugin-usage.json')
 
 // The binary reads these as i64 and fails the whole line on anything else.
 const num = (v: unknown): number | null => (Number.isSafeInteger(v) ? (v as number) : null)
@@ -90,8 +90,7 @@ export const claimed = (file: UsageFile, now: number): UsageFile => ({
   backoff_until_ms: now + FETCH_EVERY_MS,
 })
 
-export const nextBackoff = (ms: number): number =>
-  BACKOFF_STEPS_MS.find(step => step > ms) ?? MAX_BACKOFF_MS
+const nextBackoff = (ms: number): number => BACKOFF_STEPS_MS.find(step => step > ms) ?? MAX_BACKOFF_MS
 
 // The file a response leaves behind, or null to leave the claim standing until the next minute.
 export function answered(file: UsageFile, res: HttpResponse, now: number): UsageFile | null {

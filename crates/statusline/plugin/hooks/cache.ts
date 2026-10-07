@@ -72,6 +72,7 @@ export function observeStep(t: Tracker, s: Step, ttlMs: number, ambiguous: boole
   const write = u.cache_creation_input_tokens
   const next: Tracker = {
     ...t,
+    // Copied field by field, since the step's usage is the engine's own and carries more than the binary reads.
     lastUsage: {
       input_tokens: u.input_tokens,
       output_tokens: u.output_tokens,

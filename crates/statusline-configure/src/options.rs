@@ -68,7 +68,7 @@ pub fn applicable_fields(set: OptionSet) -> Vec<OptionKind> {
 const WITHIN_PRESETS: &[Within] = &[
 	Within::Window(Duration::from_secs(5 * 60)),
 	Within::Window(Duration::from_secs(15 * 60)),
-	Within::Window(Within::DEFAULT),
+	Within::Window(Within::DEFAULT_WINDOW),
 	Within::Window(Duration::from_secs(60 * 60)),
 	Within::Window(Duration::from_secs(2 * 60 * 60)),
 	Within::Session,
@@ -76,7 +76,7 @@ const WITHIN_PRESETS: &[Within] = &[
 
 #[must_use]
 pub fn next_within(current: Option<&Within>) -> Within {
-	let next = match current.map_or(Some(Within::DEFAULT), Within::duration) {
+	let next = match current.map_or(Some(Within::DEFAULT_WINDOW), Within::duration) {
 		None => WITHIN_PRESETS.first(),
 		Some(window) => WITHIN_PRESETS
 			.iter()

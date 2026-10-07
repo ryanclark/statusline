@@ -3,10 +3,11 @@
 
 use crate::context_window::{ContextWindow, CurrentUsage};
 use crate::format::{Percentage, Tokens};
-use crate::input::{AgentInfo, EffortInfo, InputData, ModelInfo};
+use crate::input::{AgentInfo, Code, EffortInfo, InputData, ModelInfo};
 use crate::segment::{RenderContext, SegmentConfig, SegmentLine, SegmentType, align_rows};
 use crate::text::truncate_visible;
 use crate::util::null_as_default;
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -30,32 +31,43 @@ impl SubagentInput {
 	/// knows it is waiting. Only that word is taken from the plugin, and never over a task still running.
 	pub fn mark_waiting(&mut self, plugin: &PluginAgents) {
 		for task in &mut self.tasks {
-			let running = matches!(task.status.as_str(), "running" | "in_progress");
-			if !running && plugin.agents.get(&task.id).is_some_and(|s| s == WAITING) {
-				WAITING.clone_into(&mut task.status);
+			let running = matches!(
+				task.status,
+				Code::Known(TaskStatus::Running | TaskStatus::InProgress)
+			);
+			if !running && plugin.agents.get(&task.id) == Some(&PluginStatus::Waiting) {
+				task.status = Code::Known(TaskStatus::Waiting);
 			}
 		}
 	}
 }
 
-const WAITING: &str = "waiting";
-
 /// The plugin's `<session>.agents.json`: each agent's status from its own agent list, keyed by the task id.
 #[derive(Debug, Default, Deserialize)]
 pub struct PluginAgents {
-	pub written_at_ms: u64,
+	#[serde(rename = "written_at_ms", with = "chrono::serde::ts_milliseconds")]
+	pub written_at: DateTime<Utc>,
 	#[serde(default)]
-	pub agents: HashMap<String, String>,
+	pub agents: HashMap<String, PluginStatus>,
+}
+
+/// An agent's status in the plugin's list. Only `waiting` is ever taken from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginStatus {
+	Waiting,
+	#[serde(other)]
+	Other,
 }
 
 impl PluginAgents {
 	/// The plugin rewrites the file at least every 10s while it runs, so an older one belongs to a plugin that
 	/// stopped. One dated ahead of the clock is no fresher, or a clock stepped back would trust it indefinitely.
-	pub const FRESH_MS: u64 = 30_000;
+	pub const FRESH: TimeDelta = TimeDelta::seconds(30);
 
 	#[must_use]
-	pub fn fresh(&self, now_ms: u64) -> bool {
-		now_ms.abs_diff(self.written_at_ms) <= Self::FRESH_MS
+	pub fn fresh(&self, now: DateTime<Utc>) -> bool {
+		(now - self.written_at).abs() <= Self::FRESH
 	}
 }
 
@@ -69,7 +81,7 @@ pub struct Task {
 	#[serde(default, rename = "type", deserialize_with = "null_as_default")]
 	pub kind: String,
 	#[serde(default, deserialize_with = "null_as_default")]
-	pub status: String,
+	pub status: Code<TaskStatus>,
 	#[serde(default, deserialize_with = "null_as_default")]
 	pub description: String,
 	#[serde(default, deserialize_with = "null_as_default")]
@@ -89,6 +101,53 @@ pub struct Task {
 	pub token_count: Option<Tokens>,
 	#[serde(default, deserialize_with = "null_as_default")]
 	pub cwd: String,
+}
+
+/// A task's state as the agent panel names it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+	Running,
+	InProgress,
+	Waiting,
+	Completed,
+	Done,
+	Failed,
+	Error,
+	Pending,
+	Queued,
+	#[default]
+	#[serde(rename = "")]
+	Unset,
+}
+
+impl TaskStatus {
+	#[must_use]
+	pub const fn as_str(self) -> &'static str {
+		match self {
+			Self::Running => "running",
+			Self::InProgress => "in_progress",
+			Self::Waiting => "waiting",
+			Self::Completed => "completed",
+			Self::Done => "done",
+			Self::Failed => "failed",
+			Self::Error => "error",
+			Self::Pending => "pending",
+			Self::Queued => "queued",
+			Self::Unset => "",
+		}
+	}
+}
+
+impl Code<TaskStatus> {
+	/// The status as the panel sent it.
+	#[must_use]
+	pub fn as_str(&self) -> &str {
+		match self {
+			Self::Known(status) => status.as_str(),
+			Self::Other(status) => status,
+		}
+	}
 }
 
 /// A subagent's effort is either a level name or a numeric token budget.
@@ -271,7 +330,7 @@ mod tests {
 		let t = &input.tasks[0];
 		assert_eq!(t.id, "task-1");
 		assert_eq!(t.name, "security-reviewer");
-		assert_eq!(t.status, "running");
+		assert_eq!(t.status, Code::Known(TaskStatus::Running));
 		assert_eq!(t.description, "Review the auth flow for injection risks");
 		assert_eq!(t.start_time, Some(1_738_425_600_000));
 		assert_eq!(t.model, "claude-opus-5");
@@ -536,11 +595,12 @@ mod tests {
 	#[test]
 	fn plugin_agents_are_fresh_for_30s_either_side_of_now() {
 		let file = plugin(r#"{"written_at_ms": 1738425600000, "agents": {}}"#);
-		let at = 1_738_425_600_000;
+		let at = DateTime::from_timestamp_millis(1_738_425_600_000).unwrap();
+		let ms = TimeDelta::milliseconds;
 		assert!(file.fresh(at));
-		assert!(file.fresh(at + 30_000));
-		assert!(!file.fresh(at + 30_001));
-		assert!(!file.fresh(at - 30_001));
+		assert!(file.fresh(at + ms(30_000)));
+		assert!(!file.fresh(at + ms(30_001)));
+		assert!(!file.fresh(at - ms(30_001)));
 	}
 
 	#[test]

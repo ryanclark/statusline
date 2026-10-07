@@ -3,6 +3,9 @@ export type Json = Record<string, unknown>
 export const obj = (v: unknown): Json | undefined => (v && typeof v === 'object' ? (v as Json) : undefined)
 export const str = (v: unknown): string | null => (typeof v === 'string' ? v : null)
 
+// The binary's own data directory, where it reads what the plugin leaves for it.
+export const dataPath = (home: string, rel: string) => `${home}/.statusline/${rel}`
+
 // Cut by code point: a lone surrogate from a UTF-16 cut is escaped by JSON.stringify, and serde_json then rejects the
 // whole input.
 export function cut(s: string, max: number, mark = ''): string {

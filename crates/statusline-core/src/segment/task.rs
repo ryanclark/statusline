@@ -1,6 +1,8 @@
 use crate::constants::{CYAN, GRAY, GREEN, RED, UP_ARROW, YELLOW};
-use crate::format::elapsed_since;
-use chrono::Utc;
+use crate::format::{elapsed, format_duration_secs};
+use crate::input::Code;
+use crate::subagent::TaskStatus;
+use chrono::{DateTime, Utc};
 use owo_colors::{DynColors, OwoColorize};
 
 use super::{Icon, RenderContext, SegmentConfig, apply_style, format_icon, paint};
@@ -28,14 +30,17 @@ const TOKENS_ICON: Icon = Icon {
 /// Epoch values this large can only be milliseconds; the docs do not name the unit.
 const MILLIS_THRESHOLD: i64 = 100_000_000_000;
 
-fn status_color(status: &str) -> Option<DynColors> {
+fn status_color(status: &Code<TaskStatus>) -> Option<DynColors> {
+	let Code::Known(status) = status else {
+		return None;
+	};
 	Some(match status {
-		"running" | "in_progress" => CYAN,
-		"waiting" => YELLOW,
-		"completed" | "done" => GREEN,
-		"failed" | "error" => RED,
-		"pending" | "queued" => GRAY,
-		_ => return None,
+		TaskStatus::Running | TaskStatus::InProgress => CYAN,
+		TaskStatus::Waiting => YELLOW,
+		TaskStatus::Completed | TaskStatus::Done => GREEN,
+		TaskStatus::Failed | TaskStatus::Error => RED,
+		TaskStatus::Pending | TaskStatus::Queued => GRAY,
+		TaskStatus::Unset => return None,
 	})
 }
 
@@ -51,7 +56,8 @@ pub(super) fn task_name(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Opt
 
 pub(super) fn task_status(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
 	let status = &ctx.task?.status;
-	if status.is_empty() {
+	let word = status.as_str();
+	if word.is_empty() {
 		return None;
 	}
 
@@ -59,8 +65,8 @@ pub(super) fn task_status(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> O
 	let color = status_color(status);
 	let icon = format_icon(segment, STATE_ICON, color.unwrap_or(GRAY), ctx.nerd_font);
 	let text = match color {
-		Some(color) => paint(segment, status, color),
-		None => status.clone(),
+		Some(color) => paint(segment, word, color),
+		None => word.to_owned(),
 	};
 
 	Some(apply_style(&format!("{icon}{text}"), segment.style()))
@@ -88,7 +94,9 @@ pub(super) fn task_elapsed(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> 
 	} else {
 		start
 	};
-	let elapsed = elapsed_since(start_secs, Utc::now())?;
+	let elapsed = format_duration_secs(
+		elapsed(DateTime::from_timestamp(start_secs, 0)?, Utc::now())?.as_secs(),
+	);
 
 	let icon = format_icon(segment, ELAPSED_ICON, GRAY, ctx.nerd_font);
 	Some(apply_style(&format!("{icon}{elapsed}"), segment.style()))

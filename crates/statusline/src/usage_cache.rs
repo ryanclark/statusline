@@ -1,4 +1,5 @@
 use crate::usage::{PrepaidCredits, UsageError, UsageResponse, fetch_credits_raw, fetch_usage_raw};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::Deserialize;
 use statusline_core::browser::Browser;
 use statusline_core::input::PluginUsage;
@@ -10,9 +11,9 @@ use std::time::{Duration, SystemTime};
 const REFRESH_TTL: Duration = Duration::from_secs(15);
 const BRIDGE_TIMEOUT: Duration = Duration::from_secs(7);
 // The plugin refetches every minute, so data this old means its fetches are failing or backing off.
-const PLUGIN_STALE_MS: i64 = 5 * 60_000;
+const PLUGIN_STALE: TimeDelta = TimeDelta::minutes(5);
 // A little ahead is skew between chats' clock reads. Much more means the clock stepped back since the fetch.
-const PLUGIN_AHEAD_MS: i64 = 60_000;
+const PLUGIN_AHEAD: TimeDelta = TimeDelta::minutes(1);
 
 type UsageResult = Option<Result<UsageResponse, UsageError>>;
 type CreditsResult = Option<Result<PrepaidCredits, UsageError>>;
@@ -30,7 +31,7 @@ pub fn resolve(
 	cookie: impl FnOnce() -> Option<UsageReply>,
 	needs_usage: bool,
 	needs_credits: bool,
-	now_ms: i64,
+	now: DateTime<Utc>,
 ) -> Resolved {
 	let Some(plugin) = plugin else {
 		let (usage, credits) = results(cookie().as_ref(), needs_usage, needs_credits);
@@ -52,8 +53,8 @@ pub fn resolve(
 		usage: parsed.filter(|_| needs_usage),
 		credits,
 		stale: plugin
-			.fetched_at_ms
-			.is_none_or(|at| now_ms - at > PLUGIN_STALE_MS || at - now_ms > PLUGIN_AHEAD_MS),
+			.fetched_at
+			.is_none_or(|at| now - at > PLUGIN_STALE || at - now > PLUGIN_AHEAD),
 	}
 }
 
@@ -274,6 +275,10 @@ mod tests {
 
 	const NOW_MS: i64 = 1_791_280_000_000;
 
+	fn now() -> DateTime<Utc> {
+		DateTime::from_timestamp_millis(NOW_MS).unwrap()
+	}
+
 	// Every top-level key the OAuth usage endpoint answers with, with a Fable row among the limits.
 	fn oauth_body() -> serde_json::Value {
 		serde_json::json!({
@@ -308,7 +313,7 @@ mod tests {
 
 	fn plugin(fetched_at_ms: Option<i64>) -> PluginUsage {
 		PluginUsage {
-			fetched_at_ms,
+			fetched_at: fetched_at_ms.and_then(DateTime::from_timestamp_millis),
 			body: oauth_body(),
 		}
 	}
@@ -320,7 +325,7 @@ mod tests {
 			|| None,
 			true,
 			true,
-			NOW_MS,
+			now(),
 		);
 		let usage = r.usage.unwrap().unwrap();
 		assert_eq!(usage.fable().unwrap().percent, 63.0.into());
@@ -339,7 +344,7 @@ mod tests {
 			|| panic!("the cookie cache was read"),
 			true,
 			true,
-			NOW_MS,
+			now(),
 		);
 		assert_eq!(r.credits.unwrap().unwrap().balance().to_string(), "$42");
 
@@ -348,7 +353,7 @@ mod tests {
 			credits: Some(r#"{"amount":3304}"#.to_owned()),
 			error: None,
 		};
-		let r = resolve(None, || Some(cookie), true, true, NOW_MS);
+		let r = resolve(None, || Some(cookie), true, true, now());
 		assert_eq!(r.credits.unwrap().unwrap().balance().to_string(), "$33");
 		assert!(r.usage.unwrap().unwrap().fable().is_none());
 		assert!(!r.stale);
@@ -357,7 +362,7 @@ mod tests {
 	#[test]
 	fn a_plugin_login_with_no_body_yet_hides_the_segments_without_cookies() {
 		let pending = PluginUsage {
-			fetched_at_ms: None,
+			fetched_at: None,
 			body: serde_json::Value::Null,
 		};
 		let r = resolve(
@@ -365,7 +370,7 @@ mod tests {
 			|| panic!("the cookie cache was read"),
 			true,
 			true,
-			NOW_MS,
+			now(),
 		);
 		assert!(r.usage.is_none() && r.credits.is_none());
 	}
@@ -377,7 +382,7 @@ mod tests {
 			|| None,
 			true,
 			false,
-			NOW_MS,
+			now(),
 		);
 		assert!(!fresh.stale);
 		let old = resolve(
@@ -385,10 +390,10 @@ mod tests {
 			|| None,
 			true,
 			false,
-			NOW_MS,
+			now(),
 		);
 		assert!(old.stale);
-		assert!(resolve(Some(&plugin(None)), || None, true, false, NOW_MS).stale);
+		assert!(resolve(Some(&plugin(None)), || None, true, false, now()).stale);
 	}
 
 	#[test]
@@ -398,7 +403,7 @@ mod tests {
 			|| None,
 			true,
 			false,
-			NOW_MS,
+			now(),
 		);
 		assert!(!skewed.stale);
 		let stepped_back = resolve(
@@ -406,27 +411,35 @@ mod tests {
 			|| None,
 			true,
 			false,
-			NOW_MS,
+			now(),
 		);
 		assert!(stepped_back.stale);
 	}
 
 	#[test]
+	fn plugin_usage_dated_out_of_range_is_stale() {
+		for at in [i64::MIN, i64::MAX] {
+			let r = resolve(Some(&plugin(Some(at))), || None, true, false, now());
+			assert!(r.stale, "{at}");
+		}
+	}
+
+	#[test]
 	fn a_plugin_body_that_does_not_parse_fails_only_the_usage_segments() {
 		let odd = PluginUsage {
-			fetched_at_ms: Some(NOW_MS),
+			fetched_at: DateTime::from_timestamp_millis(NOW_MS),
 			body: serde_json::json!({"limits": "not a list"}),
 		};
-		let r = resolve(Some(&odd), || None, true, true, NOW_MS);
+		let r = resolve(Some(&odd), || None, true, true, now());
 		assert!(matches!(r.usage, Some(Err(UsageError::Other(_)))));
 		assert!(r.credits.is_none());
 	}
 
 	#[test]
 	fn plugin_usage_honors_the_needs_flags() {
-		let r = resolve(Some(&plugin(Some(NOW_MS))), || None, false, false, NOW_MS);
+		let r = resolve(Some(&plugin(Some(NOW_MS))), || None, false, false, now());
 		assert!(r.usage.is_none() && r.credits.is_none());
-		let r = resolve(Some(&plugin(Some(NOW_MS))), || None, false, true, NOW_MS);
+		let r = resolve(Some(&plugin(Some(NOW_MS))), || None, false, true, now());
 		assert!(r.usage.is_none() && r.credits.is_some());
 	}
 

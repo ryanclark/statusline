@@ -8,6 +8,7 @@ use crate::util::null_as_default;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 #[derive(Debug, Default, Deserialize)]
 pub struct InputData {
@@ -167,7 +168,7 @@ pub struct PrInfo {
 }
 
 /// The session's prompt cache statistics, as documented under Claude Code's status line
-/// `prompt_cache` object. Timestamps are epoch seconds.
+/// `prompt_cache` object. Timestamps arrive as epoch seconds.
 #[derive(Debug, Default, Deserialize)]
 pub struct PromptCache {
 	#[serde(default, deserialize_with = "null_as_default")]
@@ -190,23 +191,39 @@ pub struct PromptCache {
 	pub cache_write_tokens: Tokens,
 	#[serde(default, deserialize_with = "null_as_default")]
 	pub miss_recache_tokens: Tokens,
-	#[serde(default)]
-	pub last_miss_at: Option<i64>,
+	#[serde(default, deserialize_with = "epoch_secs")]
+	pub last_miss_at: Option<DateTime<Utc>>,
 	#[serde(default)]
 	pub last_miss_cause: Option<MissCause>,
 	#[serde(default, deserialize_with = "null_as_default")]
 	pub miss_causes: BTreeMap<String, u64>,
 	#[serde(default)]
 	pub recache_tokens_if_cold: Option<Tokens>,
-	/// Epoch seconds of each miss, oldest first. Only the plugin sends it.
-	#[serde(default)]
-	pub miss_times: Option<Vec<i64>>,
+	/// Each miss, oldest first. Only the plugin sends it.
+	#[serde(default, deserialize_with = "epoch_secs_list")]
+	pub miss_times: Option<Vec<DateTime<Utc>>>,
+}
+
+// A second outside chrono's range is dropped rather than failing the whole input over one timestamp.
+fn epoch_secs<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<DateTime<Utc>>, D::Error> {
+	Ok(Option::<i64>::deserialize(d)?.and_then(|at| DateTime::from_timestamp(at, 0)))
+}
+
+fn epoch_secs_list<'de, D: serde::Deserializer<'de>>(
+	d: D,
+) -> Result<Option<Vec<DateTime<Utc>>>, D::Error> {
+	Ok(Option::<Vec<i64>>::deserialize(d)?.map(|times| {
+		times
+			.into_iter()
+			.filter_map(|at| DateTime::from_timestamp(at, 0))
+			.collect()
+	}))
 }
 
 #[derive(Debug, Default, Deserialize)]
 pub struct MissCause {
 	#[serde(default, deserialize_with = "null_as_default")]
-	pub causes: Vec<String>,
+	pub causes: Vec<Code<MissCauseCode>>,
 	#[serde(default)]
 	pub tools_added: Option<u64>,
 	#[serde(default)]
@@ -215,7 +232,39 @@ pub struct MissCause {
 	pub system_char_delta: Option<i64>,
 }
 
-/// Session activity from the plugin. Every `*_ms` value is epoch milliseconds.
+/// The plugin's codes plus Claude Code's own closed set (`PROMPT_CACHE_MISS_CAUSES`, as listed in its status line
+/// docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MissCauseCode {
+	TtlExpired,
+	#[serde(rename = "ttl_expired_5m")]
+	TtlExpired5m,
+	#[serde(rename = "ttl_expired_1h")]
+	TtlExpired1h,
+	ToolsChanged,
+	#[serde(alias = "system_prompt_changed")]
+	SystemChanged,
+	ModelChanged,
+	Compacted,
+	FastModeChanged,
+	CacheScopeOrTtlChanged,
+	BetasChanged,
+	EffortChanged,
+	ThinkingModeChanged,
+	ThinkingDisplayChanged,
+	AutoModeChanged,
+	OverageChanged,
+	ExtraBodyChanged,
+	DeferLoadingChanged,
+	MessagesRewritten,
+	LikelyServerSide,
+	/// Claude Code could not diagnose the miss.
+	#[serde(alias = "")]
+	Unknown,
+}
+
+/// Session activity from the plugin, whose times and lengths arrive in milliseconds.
 #[derive(Debug, Default, Deserialize)]
 pub struct ModInfo {
 	#[serde(default, deserialize_with = "null_as_default")]
@@ -244,16 +293,42 @@ pub struct ModInfo {
 /// The OAuth usage response the plugin fetched with the session's own login, shared by every open chat.
 #[derive(Debug, Default, Deserialize)]
 pub struct PluginUsage {
-	#[serde(default, deserialize_with = "lenient_i64")]
-	pub fetched_at_ms: Option<i64>,
+	#[serde(
+		default,
+		rename = "fetched_at_ms",
+		deserialize_with = "lenient_epoch_ms"
+	)]
+	pub fetched_at: Option<DateTime<Utc>>,
 	/// Kept as JSON so a response that drifts from the usage types fails those segments, not the whole input.
 	#[serde(default)]
 	pub body: serde_json::Value,
 }
 
 // The time comes from a file every chat writes, so one that is not a whole i64 costs only the staleness check.
-fn lenient_i64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error> {
-	Ok(serde_json::Value::deserialize(d)?.as_i64())
+fn lenient_epoch_ms<'de, D: serde::Deserializer<'de>>(
+	d: D,
+) -> Result<Option<DateTime<Utc>>, D::Error> {
+	Ok(serde_json::Value::deserialize(d)?
+		.as_i64()
+		.and_then(DateTime::from_timestamp_millis))
+}
+
+/// A code from a set that grows over time. One this build does not know keeps its text, so it can still be shown.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum Code<T> {
+	Known(T),
+	Other(String),
+}
+
+impl<T: Default> Default for Code<T> {
+	fn default() -> Self {
+		Self::Known(T::default())
+	}
+}
+
+fn duration_ms<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Duration>, D::Error> {
+	Ok(Option::<u64>::deserialize(d)?.map(Duration::from_millis))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -263,35 +338,75 @@ pub struct ToolCall {
 	/// The Bash command, file path or search pattern, already truncated by the plugin.
 	#[serde(default, deserialize_with = "null_as_default")]
 	pub detail: String,
-	#[serde(default)]
-	pub started_at_ms: Option<i64>,
+	#[serde(
+		default,
+		rename = "started_at_ms",
+		with = "chrono::serde::ts_milliseconds_option"
+	)]
+	pub started_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 pub struct TurnInfo {
-	#[serde(default)]
-	pub started_at_ms: Option<i64>,
-	#[serde(default)]
-	pub last_duration_ms: Option<u64>,
+	#[serde(
+		default,
+		rename = "started_at_ms",
+		with = "chrono::serde::ts_milliseconds_option"
+	)]
+	pub started_at: Option<DateTime<Utc>>,
+	#[serde(default, rename = "last_duration_ms", deserialize_with = "duration_ms")]
+	pub last_duration: Option<Duration>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 pub struct PermissionWait {
 	#[serde(default, deserialize_with = "null_as_default")]
 	pub tool: String,
-	#[serde(default)]
-	pub since_ms: Option<i64>,
+	#[serde(
+		default,
+		rename = "since_ms",
+		with = "chrono::serde::ts_milliseconds_option"
+	)]
+	pub since: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 pub struct ApiError {
-	/// An `SDKAssistantMessageError` code, or `max_tokens`, `refusal`, `aborted` or `error`.
 	#[serde(default, deserialize_with = "null_as_default")]
-	pub kind: String,
+	pub kind: Code<ErrorKind>,
 	#[serde(default, deserialize_with = "null_as_default")]
 	pub detail: String,
-	#[serde(default)]
-	pub at_ms: Option<i64>,
+	#[serde(
+		default,
+		rename = "at_ms",
+		with = "chrono::serde::ts_milliseconds_option"
+	)]
+	pub at: Option<DateTime<Utc>>,
+}
+
+/// An `SDKAssistantMessageError` code, or one of the plugin's own stop reasons.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorKind {
+	AuthenticationFailed,
+	OauthOrgNotAllowed,
+	AccountOnHold,
+	VerificationRequired,
+	BillingError,
+	RateLimit,
+	Overloaded,
+	InvalidRequest,
+	ModelNotFound,
+	ServerError,
+	CloudCredentialError,
+	#[serde(alias = "max_tokens")]
+	MaxOutputTokens,
+	Refusal,
+	Aborted,
+	/// A failure with no code worth showing, which leaves the detail to explain it.
+	#[default]
+	#[serde(alias = "unknown", alias = "")]
+	Error,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -314,26 +429,45 @@ pub struct AgentCounts {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct BackgroundTask {
-	/// Claude Code's label for the kind of task: `shell`, `monitor` or `workflow`.
 	#[serde(rename = "type", default, deserialize_with = "null_as_default")]
-	pub kind: String,
+	pub kind: Code<TaskKind>,
 	/// The task's description, its command when it has none, or a workflow's name. Already truncated by the plugin.
 	#[serde(default, deserialize_with = "null_as_default")]
 	pub description: String,
+}
+
+/// Claude Code's label for the kind of background task.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskKind {
+	Shell,
+	Monitor,
+	Workflow,
+	#[default]
+	#[serde(rename = "")]
+	Unlabelled,
 }
 
 #[derive(Debug, Default, Deserialize)]
 pub struct CompactionInfo {
 	#[serde(default, deserialize_with = "null_as_default")]
 	pub count: u64,
-	#[serde(default)]
-	pub last_at_ms: Option<i64>,
+	#[serde(
+		default,
+		rename = "last_at_ms",
+		with = "chrono::serde::ts_milliseconds_option"
+	)]
+	pub last_at: Option<DateTime<Utc>>,
 	#[serde(default)]
 	pub tokens_before: Option<Tokens>,
 	#[serde(default)]
 	pub tokens_after: Option<Tokens>,
-	#[serde(default)]
-	pub running_since_ms: Option<i64>,
+	#[serde(
+		default,
+		rename = "running_since_ms",
+		with = "chrono::serde::ts_milliseconds_option"
+	)]
+	pub running_since: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -478,8 +612,11 @@ mod tests {
 		assert_eq!(cache.expires_at, Some(1738429200));
 		assert_eq!((cache.requests, cache.misses), (14, 2));
 		assert_eq!(cache.hit_ratio, Some(0.91));
-		assert_eq!(cache.last_miss_at, Some(1738425230));
-		assert_eq!(cache.last_miss_cause.unwrap().causes, vec!["tools_changed"]);
+		assert_eq!(cache.last_miss_at, DateTime::from_timestamp(1738425230, 0));
+		assert_eq!(
+			cache.last_miss_cause.unwrap().causes,
+			[Code::Known(MissCauseCode::ToolsChanged)]
+		);
 	}
 
 	#[test]
@@ -521,6 +658,12 @@ mod tests {
 				.unwrap()
 				.prompt_cache
 				.unwrap();
+			let want = want.map(|times| {
+				times
+					.into_iter()
+					.map(|at| DateTime::from_timestamp(at, 0).unwrap())
+					.collect()
+			});
 			assert_eq!(cache.miss_times, want, "{json}");
 		}
 	}
@@ -555,6 +698,39 @@ mod tests {
 			.mod_info
 			.unwrap();
 		assert!(empty.tools.is_empty() && empty.turn.is_none());
+
+		let json = r#"{"mod": {
+			"tools": [{"tool": null, "detail": null, "started_at_ms": null}],
+			"turn": {"started_at_ms": null, "last_duration_ms": null, "ended_at_ms": null},
+			"permission": {"tool": null, "since_ms": null},
+			"last_error": {"kind": null, "detail": null, "at_ms": null},
+			"todos": {"done": 0, "total": 2, "active": null},
+			"background_tasks": [{"type": null, "description": null}],
+			"compaction": {"count": 0, "last_at_ms": null, "tokens_before": null, "tokens_after": null,
+				"running_since_ms": null, "trigger": null},
+			"autocompact": {"enabled": false, "headroom_tokens": null}
+		}}"#;
+		let m = InputData::from_reader(json.as_bytes())
+			.unwrap()
+			.mod_info
+			.unwrap();
+		assert!(m.tools[0].tool.is_empty() && m.tools[0].started_at.is_none());
+		let turn = m.turn.unwrap();
+		assert!(turn.started_at.is_none() && turn.last_duration.is_none());
+		let permission = m.permission.unwrap();
+		assert!(permission.tool.is_empty() && permission.since.is_none());
+		let error = m.last_error.unwrap();
+		assert_eq!(error.kind, Code::Known(ErrorKind::Error));
+		assert!(error.detail.is_empty() && error.at.is_none());
+		assert_eq!(m.todos.unwrap().active, "");
+		assert_eq!(
+			m.background_tasks[0].kind,
+			Code::Known(TaskKind::Unlabelled)
+		);
+		let compaction = m.compaction.unwrap();
+		assert!(compaction.last_at.is_none() && compaction.running_since.is_none());
+		assert!(compaction.tokens_before.is_none() && compaction.tokens_after.is_none());
+		assert!(m.autocompact.unwrap().headroom_tokens.is_none());
 	}
 
 	#[test]
@@ -568,7 +744,7 @@ mod tests {
 			"todos": {"done": 3, "total": 7, "active": "Running tests"},
 			"agents": {"running": 3, "idle": 1},
 			"background_tasks": [{"type": "shell", "description": "npm run dev"},
-				{"type": "monitor", "description": null}, {"type": null}],
+				{"type": "monitor", "description": null}, {"type": "remote_agent"}, {"type": null}],
 			"compaction": {"count": 2, "last_at_ms": 1791279000000, "tokens_before": 182000,
 				"tokens_after": 21000, "running_since_ms": null, "trigger": "auto"},
 			"autocompact": {"enabled": true, "headroom_tokens": 38000}
@@ -580,21 +756,18 @@ mod tests {
 		assert_eq!(m.tools.len(), 2);
 		assert_eq!(m.tools[0].tool, "Bash");
 		assert_eq!(m.tools[0].detail, "cargo test -p core");
-		assert_eq!(m.tools[0].started_at_ms, Some(1_791_280_000_000));
+		let at = DateTime::from_timestamp_millis(1_791_280_000_000);
+		assert_eq!(m.tools[0].started_at, at);
 		assert_eq!(m.tools[1].detail, "");
 		let turn = m.turn.unwrap();
-		assert_eq!(turn.started_at_ms, Some(1_791_280_000_000));
-		assert_eq!(turn.last_duration_ms, Some(130_000));
+		assert_eq!(turn.started_at, at);
+		assert_eq!(turn.last_duration, Some(Duration::from_secs(130)));
 		let permission = m.permission.unwrap();
-		assert_eq!(
-			(permission.tool.as_str(), permission.since_ms),
-			("Bash", Some(1_791_280_000_000))
-		);
+		assert_eq!((permission.tool.as_str(), permission.since), ("Bash", at));
 		let error = m.last_error.unwrap();
-		assert_eq!(
-			(error.kind.as_str(), error.detail.as_str()),
-			("overloaded", "529 Overloaded")
-		);
+		assert_eq!(error.kind, Code::Known(ErrorKind::Overloaded));
+		assert_eq!(error.detail, "529 Overloaded");
+		assert_eq!(error.at, at);
 		let todos = m.todos.unwrap();
 		assert_eq!(
 			(todos.done, todos.total, todos.active.as_str()),
@@ -605,44 +778,29 @@ mod tests {
 		let background: Vec<_> = m
 			.background_tasks
 			.iter()
-			.map(|t| (t.kind.as_str(), t.description.as_str()))
+			.map(|t| (&t.kind, t.description.as_str()))
 			.collect();
 		assert_eq!(
 			background,
-			[("shell", "npm run dev"), ("monitor", ""), ("", "")]
+			[
+				(&Code::Known(TaskKind::Shell), "npm run dev"),
+				(&Code::Known(TaskKind::Monitor), ""),
+				(&Code::Other("remote_agent".to_owned()), ""),
+				(&Code::Known(TaskKind::Unlabelled), ""),
+			]
 		);
 		let compaction = m.compaction.unwrap();
 		assert_eq!(compaction.count, 2);
+		assert_eq!(
+			compaction.last_at,
+			DateTime::from_timestamp_millis(1_791_279_000_000)
+		);
 		assert_eq!(compaction.tokens_before, Some(182_000.into()));
 		assert_eq!(compaction.tokens_after, Some(21_000.into()));
-		assert!(compaction.running_since_ms.is_none());
+		assert!(compaction.running_since.is_none());
 		let autocompact = m.autocompact.unwrap();
 		assert!(autocompact.enabled);
 		assert_eq!(autocompact.headroom_tokens, Some(38_000.into()));
-	}
-
-	#[test]
-	fn mod_nullable_leaves_parse_as_defaults() {
-		let json = r#"{"mod": {
-			"turn": {"started_at_ms": null, "last_duration_ms": null, "ended_at_ms": null},
-			"permission": {"tool": null, "since_ms": null},
-			"last_error": {"kind": "aborted", "detail": null, "at_ms": null},
-			"todos": {"done": 0, "total": 2, "active": null},
-			"compaction": {"count": 0, "last_at_ms": null, "tokens_before": null, "tokens_after": null,
-				"running_since_ms": 1791280000000, "trigger": null},
-			"autocompact": {"enabled": false, "headroom_tokens": null}
-		}}"#;
-		let m = InputData::from_reader(json.as_bytes())
-			.unwrap()
-			.mod_info
-			.unwrap();
-		assert!(m.turn.unwrap().last_duration_ms.is_none());
-		assert_eq!(m.permission.unwrap().tool, "");
-		assert_eq!(m.last_error.unwrap().detail, "");
-		assert_eq!(m.todos.unwrap().active, "");
-		let compaction = m.compaction.unwrap();
-		assert_eq!(compaction.running_since_ms, Some(1_791_280_000_000));
-		assert!(m.autocompact.unwrap().headroom_tokens.is_none());
 	}
 
 	#[test]
@@ -726,7 +884,10 @@ mod tests {
 			.unwrap()
 			.usage
 			.unwrap();
-		assert_eq!(usage.fetched_at_ms, Some(1_791_280_000_000));
+		assert_eq!(
+			usage.fetched_at,
+			DateTime::from_timestamp_millis(1_791_280_000_000)
+		);
 		assert_eq!(usage.body["limits"], "drifted");
 	}
 
@@ -739,7 +900,7 @@ mod tests {
 			let input = InputData::from_reader(json.as_bytes()).unwrap();
 			assert_eq!(input.model.display_name, "Opus");
 			let usage = input.mod_info.unwrap().usage.unwrap();
-			assert_eq!(usage.fetched_at_ms, None, "{at}");
+			assert_eq!(usage.fetched_at, None, "{at}");
 			assert!(usage.body.is_object());
 		}
 	}
