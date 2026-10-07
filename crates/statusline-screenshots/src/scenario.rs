@@ -3,6 +3,7 @@ use std::path::Path;
 use eyre::{Result, WrapErr, bail, eyre};
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use statusline_configure::Key;
 
 /// One screenshot, as described by a file in `screenshots/scenarios`.
 #[derive(Debug, Deserialize)]
@@ -33,9 +34,71 @@ pub struct Scenario {
 	/// More than one renders an animated PNG with a frame a second.
 	#[serde(default = "default_frames")]
 	pub frames: u32,
+	#[serde(default)]
 	pub input: Map<String, Value>,
 	/// Absent draws no subagent panel.
 	pub tasks: Option<Value>,
+	/// Draws `statusline configure` for `segments` and `settings` in a plain terminal instead of Claude Code.
+	pub configure: Option<ConfigureSpec>,
+}
+
+/// The editor as it looks after `keys`, on a terminal of `width` columns and `rows` rows.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigureSpec {
+	#[serde(default)]
+	pub keys: Vec<KeyName>,
+	pub width: usize,
+	pub rows: usize,
+}
+
+/// The editor's keys by name, kept here so the editor itself needs no serde.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyName {
+	Up,
+	Down,
+	MoveUp,
+	MoveDown,
+	Left,
+	Right,
+	Enter,
+	EnterOptions,
+	Back,
+	Toggle,
+	Add,
+	AddDivider,
+	AddNewline,
+	Replace,
+	Remove,
+	NextTab,
+	Global,
+	Backspace,
+}
+
+impl From<KeyName> for Key {
+	fn from(name: KeyName) -> Self {
+		match name {
+			KeyName::Up => Self::Up,
+			KeyName::Down => Self::Down,
+			KeyName::MoveUp => Self::MoveUp,
+			KeyName::MoveDown => Self::MoveDown,
+			KeyName::Left => Self::Left,
+			KeyName::Right => Self::Right,
+			KeyName::Enter => Self::Enter,
+			KeyName::EnterOptions => Self::EnterOptions,
+			KeyName::Back => Self::Back,
+			KeyName::Toggle => Self::Toggle,
+			KeyName::Add => Self::Add,
+			KeyName::AddDivider => Self::AddDivider,
+			KeyName::AddNewline => Self::AddNewline,
+			KeyName::Replace => Self::Replace,
+			KeyName::Remove => Self::Remove,
+			KeyName::NextTab => Self::NextTab,
+			KeyName::Global => Self::Global,
+			KeyName::Backspace => Self::Backspace,
+		}
+	}
 }
 
 /// The state of the fixture repo the git segments read.
@@ -87,6 +150,12 @@ impl Scenario {
 			serde_json::from_str(&text).wrap_err_with(|| format!("parsing {}", path.display()))?;
 		if scenario.frames == 0 {
 			bail!("{}: frames must be at least 1", path.display());
+		}
+		if scenario.configure.is_some() && scenario.frames != 1 {
+			bail!(
+				"{}: a configure shot has no clock, so it takes one frame",
+				path.display()
+			);
 		}
 		Ok(scenario)
 	}

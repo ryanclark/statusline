@@ -73,6 +73,11 @@ body {
 	white-space: pre;
 }
 
+/* The editor paints blank rows, which would otherwise collapse to nothing. */
+.row:empty {
+	height: var(--line);
+}
+
 .rule {
 	border-top: 1px solid #3a3d42;
 	margin: 6px 0;
