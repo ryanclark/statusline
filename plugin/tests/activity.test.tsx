@@ -337,7 +337,7 @@ describe('activity', () => {
       agent('e', 'killed'),
     ]
     const { seen } = await boot($, on, { agents })
-    expect(modOf(seen).agents).toEqual({ running: 2, idle: 1 })
+    expect(modOf(seen).agents).toEqual({ running: 1, idle: 2 })
   })
 
   test('agents that have all ended are not shown', async ($, on) => {
