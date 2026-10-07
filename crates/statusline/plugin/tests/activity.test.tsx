@@ -353,16 +353,22 @@ describe('activity', () => {
       .filter(e => e.startsWith(`write ${AGENTS_FILE} `))
       .map(e => JSON.parse(e.slice(`write ${AGENTS_FILE} `.length)))
 
-  test("each agent's status is written for the agent panel, again only on a change or to stay fresh", async ($, on) => {
+  test('waiting agents are written for the agent panel, again only on a change or to stay fresh', async ($, on) => {
     const agent = (id: string, status: AgentInfo['status']): AgentInfo => ({
       id,
       description: id,
       type: 'Explore',
       status,
     })
-    const cfg = { agents: [agent('b91ef5c9d5ef1262b', 'running'), agent('a91ef5c9d5ef1262b', 'waiting')] }
+    const cfg = {
+      agents: [
+        agent('c91ef5c9d5ef1262b', 'running'),
+        agent('b91ef5c9d5ef1262b', 'waiting'),
+        agent('a91ef5c9d5ef1262b', 'waiting'),
+      ],
+    }
     const { seen, clock } = await boot($, on, cfg)
-    const first = { a91ef5c9d5ef1262b: 'waiting', b91ef5c9d5ef1262b: 'running' }
+    const first = { a91ef5c9d5ef1262b: 'waiting', b91ef5c9d5ef1262b: 'waiting' }
     expect(agentWrites(seen.events)).toEqual([{ written_at_ms: T0, agents: first }])
     // The same agents in another order are no change.
     cfg.agents = [...cfg.agents].reverse()
@@ -373,16 +379,27 @@ describe('activity', () => {
       { written_at_ms: T0, agents: first },
       { written_at_ms: T0 + 10_000, agents: first },
     ])
-    cfg.agents = [agent('a91ef5c9d5ef1262b', 'completed')]
+    cfg.agents = [agent('a91ef5c9d5ef1262b', 'completed'), agent('b91ef5c9d5ef1262b', 'waiting')]
     await clock.advance(1000)
     expect(agentWrites(seen.events).at(-1)).toEqual({
       written_at_ms: T0 + 11_000,
-      agents: { a91ef5c9d5ef1262b: 'completed' },
+      agents: { b91ef5c9d5ef1262b: 'waiting' },
     })
-    // An emptied list is written once, so the binary stops seeing the last agents.
-    cfg.agents = []
+    // Once nothing waits the map is written empty once, so the binary stops seeing the last waiting agent.
+    cfg.agents = [agent('b91ef5c9d5ef1262b', 'completed')]
     await clock.advance(30_000)
     expect(agentWrites(seen.events).slice(-1)).toEqual([{ written_at_ms: T0 + 12_000, agents: {} }])
+    expect(agentWrites(seen.events)).toHaveLength(4)
+  })
+
+  test('agents that are not waiting are not written, as the binary reads only waiting ones', async ($, on) => {
+    const agents: AgentInfo[] = [
+      { id: 'a', description: 'a', type: 'Explore', status: 'completed' },
+      { id: 'b', description: 'b', type: 'Explore', status: 'running' },
+    ]
+    const { seen, clock } = await boot($, on, { agents })
+    await clock.advance(30_000)
+    expect(agentWrites(seen.events)).toEqual([])
   })
 
   test('a session without agents writes no agents file', async ($, on) => {

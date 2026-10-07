@@ -66,7 +66,7 @@ type State = {
   agentsAt: number
 }
 
-// A session that never had an agent writes no file, which the binary reads the same as an empty map.
+// A session that never had a waiting agent writes no file, which the binary reads the same as an empty map.
 const NO_AGENTS = '{}'
 
 // Session ids become file names, so only the plain tokens the binary itself accepts are written.

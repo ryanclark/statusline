@@ -166,12 +166,15 @@ export function agentCounts(list: readonly AgentInfo[]): { running: number; idle
   return running + idle === 0 ? null : { running, idle }
 }
 
-// The agent panel's command is told an agent held on its own background work has completed, so the binary takes each
-// agent's status from this map instead (subagent.rs). Sorted so a reordered list is not a change.
+// The agent panel's command is told an agent held on its own background work has completed, so the binary takes the
+// waiting ones from this map instead (subagent.rs). Only waiting agents are kept, as the binary reads nothing else and
+// a finished agent stays listed for the rest of the session. Sorted so a reordered list is not a change.
 export function agentStatuses(list: readonly AgentInfo[]): Record<string, AgentInfo['status']> {
   const out: Record<string, AgentInfo['status']> = {}
   for (const a of [...list].sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))) {
-    out[a.id] = a.status
+    if (a.status === 'waiting') {
+      out[a.id] = a.status
+    }
   }
   return out
 }
