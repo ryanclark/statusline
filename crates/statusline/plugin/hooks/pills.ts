@@ -2,8 +2,8 @@ export type Pills = { pills: string[]; selected: boolean }
 
 export const NO_PILLS: Pills = { pills: [], selected: false }
 
-// The nouns the footer counts, taken from the Claude Code 2.1.290 binary. The hint reaches a plugin read the way a screen
-// reader reads it, so the parts may be joined by " · " or by one space and a pill is found by its shape alone.
+// The nouns the footer counts, taken from the Claude Code 2.1.290 binary. The hint reaches a plugin read the way a
+// screen reader reads it, so the parts may be joined by " · " or by one space and a pill is found by its shape alone.
 const PILL = /\b\d+ (?:(?:local|cloud|mcp) )?(?:shell|monitor|workflow|agent|teammate|task|dream)s?\b/gi
 
 // The engine only words the selection as "Enter to view ...". It does not say which pill holds the focus, so `selected`
