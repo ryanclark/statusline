@@ -47,6 +47,7 @@ import {
   waiting,
 } from './usage'
 import type { UsageFile, UsageInput, UsageMemo } from './usage'
+import { parsePills } from './pills'
 import { cut, obj, plain, str } from './util'
 import type { Json } from './util'
 
@@ -388,7 +389,12 @@ async function refresh($: EngineInterface) {
 // so spans without their own colour take that theme key to match the native line.
 const DEFAULT_FG = 'inactive'
 
-async function draw($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']>[0], working: boolean) {
+async function draw(
+  $: EngineInterface,
+  e: Parameters<EngineInterface['ui']['resolve']>[0],
+  working: boolean,
+  hint?: unknown,
+) {
   const r = await read($, rendered)
   if (!r || (!r.error && r.rows.every(row => row.length === 0))) {
     return null
@@ -402,11 +408,22 @@ async function draw($: EngineInterface, e: Parameters<EngineInterface['ui']['res
     )
   }
   const lastRow = r.rows.length - 1
+  const { pills, selected } = parsePills(hint)
   return (
     <Box flexDirection="column">
       {r.rows.map((row, i) => (
         // One Text per row so an overflowing row is cut once at its end rather than every span shrinking on its own.
         <Text key={`row${i}`} wrap="truncate-end">
+          {i === 0 && pills.length > 0 ? (
+            <Text key="pills">
+              {pills.map((p, k) => (
+                <Text key={`pill${k}`} color={selected ? 'inverseText' : 'cyan'} backgroundColor={selected ? 'cyan' : undefined}>
+                  {k > 0 ? ` ${p}` : p}
+                </Text>
+              ))}
+              <Text dimColor>{' · '}</Text>
+            </Text>
+          ) : null}
           {row.map((s, j) => {
             const text = (
               <Text
@@ -717,7 +734,7 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     // The hint line is the only place the engine says how to interrupt, so it is carried over while a turn runs.
-    return (await draw($, e, e.props.isWorking)) ?? next(e)
+    return (await draw($, e, e.props.isWorking, e.props.hint)) ?? next(e)
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
