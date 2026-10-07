@@ -753,6 +753,16 @@ mod tests {
 	}
 
 	#[test]
+	fn render_task_label_hides_when_it_repeats_the_description() {
+		let mut task = sample_task();
+		task.label.clone_from(&task.description);
+		let input = task.to_input();
+		let mut ctx = default_ctx(&input);
+		ctx.task = Some(&task);
+		assert!(render_segment(&SegmentConfig::Simple(SegmentType::TaskLabel), &ctx).is_none());
+	}
+
+	#[test]
 	fn render_task_icons_follow_the_icon_options() {
 		let task = sample_task();
 		let input = task.to_input();

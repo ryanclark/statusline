@@ -102,10 +102,11 @@ pub(super) fn task_tokens(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> O
 
 /// The task's live activity, which Claude Code updates as the agent works.
 pub(super) fn task_label(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
-	let label = &ctx.task?.label;
-	if label.is_empty() {
+	let task = ctx.task?;
+	// Claude Code falls back to the description when the agent reports no activity of its own.
+	if task.label.is_empty() || task.label == task.description {
 		return None;
 	}
 
-	Some(apply_style(label, segment.style()))
+	Some(apply_style(&task.label, segment.style()))
 }

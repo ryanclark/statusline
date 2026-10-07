@@ -477,7 +477,7 @@ under `g` global in `statusline configure`, for one free-form line per task inst
 | `task_description` | Task description, dimmed |
 | `task_elapsed` | Time since the task started with ⏱ icon |
 | `task_tokens` | Tokens the task has used with ↑ icon |
-| `task_label` | What the task is doing right now, from Claude Code's live label |
+| `task_label` | What the task is doing right now, from Claude Code's live label. Hidden when it only repeats the description |
 
 
 ## Options
