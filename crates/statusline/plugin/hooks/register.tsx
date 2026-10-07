@@ -26,7 +26,7 @@ import {
   withoutBackground,
   withoutPermission,
 } from './activity'
-import { isSpanRows, MISSING, NOT_FOUND, REQUIRED_FLAGS, tooOldMessage, UNKNOWN_FLAG } from './binary'
+import { isSpanRows, MISSING, NOT_FOUND, REQUIRED_FLAGS, tooOldMessage, UNKNOWN_FLAG, WIDTH_FLAG } from './binary'
 import type { Verdict } from './binary'
 import { EMPTY_TRACKER, observeStep, TTL_MS } from './cache'
 import { blank, draw, hintWidth } from './draw'
@@ -73,6 +73,10 @@ type State = {
   // A subagent request may have taken the main loop's compose or left its own.
   composeAmbiguous: boolean
   handshake: Promise<Verdict> | null
+  // Whether the binary can drop whole segments to fit, and the width the line last had. A render hook may not run the
+  // binary, so the next refresh passes the width on.
+  fits: boolean
+  fitWidth: number | undefined
   tooOld: string | null
   usage: UsageMemo
   // The agents map last written for the binary and when, so an unchanged map is not written every tick.
@@ -106,6 +110,8 @@ function fresh(options: PluginOptions): State {
     pendingCompose: null,
     composeAmbiguous: false,
     handshake: null,
+    fits: false,
+    fitWidth: undefined,
     tooOld: null,
     usage: newUsageMemo(),
     agentsKey: NO_AGENTS,
@@ -176,6 +182,7 @@ async function probe($: EngineInterface, binary: string): Promise<Verdict> {
       : { error: `statusline: ${String(err)}`, final: false }
   }
   const help = out.stdout
+  state.fits = WIDTH_FLAG.test(help)
   if (out.exitCode === 0 && !REQUIRED_FLAGS.every(flag => flag.test(help))) {
     return { error: await tooOld($, binary), final: true }
   }
@@ -341,10 +348,11 @@ async function run($: EngineInterface): Promise<Rendered> {
   const stdin = await buildInput($)
   let out
   try {
-    out = await $.process.run([binary, '--format', 'spans', '--heartbeat-ms', String(state.heartbeatMs)], {
-      stdin,
-      timeoutMs: 5000,
-    })
+    const argv = [binary, '--format', 'spans', '--heartbeat-ms', String(state.heartbeatMs)]
+    if (state.fits && state.fitWidth !== undefined) {
+      argv.push('--width', String(state.fitWidth))
+    }
+    out = await $.process.run(argv, { stdin, timeoutMs: 5000 })
   } catch (err) {
     return { rows: [], error: MISSING.test(String(err)) ? NOT_FOUND : `statusline: ${String(err)}` }
   }
@@ -691,6 +699,7 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     const width = hintWidth(e.viewport?.columns, await read($, mode))
+    state.fitWidth = width
     // The hint line is the only place the engine says how to interrupt, so it is carried over while a turn runs.
     return (await drawLine($, e, e.props.isWorking, e.props.hint, width)) ?? next(e)
   })

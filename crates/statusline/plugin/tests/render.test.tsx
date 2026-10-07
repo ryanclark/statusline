@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { boot, hint } from './host'
+import { boot, capableHelp, hint } from './host'
 
 for (const surface of ['terminal', 'desktop'] as const) {
   describe(surface, () => {
@@ -44,6 +44,24 @@ for (const surface of ['terminal', 'desktop'] as const) {
 
       const unsized = await $.ui.mount({ plugin: 'statusline', surface, component: 'PromptHint', props: hint() })
       expect((await unsized.find({ type: 'Box' }))?.props.width).toBeUndefined()
+    })
+
+    test('below: the binary is asked to fit the width the line has, when it can', async ($, on) => {
+      const width = '      --width <COLUMNS>  The cells the line may take\n'
+      const help = { ...capableHelp, stdout: `${capableHelp.stdout}${width}` }
+      const { seen, clock } = await boot($, on, { help })
+      const viewport = { columns: 100, rows: 40, isFullscreen: false }
+      await $.ui.mount({ plugin: 'statusline', surface, component: 'PromptHint', props: hint(), viewport })
+      await clock.advance(1000)
+      expect(seen.argv?.slice(-2)).toEqual(['--width', '67'])
+    })
+
+    test('below: a binary without --width is not given it', async ($, on) => {
+      const { seen, clock } = await boot($, on)
+      const viewport = { columns: 100, rows: 40, isFullscreen: false }
+      await $.ui.mount({ plugin: 'statusline', surface, component: 'PromptHint', props: hint(), viewport })
+      await clock.advance(1000)
+      expect(seen.argv).not.toContain('--width')
     })
 
     test('a failing binary shows its first stderr line without escapes', async ($, on) => {

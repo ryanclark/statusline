@@ -15,6 +15,7 @@ mod timing;
 use crate::format::{Percentage, format_window, parse_color, parse_duration};
 use crate::input::InputData;
 use crate::subagent::Task;
+use crate::text::{truncate_visible, visible_width};
 use crate::usage::{PrepaidCredits, UsageError, UsageResponse};
 use owo_colors::{DynColors, OwoColorize};
 use serde::{Deserialize, Serialize};
@@ -756,18 +757,74 @@ impl SegmentLine<'_> {
 	}
 }
 
+impl SegmentLine<'_> {
+	/// The line with each row cut to `width` cells. Whole segments are dropped from the row's end, so the cut never
+	/// leaves half a segment or an icon without its value.
+	#[must_use]
+	pub fn fitted(&self, width: Option<usize>) -> String {
+		let mut out = String::new();
+		let mut row = Vec::new();
+		for (output, kind) in self.parts() {
+			if kind == PartKind::Newline {
+				write_row(&mut out, &mut row, width);
+				out.push_str(&output);
+			} else {
+				row.push((output, kind));
+			}
+		}
+		write_row(&mut out, &mut row, width);
+		out
+	}
+}
+
+fn write_row(out: &mut String, row: &mut Vec<(String, PartKind)>, width: Option<usize>) {
+	if let Some(width) = width {
+		fit_row(row, width);
+	}
+	for (i, (output, _)) in row.drain(..).enumerate() {
+		if i > 0 {
+			out.push(' ');
+		}
+		out.push_str(&output);
+	}
+}
+
+const ELLIPSIS: &str = "\u{2026}";
+
+fn fit_row(row: &mut Vec<(String, PartKind)>, width: usize) {
+	let widths: Vec<usize> = row
+		.iter()
+		.map(|(output, _)| visible_width(output))
+		.collect();
+	// Each part after the first is preceded by a space.
+	let mut used = widths.iter().sum::<usize>() + widths.len().saturating_sub(1);
+	if used <= width {
+		return;
+	}
+	// The kept parts leave room for " …".
+	while row.len() > 1 && used + 2 > width {
+		row.pop();
+		used -= widths[row.len()] + 1;
+		while row
+			.last()
+			.is_some_and(|(_, kind)| *kind == PartKind::Divider)
+		{
+			row.pop();
+			used -= widths[row.len()] + 1;
+		}
+	}
+	if used + 2 > width {
+		if let Some((output, _)) = row.first_mut() {
+			truncate_visible(output, width);
+		}
+	} else {
+		row.push((ELLIPSIS.to_owned(), PartKind::Text));
+	}
+}
+
 impl fmt::Display for SegmentLine<'_> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		let mut after_break = true;
-		for (output, kind) in self.parts() {
-			if !after_break && kind != PartKind::Newline {
-				write!(f, " ")?;
-			}
-			write!(f, "{output}")?;
-			after_break = kind == PartKind::Newline;
-		}
-
-		Ok(())
+		f.write_str(&self.fitted(None))
 	}
 }
 
