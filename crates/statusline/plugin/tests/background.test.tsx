@@ -20,6 +20,18 @@ const results: Record<string, (e: { tool: string }) => unknown> = {
 }
 const result = (e: { tool: string }) => results[e.tool]?.(e) ?? {}
 
+// A task's end as Claude reads it, which the engine submits as a prompt of the notification's own origin.
+const notification = (id: string, status?: string) =>
+  [
+    '<task-notification>',
+    `<task-id>${id}</task-id>`,
+    '<tool-use-id>toolu_1</tool-use-id>',
+    ...(status ? [`<status>${status}</status>`] : []),
+    `<summary>Background command "${id}" ${status ?? 'wrote a line'}</summary>`,
+    '</task-notification>',
+  ].join('\n')
+const fromTask = { kind: 'task-notification' } as const
+
 const summary = (id: string, type: string, extra: Record<string, string> = {}) => ({
   id,
   type,
@@ -148,5 +160,46 @@ describe('background tasks', () => {
     await clock.settle()
     const read = await $.classic.Notification({ message: 'idle', notification_type: 'idle_prompt' })
     expect(JSON.parse(read.stopReason ?? 'null')).toEqual({ 'b-a': { type: 'shell', description: 'a' } })
+  })
+
+  test("a task's notification of its end removes it, several at once", { options: quiet }, async ($, on) => {
+    const { seen, clock } = await boot($, on, { tool: { result } })
+    await $.tool.call({ tool: 'Bash', tool_use_id: 'toolu_1', command: 'a', run_in_background: true })
+    await $.tool.call({ tool: 'Bash', tool_use_id: 'toolu_2', command: 'b', run_in_background: true })
+    await $.tool.call({ tool: 'Monitor', tool_use_id: 'toolu_3', description: 'CI', command: 'ci', timeout_ms: 1 })
+    await $.prompt.submit({
+      text: `${notification('b-a', 'completed')}\n${notification('m1', 'killed')}`,
+      wait: false,
+      origin: fromTask,
+    })
+    await clock.settle()
+    expect(modOf(seen).background_tasks).toEqual([{ type: 'shell', description: 'b' }])
+  })
+
+  test('a notification that is not an end, or a typed one, keeps the task', { options: quiet }, async ($, on) => {
+    const { seen, clock } = await boot($, on, { tool: { result } })
+    await $.tool.call({ tool: 'Monitor', tool_use_id: 'toolu_1', description: 'CI', command: 'ci', timeout_ms: 1 })
+    await $.prompt.submit({ text: notification('m1'), wait: false, origin: fromTask })
+    await $.prompt.submit({ text: notification('m1', 'blocked'), wait: false, origin: fromTask })
+    await $.prompt.submit({ text: notification('m1', 'completed'), wait: false, origin: { kind: 'composer' } })
+    await clock.settle()
+    expect(modOf(seen).background_tasks).toEqual([{ type: 'monitor', description: 'CI' }])
+  })
+
+  test('a remote Workflow and a remote agent in a Stop snapshot are not shown', { options: quiet }, async ($, on) => {
+    const { seen, clock } = await boot($, on, {
+      tool: {
+        result: () => ({ status: 'remote_launched', taskId: 'r1', taskType: 'remote_agent', workflowName: 'review' }),
+      },
+    })
+    await $.tool.call({ tool: 'Workflow', tool_use_id: 'toolu_1', name: 'review', remote: true } as never)
+    await clock.settle()
+    expect(modOf(seen).background_tasks).toEqual([])
+    await $.classic.Stop({
+      stop_hook_active: false,
+      background_tasks: [summary('r1', 'remote_agent'), summary('b1', 'shell', { command: 'make' })],
+    })
+    await clock.settle()
+    expect(modOf(seen).background_tasks).toEqual([{ type: 'shell', description: 'shell b1' }])
   })
 })

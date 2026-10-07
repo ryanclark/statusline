@@ -182,6 +182,7 @@ function host(on: On, cfg: Host, seen: Seen = {}): MockClock {
   })
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('prompt.submit', (_$, e) => ({ text: e.text, origin: e.origin }))
   on('prompt.compose', () => ({
     sections: [{ id: 'main', text: cfg.system?.() ?? 'x'.repeat(100), scope: 'session' as const }],
   }))

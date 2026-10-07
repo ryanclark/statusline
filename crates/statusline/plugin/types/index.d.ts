@@ -98,7 +98,8 @@ export type Live = {
   // Task tools report one task per call, so the list is rebuilt here to count it.
   tasks: Record<string, TaskItem>
   compaction: Compaction | null
-  // Keyed by task id. Tool results add and remove tasks as they happen, and each Stop's snapshot replaces the lot.
+  // Keyed by task id. Tool results and end notifications add and remove tasks as they happen, and each Stop's snapshot
+  // replaces the lot.
   background: Record<string, BackgroundTask>
 }
 

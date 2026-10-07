@@ -230,7 +230,7 @@ pub struct ModInfo {
 	pub todos: Option<TodoProgress>,
 	#[serde(default)]
 	pub agents: Option<AgentCounts>,
-	/// Background shells, monitors and workflows still running, oldest first. Subagents are counted in `agents`.
+	/// Background shells, monitors and workflows still running. Subagents are counted in `agents`.
 	#[serde(default, deserialize_with = "null_as_default")]
 	pub background_tasks: Vec<BackgroundTask>,
 	#[serde(default)]
@@ -314,7 +314,7 @@ pub struct AgentCounts {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct BackgroundTask {
-	/// Claude Code's label for the kind of task: `shell`, `monitor`, `workflow`, or its raw name for another.
+	/// Claude Code's label for the kind of task: `shell`, `monitor` or `workflow`.
 	#[serde(rename = "type", default, deserialize_with = "null_as_default")]
 	pub kind: String,
 	/// The task's description, its command when it has none, or a workflow's name. Already truncated by the plugin.

@@ -233,7 +233,7 @@ pub(super) fn agents(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option
 	))
 }
 
-/// Claude Code's task type as a word, `remote_agent` reading as `remote agent`.
+/// Claude Code's task type as a word, its underscores read as spaces.
 fn task_kind(kind: &str, count: usize) -> String {
 	let word = if kind.is_empty() {
 		"task".to_owned()

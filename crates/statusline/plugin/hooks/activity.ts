@@ -121,6 +121,9 @@ export function foldTodos(l: Live, tool: string, args: Json, result: Json, main:
 
 export const BACKGROUND_TOOLS: ReadonlySet<string> = new Set(['Bash', 'Monitor', 'Workflow', 'TaskStop'])
 
+// The kinds a tool result can add. A remote agent or teammate in Stop's list is agent work, not a local task.
+const BACKGROUND_KINDS: ReadonlySet<string> = new Set(['shell', 'monitor', 'workflow'])
+
 // The same rule for a tool's own result and a Stop snapshot, so the line does not change when the snapshot lands.
 function backgroundTask(type: string, description: unknown, command: unknown, name: unknown): BackgroundTask {
   const label = (type === 'workflow' ? str(name) : null) || str(description) || str(command)
@@ -148,17 +151,15 @@ export function foldBackground(l: Live, tool: string, args: Json, result: Json):
       task = backgroundTask('monitor', args.description, args.command, null)
       break
     case 'Workflow':
+      if (result.taskType === 'remote_agent' || result.status === 'remote_launched') {
+        return undefined
+      }
       id = str(result.taskId)
       task = backgroundTask('workflow', null, null, result.workflowName ?? args.name)
       break
     case 'TaskStop': {
       const stopped = str(result.task_id)
-      if (stopped === null || !(stopped in background)) {
-        return undefined
-      }
-      const rest = { ...background }
-      delete rest[stopped]
-      return { ...l, background: rest }
+      return stopped === null ? undefined : withoutBackground(l, [stopped])
     }
     default:
       return undefined
@@ -175,11 +176,41 @@ export function backgroundSnapshot(list: unknown): Record<string, BackgroundTask
   for (const t of list.map(obj)) {
     const id = str(t?.id)
     const type = str(t?.type)
-    if (t && id !== null && type !== null && type !== 'subagent') {
+    if (t && id !== null && type !== null && BACKGROUND_KINDS.has(type)) {
       background[id] = backgroundTask(type, t.description, t.command, t.name)
     }
   }
   return background
+}
+
+export function withoutBackground(l: Live, ids: readonly string[]): Live | undefined {
+  const background = l.background ?? {}
+  const gone = ids.filter(id => id in background)
+  if (gone.length === 0) {
+    return undefined
+  }
+  const rest = { ...background }
+  for (const id of gone) {
+    delete rest[id]
+  }
+  return { ...l, background: rest }
+}
+
+const NOTIFICATION = /<task-notification>([\s\S]*?)<\/task-notification>/g
+const ENDED = new Set(['completed', 'failed', 'killed'])
+
+// The tasks a notification prompt reports ended. Several queued notifications can arrive as one prompt, and one with
+// any other status, or none, may come from a monitor that keeps running.
+export function endedTasks(text: string): string[] {
+  const ids: string[] = []
+  for (const [, body = ''] of text.matchAll(NOTIFICATION)) {
+    const id = /<task-id>([^<]+)<\/task-id>/.exec(body)?.[1]?.trim()
+    const status = /<status>([^<]+)<\/status>/.exec(body)?.[1]?.trim()
+    if (id && status && ENDED.has(status)) {
+      ids.push(id)
+    }
+  }
+  return ids
 }
 
 // PermissionRequest carries no tool_use_id, so a call's end settles the oldest wait on the same tool in the same loop.
