@@ -47,6 +47,10 @@ struct Cli {
 	/// With `--format spans`, how long the native status line stays silent for this session. Capped at 30 seconds.
 	#[arg(long = "heartbeat-ms", value_name = "MS", default_value = "10000", value_parser = parse_heartbeat)]
 	heartbeat: Duration,
+
+	/// The cells the line may take. Segments that do not fit are dropped whole and the row ends in an ellipsis.
+	#[arg(long, value_name = "COLUMNS")]
+	width: Option<usize>,
 }
 
 fn parse_heartbeat(ms: &str) -> Result<Duration, std::num::ParseIntError> {
@@ -391,7 +395,7 @@ fn main() {
 				},
 			};
 
-			let mut rendered = format!("{line}");
+			let mut rendered = line.fitted(cli.width);
 			if let Some(update) = update {
 				let update_msg = format!(
 					"{} {} {}",

@@ -1039,6 +1039,47 @@ mod tests {
 	}
 
 	#[test]
+	fn segment_line_fits_by_dropping_whole_segments() {
+		let mut input = default_input();
+		input.context_window = ContextWindow::from_reader(
+			r#"{"context_window": {"used_percentage": 50, "total_input_tokens": 500, "total_output_tokens": 1000, "current_usage": {"input_tokens": 500, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}}"#
+				.as_bytes(),
+		)
+		.unwrap()
+		.context_window;
+		let segments = vec![
+			SegmentConfig::Simple(SegmentType::ContextPercentage),
+			SegmentConfig::Simple(SegmentType::Divider),
+			SegmentConfig::Simple(SegmentType::InputTokens),
+			SegmentConfig::Simple(SegmentType::Divider),
+			SegmentConfig::Simple(SegmentType::ContextPercentage),
+			SegmentConfig::Simple(SegmentType::Newline),
+			SegmentConfig::Simple(SegmentType::InputTokens),
+		];
+		let line = SegmentLine {
+			segments: &segments,
+			ctx: default_ctx(&input),
+		};
+		let fitted = |width| strip_ansi(&line.fitted(Some(width)));
+		assert_eq!(
+			strip_ansi(&line.fitted(None)),
+			"50% \u{2022} \u{2191} 500 \u{2022} 50%\n\u{2191} 500"
+		);
+		assert_eq!(
+			fitted(17),
+			"50% \u{2022} \u{2191} 500 \u{2022} 50%\n\u{2191} 500"
+		);
+		assert_eq!(
+			fitted(16),
+			"50% \u{2022} \u{2191} 500 \u{2026}\n\u{2191} 500"
+		);
+		assert_eq!(fitted(10), "50% \u{2026}\n\u{2191} 500");
+		// A first segment too wide on its own is the one place a cut lands inside a segment.
+		assert_eq!(fitted(3), "50%\n\u{2191} \u{2026}");
+		assert_eq!(fitted(2), "5\u{2026}\n\u{2191}\u{2026}");
+	}
+
+	#[test]
 	fn segment_line_skips_none_segments() {
 		let input = default_input();
 		let segments = vec![

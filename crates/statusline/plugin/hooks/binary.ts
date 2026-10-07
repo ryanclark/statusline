@@ -5,6 +5,8 @@ export const NOT_FOUND = 'statusline not found: brew install ryanclark/tap/statu
 // process.run also rejects on timeout or when the binary exists but cannot start, so only ENOENT means missing.
 export const MISSING = /ENOENT|not found|No such file/i
 export const REQUIRED_FLAGS = [/--format\b/, /--heartbeat-ms\b/]
+// Optional, so a binary that predates it still draws, cut at a character instead of between segments.
+export const WIDTH_FLAG = /--width\b/
 // clap's wording for a flag a build predates. The probe sees it first, and a refresh catches a binary swapped later.
 export const UNKNOWN_FLAG = /unexpected argument '--(format|heartbeat-ms)'/
 
