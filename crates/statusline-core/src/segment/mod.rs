@@ -189,31 +189,31 @@ fn is_true(b: &bool) -> bool {
 pub struct SegmentOptions {
 	#[serde(rename = "type")]
 	pub segment_type: SegmentType,
-	#[serde(default = "default_true")]
+	#[serde(default = "default_true", skip_serializing_if = "is_true")]
 	pub colors: bool,
-	#[serde(default)]
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub icon: Option<bool>,
-	#[serde(default)]
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub icon_color: Option<String>,
-	#[serde(default)]
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub label: Option<String>,
-	#[serde(default)]
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub style: Option<String>,
-	#[serde(default)]
+	#[serde(default, skip_serializing_if = "DirtyConfig::is_off")]
 	pub dirty: DirtyConfig,
-	#[serde(default)]
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub dirty_color: Option<String>,
-	#[serde(default)]
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub warm_color: Option<String>,
-	#[serde(default)]
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub cold_color: Option<String>,
-	#[serde(default)]
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub capitalize: Option<bool>,
-	#[serde(default)]
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub show_time: Option<bool>,
-	#[serde(default)]
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub time_format: Option<TimeFormat>,
-	#[serde(default)]
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub show_countdown: Option<bool>,
 	#[serde(
 		default,
@@ -318,6 +318,12 @@ pub enum DirtyConfig {
 	Off,
 	On,
 	Custom(String),
+}
+
+impl DirtyConfig {
+	fn is_off(&self) -> bool {
+		matches!(self, Self::Off)
+	}
 }
 
 impl<'de> Deserialize<'de> for DirtyConfig {
@@ -856,6 +862,23 @@ mod tests {
 		let opts = seg.options_mut();
 		assert_eq!(opts.label.as_deref(), Some("custom"));
 		assert_eq!(opts.segment_type, SegmentType::Model);
+	}
+
+	#[test]
+	fn advanced_segments_save_only_the_options_that_are_set() {
+		let seg: SegmentConfig =
+			serde_json::from_str(r#"{"type":"git_branch","dirty":true}"#).unwrap();
+		assert_eq!(
+			serde_json::to_string(&seg).unwrap(),
+			r#"{"type":"git_branch","dirty":true}"#
+		);
+		let seg: SegmentConfig =
+			serde_json::from_str(r#"{"type":"cache_warm","colors":false,"show_time":false}"#)
+				.unwrap();
+		assert_eq!(
+			serde_json::to_string(&seg).unwrap(),
+			r#"{"type":"cache_warm","colors":false,"show_time":false}"#
+		);
 	}
 
 	#[test]
