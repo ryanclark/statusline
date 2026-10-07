@@ -32,6 +32,14 @@ describe('parsePills', () => {
     })
   })
 
+  test('parts separated by single spaces, as the screen reader reads the line', () => {
+    expect(parsePills('3 shells ← for agents ↓ to manage')).toEqual({ pills: ['3 shells'], selected: false })
+    expect(parsePills('1 shell 2 monitors Enter to view tasks')).toEqual({
+      pills: ['1 shell', '2 monitors'],
+      selected: true,
+    })
+  })
+
   test('unknown segments are ignored', () => {
     expect(parsePills('3 widgets · shell · 2 files changed · ← for agents')).toEqual({ pills: [], selected: false })
   })
@@ -59,19 +67,20 @@ for (const surface of ['terminal', 'desktop'] as const) {
       expect(await ui.find({ text: /for agents/ })).toBeUndefined()
     })
 
-    test('a selected pill is cyan background with dark text', async ($, on) => {
+    test('a selected pill is inverse text on a cyan background', async ($, on) => {
       await boot($, on)
       const ui = await mount($, props('1 shell · Enter to view tasks'))
       expect(await ui.find({ type: 'Text', text: /^1 shell$/ })).toMatchObject({
-        props: { color: 'black', backgroundColor: 'cyan' },
+        props: { color: 'inverseText', backgroundColor: 'cyan' },
       })
     })
 
-    test('several pills with a selection highlight none', async ($, on) => {
+    test('with several pills and a selection every pill is lit', async ($, on) => {
       await boot($, on)
       const ui = await mount($, props('1 shell · 2 monitors · Enter to view tasks'))
-      expect(await ui.find({ type: 'Text', text: /^ 2 monitors$/ })).toMatchObject({ props: { color: 'cyan' } })
-      expect(await ui.find({ type: 'Text', text: /^1 shell$/ })).toMatchObject({ props: { color: 'cyan' } })
+      const lit = { props: { color: 'inverseText', backgroundColor: 'cyan' } }
+      expect(await ui.find({ type: 'Text', text: /^ 2 monitors$/ })).toMatchObject(lit)
+      expect(await ui.find({ type: 'Text', text: /^1 shell$/ })).toMatchObject(lit)
     })
 
     test('no pills leaves the line as before', async ($, on) => {
@@ -82,13 +91,13 @@ for (const surface of ['terminal', 'desktop'] as const) {
       expect(await ui.find({ text: / · $/ })).toBeUndefined()
     })
 
-    test('the interrupt hint is added once, and not when the engine hint has it', async ($, on) => {
+    test('the interrupt hint is drawn while working, whatever the engine hint says', async ($, on) => {
       await boot($, on)
-      const bare = await mount($, props('1 shell', true))
-      expect(await bare.find({ text: /esc to interrupt/ })).toBeDefined()
-      const full = await mount($, props('1 shell · esc to interrupt · ← for agents', true))
-      expect(await full.find({ text: /esc to interrupt/ })).toBeUndefined()
-      expect(await full.find({ text: /1 shell/ })).toBeDefined()
+      for (const hint of ['1 shell', '1 shell · esc to interrupt · ← for agents']) {
+        const ui = await mount($, props(hint, true))
+        expect(await ui.find({ text: /esc to interrupt/ })).toBeDefined()
+        expect(await ui.find({ text: /1 shell/ })).toBeDefined()
+      }
     })
   })
 }

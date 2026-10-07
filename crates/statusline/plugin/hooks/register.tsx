@@ -364,9 +364,6 @@ async function draw(
   }
   const lastRow = r.rows.length - 1
   const { pills, selected } = parsePills(hint)
-  // A lone pill is the selected one. With several the hint does not name it, so none is lit.
-  const lit = selected && pills.length === 1
-  const interruptShown = typeof hint === 'string' && hint.includes('esc to interrupt')
   return (
     <Box flexDirection="column">
       {r.rows.map((row, i) => (
@@ -375,7 +372,7 @@ async function draw(
           {i === 0 && pills.length > 0 ? (
             <Text key="pills">
               {pills.map((p, k) => (
-                <Text key={`pill${k}`} color={lit ? 'black' : 'cyan'} backgroundColor={lit ? 'cyan' : undefined}>
+                <Text key={`pill${k}`} color={selected ? 'inverseText' : 'cyan'} backgroundColor={selected ? 'cyan' : undefined}>
                   {k > 0 ? ` ${p}` : p}
                 </Text>
               ))}
@@ -406,7 +403,7 @@ async function draw(
               text
             )
           })}
-          {working && !interruptShown && i === lastRow ? (
+          {working && i === lastRow ? (
             <Text key="esc" dimColor>
               {' · esc to interrupt'}
             </Text>
