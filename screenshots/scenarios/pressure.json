@@ -1,0 +1,50 @@
+{
+  "segments": [
+    "context_percentage",
+    "total_input_tokens",
+    "divider",
+    "five_hour",
+    "seven_day",
+    "divider",
+    "autocompact_headroom",
+    "divider",
+    "compaction",
+    "divider",
+    "last_api_error"
+  ],
+  "settings": { "five_hour_reset_threshold": 70, "seven_day_reset_threshold": 60 },
+  "transcript": ["● API Error: 529 Overloaded. Retried and finished the migration."],
+  "input": {
+    "model": { "id": "claude-opus-5-5", "display_name": "Opus 5.5" },
+    "context_window": {
+      "context_window_size": 200000,
+      "used_percentage": 92,
+      "remaining_percentage": 8,
+      "total_input_tokens": 184600,
+      "current_usage": {
+        "input_tokens": 20,
+        "output_tokens": 900,
+        "cache_creation_input_tokens": 3100,
+        "cache_read_input_tokens": 181480
+      }
+    },
+    "rate_limits": {
+      "five_hour": { "used_percentage": 87, "resets_at": "@+2580" },
+      "seven_day": { "used_percentage": 64, "resets_at": "@+190800" }
+    },
+    "mod": {
+      "last_error": {
+        "kind": "overloaded",
+        "detail": "529 Overloaded",
+        "at_ms": "@ms-65000"
+      },
+      "autocompact": { "enabled": true, "headroom_tokens": 12400 },
+      "compaction": {
+        "count": 2,
+        "last_at_ms": "@ms-2280000",
+        "tokens_before": 182000,
+        "tokens_after": 21000
+      }
+    }
+  }
+}

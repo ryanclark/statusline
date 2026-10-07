@@ -1,0 +1,128 @@
+/* Claude Code's dark theme, sampled from a terminal screenshot. */
+
+@font-face {
+	font-family: Mono;
+	src: url("{{font}}");
+}
+
+@font-face {
+	font-family: Mono;
+	font-weight: 700;
+	src: url("{{font_bold}}");
+}
+
+:root {
+	/* One terminal row, which the gaps between the header, prompt and panel are also measured in. */
+	--line: 22px;
+}
+
+html,
+body {
+	margin: 0;
+	background: transparent;
+}
+
+/* The bottom margin leaves room for the window shadow, which falls downward. */
+.win {
+	display: inline-block;
+	min-width: 760px;
+	margin: 28px 28px 52px;
+	background: #04080c;
+	border-radius: 12px;
+	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+	border: 1px solid #2a2d33;
+	overflow: hidden;
+}
+
+.bar {
+	height: 36px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 0 14px;
+}
+
+.dot {
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+}
+
+.dot.close {
+	background: #ff5f57;
+}
+
+.dot.minimize {
+	background: #febc2e;
+}
+
+.dot.zoom {
+	background: #28c840;
+}
+
+.body {
+	padding: 6px 24px 18px 18px;
+	font: 14px Mono, monospace;
+	line-height: var(--line);
+	color: #dcdcdc;
+}
+
+/* Only rows keep their spacing, so the markup around them can be indented freely. */
+.row,
+.moderow {
+	white-space: pre;
+}
+
+.rule {
+	border-top: 1px solid #3a3d42;
+	margin: 6px 0;
+}
+
+.panel {
+	margin-top: var(--line);
+}
+
+.t,
+.prompt {
+	color: #dcdcdc;
+}
+
+.header {
+	display: flex;
+	gap: 18px;
+	align-items: center;
+	margin: 4px 0 var(--line);
+}
+
+.mascot {
+	width: 66px;
+	height: 48px;
+}
+
+.title,
+.lead {
+	color: #dcdcdc;
+	font-weight: 700;
+}
+
+.dim,
+.sep {
+	color: #999999;
+}
+
+/* Claude Code's mode label colour, approximated from a screenshot. */
+.mode {
+	color: #f0b232;
+}
+
+.moderow {
+	display: flex;
+}
+
+.cursor {
+	display: inline-block;
+	width: 8px;
+	height: 17px;
+	background: #dcdcdc;
+	vertical-align: -3px;
+}

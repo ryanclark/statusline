@@ -1,0 +1,18 @@
+[package]
+name = "statusline-screenshots"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+description = "Renders the README screenshots from the scenarios in screenshots/scenarios"
+repository = "https://github.com/ryanclark/statusline"
+license = "MIT"
+publish = false
+
+[dependencies]
+eyre = "0.6.12"
+serde.workspace = true
+serde_json.workspace = true
+statusline-core.workspace = true
+
+[lints]
+workspace = true

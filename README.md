@@ -1,42 +1,11 @@
 # statusline
 
-A fast, native statusline for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that shows context window usage, session/weekly usage limits and extra usage credits.
+A fast, native statusline for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that shows context window
+usage, session/weekly usage limits and extra usage credits.
 
 <p align="center">
-  <img src="screenshots/default.png" alt="statusline example" />
+  <img src="screenshots/hero.png" alt="statusline drawn by the Claude Code plugin" />
 </p>
-
-## Examples
-
-#### Context window
-
-`["context_percentage", "input_tokens", "output_tokens", "divider", "cache_read_tokens", "cache_hit_ratio", "divider", "context_remaining", "context_window_size"]`
-
-<img src="screenshots/context-window.png" alt="context window" />
-
-#### Rate limits
-
-`["context_percentage", "input_tokens", "output_tokens", "divider", "five_hour", "seven_day"]`
-
-<img src="screenshots/rate-limits.png" alt="rate limits" />
-
-#### Cost & performance
-
-`["context_percentage", "divider", "cost", "cost_rate", "tokens_per_second", "divider", "duration", "api_duration", "divider", "lines_added", "lines_removed"]`
-
-<img src="screenshots/cost-performance.png" alt="cost and performance" />
-
-#### Git info
-
-`["context_percentage", "input_tokens", "output_tokens", "divider", "cwd", "divider", {"type": "git_branch", "dirty": true}, "git_ahead_behind", "git_stash"]`
-
-<img src="screenshots/git-info.png" alt="git info" />
-
-#### Environment
-
-`["context_percentage", "divider", "cwd", "divider", "model", "divider", "version", "divider", "five_hour", "seven_day"]`
-
-<img src="screenshots/environment.png" alt="environment" />
 
 ## Install
 
@@ -44,75 +13,45 @@ A fast, native statusline for [Claude Code](https://docs.anthropic.com/en/docs/c
 brew install ryanclark/tap/statusline
 ```
 
-macOS (Apple Silicon) and Linux (arm64/amd64) are supported.
-> [!NOTE]
-> Keychain access to "Chrome Safe Storage" is only needed if you use `extra_usage`, `fable_usage`, or `credits` (see below).
-
-Or, without Homebrew, install a prebuilt binary from the latest GitHub release:
+macOS (Apple Silicon) and Linux (arm64/amd64) are supported. Without Homebrew, install a prebuilt binary from the latest
+GitHub release:
 
 ```
 curl -fsSL https://raw.githubusercontent.com/ryanclark/statusline/main/install.sh | sh
 ```
 
-The binary is installed to `~/.local/bin` (override with `INSTALL_DIR=...`). Append `-s -- v1.1.0` after `sh` to pin a version.
+The binary is installed to `~/.local/bin` (override with `INSTALL_DIR=...`). Append `-s -- v1.1.0` after `sh` to pin a
+version. Or build from source with `just install` (requires [just](https://github.com/casey/just)).
 
-Or build from source (requires [just](https://github.com/casey/just)):
+Then wire it into Claude Code as a plugin (recommended) or as a native `statusLine`.
 
-```
-just install
-```
-
-## Setup
+### Claude Code plugin (recommended)
 
 ```
-statusline install
-```
-
-This creates `~/.statusline/settings.json` with default settings when it is missing, keeps an existing file (and its segments) as it is, and wires up Claude Code's `settings.json` to call `statusline`. Pass `--subagent` to also wire the agent panel rows to `statusline subagent`; without the flag, an interactive install offers to add it when it is not configured yet. The organization shown in the `extra_usage` segment is read from Claude Code's own `~/.claude.json` at runtime, so it always matches the currently-active account.
-
-### Keychain access (API segments only)
-
-If you include `extra_usage`, `fable_usage`, or `credits`, statusline reads your Chrome session cookie to fetch usage data from claude.ai. On first run, macOS will prompt you to allow access to "Chrome Safe Storage" in Keychain. Select **Always Allow** so it doesn't prompt on every invocation.
-
-If you don't use any of those segments, no Chrome access or API calls are needed.
-
-## Claude Code plugin
-
-The plugin draws the same segments inside Claude Code, under the prompt or in the band above it, and refreshes them
-between turns so countdowns and the [live activity](#live-activity) segments keep moving. It runs the `statusline`
-binary, so install that first.
-
-Needs Claude Code 2.1.287 or later and the next statusline release. With an older binary the plugin shows the command
-to upgrade it.
-
-### Installing the plugin
-
-```
-brew install ryanclark/tap/statusline
 statusline install --plugin
 ```
+
+The plugin draws the line under the prompt and refreshes it on its own clock, so countdowns tick between turns, and it
+adds the [live activity](#live-activity) segments. Needs Claude Code 2.1.287 or later.
 
 This creates `~/.statusline/settings.json` if it is missing, adds the `ryanclark` marketplace and installs the plugin at
 user scope, pointed at the binary you ran. Pass `--dry-run` to see what would change, and `--claude <PATH>` when
 `claude` is not on your `PATH`. If you installed the plugin with statusline 2.0.0, upgrade and run it again so the
 marketplace checks out the plugin's new path.
 
-While the plugin draws, a `statusLine` that runs `statusline` prints nothing, so the line never shows twice. Claude
-Code still keeps an empty row for it, so an existing `statusLine` in `~/.claude/settings.json` is saved to
-`~/.statusline/native-statusline.json` and removed. One that runs `statusline` is removed without asking, anything else
-only after you confirm. `~/.claude/settings.json` is backed up to `~/.statusline/backups/` before it changes.
+Claude Code keeps an empty row for a `statusLine` that prints nothing, so an existing `statusLine` in
+`~/.claude/settings.json` is saved to `~/.statusline/native-statusline.json` and removed. One that runs `statusline` is
+removed without asking, anything else only after you confirm. `~/.claude/settings.json` is backed up to
+`~/.statusline/backups/` before it changes. Pass `--keep-native` to keep it as a fallback for sessions where the plugin
+does not load. It stays silent while the plugin draws.
 
-Pass `--keep-native` to keep the `statusLine` as a fallback for sessions where the plugin does not load, at the cost of
-the empty row. It comes back within 30 seconds of the plugin stopping, can show if refreshes stall with an `intervalMs`
-above 10 seconds, and shows between refreshes above 30 seconds.
-
-### From inside a session
+To install from inside a session instead:
 
 ```
 /plugin install statusline --marketplace ryanclark/statusline
 ```
 
-Answer `y` to add the marketplace and pick a scope. The options screen sets:
+The options screen sets:
 
 | Option | Default | Description |
 |---|---|---|
@@ -127,17 +66,62 @@ Change them later with `/plugin`, or from a shell:
 echo '{"binary": "/opt/homebrew/bin/statusline"}' | claude plugin configure statusline@ryanclark --values-stdin
 ```
 
-Options you leave out keep their values. Installing this way keeps your native `statusLine` and the empty row it
-leaves. Remove it from `~/.claude/settings.json` or run `statusline install --plugin`.
+`statusline install --native` uninstalls the plugin and restores the saved `statusLine`. Add `--remove-marketplace` to
+also remove the `ryanclark` marketplace.
 
-### Rolling back
+### Native statusLine
 
 ```
-statusline install --native
+statusline install
 ```
 
-This uninstalls the plugin and restores the saved `statusLine`, or the default `statusline` command if none was saved.
-Add `--remove-marketplace` to also remove the `ryanclark` marketplace.
+Use this when the plugin cannot load: Claude Code older than 2.1.287, a third-party provider, or nonessential traffic
+disabled. It wires Claude Code's `settings.json` to call `statusline` and creates `~/.statusline/settings.json` when it
+is missing. Pass `--subagent` to also wire the agent panel rows to `statusline subagent`. The line only refreshes when
+Claude Code redraws it, and the live activity segments stay empty.
+
+### Keychain access (API segments only)
+
+If you include `extra_usage`, `fable_usage`, or `credits`, statusline reads your Chrome session cookie to fetch usage
+data from claude.ai. On first run, macOS will prompt you to allow access to "Chrome Safe Storage" in Keychain. Select
+**Always Allow** so it doesn't prompt on every invocation. The organization is read from Claude Code's own
+`~/.claude.json`, so it always matches the active account.
+
+## Examples
+
+Regenerate these with `just screenshots`.
+
+#### Live activity (plugin only)
+
+What Claude is running, how long the turn has taken, plan progress and running agents, with the subagent panel below.
+
+`["context_percentage", "total_input_tokens", "output_tokens", "divider", "current_tool", "divider", "turn_elapsed", "divider", "todo_progress", "divider", "agents"]`
+
+<img src="screenshots/live-activity.png" alt="live activity" />
+
+#### Prompt cache
+
+How long the cache stays warm, why it last missed and how often it missed in the last 30 minutes. Miss causes and the
+window are fullest with the plugin.
+
+`["context_percentage", "divider", "model", "divider", "cache_warm", "divider", "cache_last_miss", "divider", "cache_misses", "divider", "session_cache_hit_ratio"]`
+
+<img src="screenshots/cache.png" alt="prompt cache" />
+
+#### Under pressure
+
+Context and rate limits near their ceilings, autocompact headroom, compaction history and the last API error. The last
+three need the plugin.
+
+`["context_percentage", "total_input_tokens", "divider", "five_hour", "seven_day", "divider", "autocompact_headroom", "divider", "compaction", "divider", "last_api_error"]`
+
+<img src="screenshots/pressure.png" alt="limits under pressure" />
+
+#### Git, on two rows (native statusLine)
+
+`["context_percentage", "total_input_tokens", "output_tokens", "divider", "model", "divider", "cost", "newline", "cwd", "divider", {"type": "git_branch", "dirty": true}, "git_ahead_behind", "git_stash", "divider", "pr"]`
+
+<img src="screenshots/git.png" alt="git info on two rows" />
 
 ## What it shows
 

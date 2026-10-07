@@ -167,7 +167,7 @@ fn main() {
 				}
 			}
 		}
-		Some(Commands::Subagent) => subagent::run(),
+		Some(Commands::Subagent) => subagent::run(matches!(cli.format, OutputFormat::Spans)),
 		Some(Commands::Configure) => {
 			let path = match Settings::settings_path() {
 				Ok(p) => p,
