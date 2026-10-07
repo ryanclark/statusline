@@ -9,10 +9,15 @@ use crate::render::{Frame, Row};
 use crate::scenario::Scenario;
 
 const PAGE: &str = include_str!("../templates/page.html");
+const CLAUDE: &str = include_str!("../templates/claude.html");
+const CONFIGURE: &str = include_str!("../templates/configure.html");
 const STYLE: &str = include_str!("../templates/style.css");
 
-/// What a span with no colour of its own is drawn in, Claude Code's inactive text colour.
+/// What a span with no colour of its own is drawn in under Claude Code, its inactive text colour.
 const INACTIVE: &str = "#999999";
+
+/// What a span with no colour of its own is drawn in on a plain terminal, the foreground colour.
+const FOREGROUND: &str = "#dcdcdc";
 
 /// The 16 terminal colour names spans carry, in Claude Code's dark theme.
 const ANSI: [(&str, &str); 16] = [
@@ -63,11 +68,6 @@ impl Fonts {
 
 /// The page for one frame of `scenario`.
 pub fn build(scenario: &Scenario, frame: &Frame, fonts: &Fonts) -> Result<String> {
-	let style = fill(
-		STYLE,
-		&[("font", &fonts.regular), ("font_bold", &fonts.bold)],
-	)?;
-
 	let model = frame.input.get("model");
 	let field = |key: &str| {
 		model
@@ -90,10 +90,9 @@ pub fn build(scenario: &Scenario, frame: &Frame, fonts: &Fonts) -> Result<String
 		.map(|line| format!(r#"<div class="row t">{}</div>"#, escape(line)))
 		.collect();
 
-	fill(
-		PAGE,
+	let body = fill(
+		CLAUDE,
 		&[
-			("style", &style),
 			("version", &escape(version)),
 			("model", &escape(name)),
 			("plan", &escape(&scenario.plan)),
@@ -103,13 +102,28 @@ pub fn build(scenario: &Scenario, frame: &Frame, fonts: &Fonts) -> Result<String
 			("status", &status_html(scenario, &frame.line)),
 			("panel", &panel_html(&frame.panel)),
 		],
-	)
+	)?;
+	window(&body, fonts)
+}
+
+/// The page for the editor frame `rows`, run from a plain terminal.
+pub fn build_configure(rows: &[Row], fonts: &Fonts) -> Result<String> {
+	let body = fill(CONFIGURE, &[("frame", &rows_html(rows, FOREGROUND))])?;
+	window(&body, fonts)
+}
+
+fn window(body: &str, fonts: &Fonts) -> Result<String> {
+	let style = fill(
+		STYLE,
+		&[("font", &fonts.regular), ("font_bold", &fonts.bold)],
+	)?;
+	fill(PAGE, &[("style", &style), ("body", body)])
 }
 
 /// The plugin draws on Claude Code's mode row after its label. A native `statusLine` gets a row of its own with the
 /// mode row under it.
 fn status_html(scenario: &Scenario, rows: &[Row]) -> String {
-	let html = rows_html(rows);
+	let html = rows_html(rows, INACTIVE);
 	let label = match scenario.mode.as_deref() {
 		None | Some("") => None,
 		Some(mode) => Some(format!(r#"<span class="mode">⏵⏵ {}</span>"#, escape(mode))),
@@ -133,32 +147,32 @@ fn panel_html(panel: &[Row]) -> String {
 		r#"<div class="panel"><div class="row"><span class="lead">● main</span></div>"#.to_owned();
 	for row in panel {
 		html.push_str(r#"<div class="row"><span class="dim">○ </span>"#);
-		row.iter().for_each(|span| html.push_str(&span_html(span)));
+		row.iter()
+			.for_each(|span| html.push_str(&span_html(span, INACTIVE)));
 		html.push_str("</div>");
 	}
 	html.push_str("</div>");
 	html
 }
 
-fn rows_html(rows: &[Row]) -> String {
+fn rows_html(rows: &[Row], default: &str) -> String {
 	rows.iter()
 		.map(|row| {
-			let spans: String = row.iter().map(span_html).collect();
+			let spans: String = row.iter().map(|span| span_html(span, default)).collect();
 			format!(r#"<div class="row">{spans}</div>"#)
 		})
 		.collect()
 }
 
-fn span_html(span: &Span) -> String {
+/// `default` is the colour of a span with none of its own.
+fn span_html(span: &Span, default: &str) -> String {
 	let style = &span.style;
-	let color = match style.fg.as_deref().filter(|fg| !fg.is_empty()) {
-		Some(fg) => ANSI
-			.iter()
-			.find(|(name, _)| *name == fg)
-			.map_or(fg, |(_, hex)| hex),
-		None => INACTIVE,
-	};
-	let mut css = format!("color:{color}");
+	let mut css = format!("color:{}", color(style.fg.as_deref()).unwrap_or(default));
+	if let Some(bg) = color(style.bg.as_deref()) {
+		// An inline background covers only the glyph box, leaving gaps between rows a terminal would fill.
+		css.push_str(";display:inline-block;background:");
+		css.push_str(bg);
+	}
 	for (on, rule) in [
 		(style.bold, "font-weight:700"),
 		(style.dim, "opacity:.55"),
@@ -174,6 +188,16 @@ fn span_html(span: &Span) -> String {
 		r#"<span style="{}">{}</span>"#,
 		escape(&css),
 		escape(&span.text)
+	)
+}
+
+/// A span colour as CSS, mapping the terminal colour names and passing hex through.
+fn color(name: Option<&str>) -> Option<&str> {
+	let name = name.filter(|name| !name.is_empty())?;
+	Some(
+		ANSI.iter()
+			.find(|(ansi, _)| *ansi == name)
+			.map_or(name, |(_, hex)| hex),
 	)
 }
 
@@ -259,7 +283,10 @@ mod tests {
 				panel: row(),
 				input: scenario.input.clone(),
 			};
-			let html = build(&scenario, &frame, &fonts).unwrap();
+			let html = match scenario.configure {
+				Some(_) => build_configure(&row(), &fonts).unwrap(),
+				None => build(&scenario, &frame, &fonts).unwrap(),
+			};
 			assert!(!html.contains("{{"));
 			assert!(html.contains("&lt;5m"));
 		}
@@ -277,14 +304,17 @@ mod tests {
 			},
 		};
 		assert_eq!(
-			span_html(&span),
+			span_html(&span, INACTIVE),
 			r#"<span style="color:#50c878;font-weight:700;opacity:.55">&lt;a &amp; &#x27;b&#x27;&gt;</span>"#
 		);
 		let plain = Span {
 			text: "x".to_owned(),
 			..Span::default()
 		};
-		assert_eq!(span_html(&plain), r#"<span style="color:#999999">x</span>"#);
+		assert_eq!(
+			span_html(&plain, INACTIVE),
+			r#"<span style="color:#999999">x</span>"#
+		);
 		let empty = Span {
 			text: "x".to_owned(),
 			style: Style {
@@ -292,6 +322,25 @@ mod tests {
 				..Style::default()
 			},
 		};
-		assert_eq!(span_html(&empty), r#"<span style="color:#999999">x</span>"#);
+		assert_eq!(
+			span_html(&empty, INACTIVE),
+			r#"<span style="color:#999999">x</span>"#
+		);
+		let selected = Span {
+			text: "x".to_owned(),
+			style: Style {
+				fg: Some("#ffffff".to_owned()),
+				bg: Some("blue".to_owned()),
+				..Style::default()
+			},
+		};
+		assert_eq!(
+			span_html(&selected, FOREGROUND),
+			r#"<span style="color:#ffffff;display:inline-block;background:#6aa8f0">x</span>"#
+		);
+		assert_eq!(
+			span_html(&plain, FOREGROUND),
+			r#"<span style="color:#dcdcdc">x</span>"#
+		);
 	}
 }

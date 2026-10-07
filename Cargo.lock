@@ -1060,6 +1060,7 @@ dependencies = [
  "eyre",
  "serde",
  "serde_json",
+ "statusline-configure",
  "statusline-core",
 ]
 

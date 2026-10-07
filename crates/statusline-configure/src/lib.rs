@@ -52,6 +52,18 @@ pub fn edit(settings: &Settings) -> Result<Option<Settings>, ConfigureError> {
 	edit_with_sample(settings, &sample, None)
 }
 
+/// The editor frame for `settings` after `keys`, as the ANSI text it paints on a `width` by `rows` terminal. It
+/// never touches the terminal, so the README screenshots can show the real editor.
+pub fn snapshot(
+	settings: &Settings,
+	claude_settings_path: Option<&Path>,
+	keys: &[Key],
+	width: usize,
+	rows: usize,
+) -> Result<String, ConfigureError> {
+	draw::snapshot(settings, claude_settings_path, keys, width, rows)
+}
+
 fn edit_with_sample(
 	settings: &Settings,
 	sample: &SampleData,

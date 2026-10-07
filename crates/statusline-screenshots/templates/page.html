@@ -11,30 +11,7 @@
 		<div class="dot zoom"></div>
 	</div>
 	<div class="body">
-		<div class="header">
-			<!-- Claude Code's welcome mascot as pixel rects on an 11x8 grid. -->
-			<svg class="mascot" viewBox="0 0 11 8" shape-rendering="crispEdges">
-				<rect x="1" y="0" width="9" height="5" fill="#d97757"/>
-				<rect x="0" y="2" width="11" height="2" fill="#d97757"/>
-				<rect x="3" y="1" width="1" height="2" fill="#04080c"/>
-				<rect x="7" y="1" width="1" height="2" fill="#04080c"/>
-				<rect x="2" y="5" width="1" height="2" fill="#d97757"/>
-				<rect x="3.6" y="5" width="1" height="2" fill="#d97757"/>
-				<rect x="6.4" y="5" width="1" height="2" fill="#d97757"/>
-				<rect x="8" y="5" width="1" height="2" fill="#d97757"/>
-			</svg>
-			<div>
-				<div><span class="title">Claude Code</span> <span class="dim">v{{version}}</span></div>
-				<div class="dim">{{model}} · {{plan}}</div>
-				<div class="dim">{{cwd}}</div>
-			</div>
-		</div>
-		{{transcript}}
-		<div class="rule"></div>
-		<div class="row prompt">❯ {{prompt}}<span class="cursor"></span></div>
-		<div class="rule"></div>
-		{{status}}
-		{{panel}}
+		{{body}}
 	</div>
 </div>
 

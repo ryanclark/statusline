@@ -451,6 +451,29 @@ pub(crate) fn run_editor(
 	}
 }
 
+pub(crate) fn snapshot(
+	settings: &Settings,
+	claude_settings_path: Option<&Path>,
+	keys: &[model::Key],
+	width: usize,
+	rows: usize,
+) -> Result<String, ConfigureError> {
+	let sample = SampleData::representative();
+	let mut model = EditorModel::from_settings(settings);
+	model.subagent_installed =
+		claude_settings_path.is_some_and(|p| claude_settings::is_configured(p, Entry::Subagent));
+	for &key in keys {
+		if model.apply(key) == Effect::InstallSubagent {
+			model.notice = Some(install_subagent(&mut model, claude_settings_path));
+		}
+	}
+
+	let mut out = Vec::new();
+	paint_block(&mut out, &view::block(&model, &sample, rows), width, true)?;
+
+	Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
 fn install_subagent(model: &mut EditorModel, path: Option<&Path>) -> String {
 	let Some(path) = path else {
 		return "no Claude Code settings path to install into".to_owned();
@@ -756,6 +779,26 @@ mod tests {
 			!s.ends_with("\r\n"),
 			"trailing newline after the last row: {s:?}"
 		);
+	}
+
+	fn cursor_line(frame: &str) -> usize {
+		strip_ansi(frame)
+			.lines()
+			.position(|line| line.contains('\u{276f}'))
+			.expect("a row carries the cursor marker")
+	}
+
+	#[test]
+	fn snapshot_paints_the_editor_and_follows_keys() {
+		let settings = Settings::default();
+		let frame = snapshot(&settings, None, &[], 100, 40).unwrap();
+		assert!(
+			strip_ansi(&frame).contains("context_percentage"),
+			"{frame:?}"
+		);
+
+		let moved = snapshot(&settings, None, &[model::Key::Down], 100, 40).unwrap();
+		assert_eq!(cursor_line(&moved), cursor_line(&frame) + 1);
 	}
 
 	#[test]

@@ -75,13 +75,19 @@ fn main() -> Result<()> {
 		let scenario = Scenario::load(path)?;
 		let work = WorkDir::new()?;
 		let mut pages = Vec::new();
-		for i in 0..scenario.frames {
-			// Each frame's clock runs a second further, so countdowns fall and elapsed timers climb.
-			let now = clock(SystemTime::now() - Duration::from_secs(i.into()))?;
-			let home = work.0.join(format!("home-{i}"));
-			let frame = render::frame(&binary, &scenario, &home, now)
+		if let Some(spec) = &scenario.configure {
+			let rows = render::configure(&scenario, spec, &work.0)
 				.wrap_err_with(|| format!("rendering {name}"))?;
-			pages.push(page::build(&scenario, &frame, &fonts)?);
+			pages.push(page::build_configure(&rows, &fonts)?);
+		} else {
+			for i in 0..scenario.frames {
+				// Each frame's clock runs a second further, so countdowns fall and elapsed timers climb.
+				let now = clock(next_second()? - Duration::from_secs(i.into()))?;
+				let home = work.0.join(format!("home-{i}"));
+				let frame = render::frame(&binary, &scenario, &home, now)
+					.wrap_err_with(|| format!("rendering {name}"))?;
+				pages.push(page::build(&scenario, &frame, &fonts)?);
+			}
 		}
 		let out = out_dir.join(format!("{name}.png"));
 		screenshot(name, &pages, &out, &work.0)?;
@@ -115,6 +121,16 @@ fn screenshot(name: &str, pages: &[String], out: &Path, work: &Path) -> Result<(
 		chrome::capture(path, &path.with_extension("png"), size, work)?;
 	}
 	apng::encode(&work.join(format!("{name}-%02d.png")), out)
+}
+
+/// Waits for the next whole second. Scenario times are whole seconds and the binary reads the clock with its fraction,
+/// so starting every frame at the same fraction keeps a countdown from repeating one second and skipping the next.
+fn next_second() -> Result<SystemTime> {
+	let now = SystemTime::now();
+	let fraction = now.duration_since(UNIX_EPOCH)?.subsec_nanos();
+	let wait = Duration::from_secs(1) - Duration::from_nanos(fraction.into());
+	std::thread::sleep(wait);
+	Ok(now + wait)
 }
 
 fn clock(at: SystemTime) -> Result<Clock> {

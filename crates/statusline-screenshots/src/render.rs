@@ -7,10 +7,12 @@ use std::time::{Duration, Instant};
 
 use eyre::{Result, WrapErr, bail, eyre};
 use serde_json::{Map, Value, json};
-use statusline_core::spans::Span;
+use statusline_configure::Key;
+use statusline_core::settings::Settings;
+use statusline_core::spans::{Span, ansi_to_spans};
 
 use crate::repo;
-use crate::scenario::{Clock, Scenario, resolve_times};
+use crate::scenario::{Clock, ConfigureSpec, Scenario, resolve_times};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -26,21 +28,11 @@ pub struct Frame {
 
 /// Runs the real binary for `scenario` under the scratch `home`, as of `now`.
 pub fn frame(binary: &Path, scenario: &Scenario, home: &Path, now: Clock) -> Result<Frame> {
-	let mut settings = Map::new();
-	settings.insert("nerd_font".to_owned(), true.into());
-	settings.insert("skip_update_check".to_owned(), true.into());
-	settings.insert("five_hour_reset_threshold".to_owned(), 70.into());
-	settings.insert("seven_day_reset_threshold".to_owned(), 100.into());
-	settings.extend(scenario.settings.clone());
-	settings.insert("segments".to_owned(), scenario.segments.clone());
-	if let Some(segments) = &scenario.subagent_segments {
-		settings.insert("subagent_segments".to_owned(), segments.clone());
-	}
 	let config = home.join(".statusline");
 	fs::create_dir_all(&config)?;
 	fs::write(
 		config.join("settings.json"),
-		serde_json::to_string(&settings)?,
+		serde_json::to_string(&settings(scenario))?,
 	)?;
 
 	let cwd = home.join(&scenario.cwd);
@@ -70,6 +62,35 @@ pub fn frame(binary: &Path, scenario: &Scenario, home: &Path, now: Clock) -> Res
 		None => Vec::new(),
 	};
 	Ok(Frame { line, panel, input })
+}
+
+/// What `statusline configure` paints for `scenario`, drawn in process since the editor needs no session or repo.
+pub fn configure(scenario: &Scenario, spec: &ConfigureSpec, work: &Path) -> Result<Rows> {
+	let settings: Settings = serde_json::from_value(Value::Object(settings(scenario)))
+		.wrap_err("parsing the scenario settings")?;
+	// A wired subagent line, as on a real install, so the tab row carries no "not installed" notice.
+	let claude = work.join("claude-settings.json");
+	let subagent =
+		json!({ "subagentStatusLine": { "type": "command", "command": "statusline subagent" } });
+	fs::write(&claude, subagent.to_string()).wrap_err("writing the Claude settings")?;
+	let keys: Vec<Key> = spec.keys.iter().map(|&name| name.into()).collect();
+	let text =
+		statusline_configure::snapshot(&settings, Some(&claude), &keys, spec.width, spec.rows)?;
+	Ok(ansi_to_spans(&text))
+}
+
+fn settings(scenario: &Scenario) -> Map<String, Value> {
+	let mut settings = Map::new();
+	settings.insert("nerd_font".to_owned(), true.into());
+	settings.insert("skip_update_check".to_owned(), true.into());
+	settings.insert("five_hour_reset_threshold".to_owned(), 70.into());
+	settings.insert("seven_day_reset_threshold".to_owned(), 100.into());
+	settings.extend(scenario.settings.clone());
+	settings.insert("segments".to_owned(), scenario.segments.clone());
+	if let Some(segments) = &scenario.subagent_segments {
+		settings.insert("subagent_segments".to_owned(), segments.clone());
+	}
+	settings
 }
 
 fn spans(binary: &Path, home: &Path, args: &[&str], stdin: &Value) -> Result<Rows> {
@@ -134,4 +155,57 @@ fn collect(handle: JoinHandle<io::Result<Vec<u8>>>) -> Result<Vec<u8>> {
 		.join()
 		.map_err(|_| eyre!("reading statusline output panicked"))?
 		.wrap_err("reading statusline output")
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	/// Renders a configure scenario as plain text, printed so `--nocapture` shows the frame the screenshot draws.
+	fn configure_text(name: &str) -> Vec<String> {
+		let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+			.join(format!("../../screenshots/scenarios/{name}.json"));
+		let scenario = Scenario::load(&path).unwrap();
+		let work = std::env::temp_dir().join(format!(
+			"statusline-screenshots-test-{name}-{}",
+			std::process::id()
+		));
+		fs::create_dir_all(&work).unwrap();
+		let rows = configure(&scenario, scenario.configure.as_ref().unwrap(), &work).unwrap();
+		fs::remove_dir_all(&work).unwrap();
+		let lines: Vec<String> = rows
+			.iter()
+			.map(|row| row.iter().map(|span| span.text.as_str()).collect())
+			.collect();
+		println!("{name}:\n{}", lines.join("\n"));
+		lines
+	}
+
+	fn cursor_row(lines: &[String]) -> &str {
+		lines
+			.iter()
+			.find(|line| line.contains('\u{276f}'))
+			.expect("a row carries the cursor marker")
+	}
+
+	#[test]
+	fn configure_scenarios_land_on_their_segments() {
+		let lines = configure_text("configure");
+		assert!(cursor_row(&lines).contains("git_branch"), "{lines:#?}");
+		assert!(
+			!lines.iter().any(|line| line.contains(" more")),
+			"{lines:#?}"
+		);
+
+		let lines = configure_text("configure-options");
+		let cursor = cursor_row(&lines);
+		assert!(
+			cursor.contains("cache_warm") && cursor.contains('\u{25be}'),
+			"{lines:#?}"
+		);
+		assert!(
+			lines.iter().any(|line| line.contains('\u{2514}')),
+			"{lines:#?}"
+		);
+	}
 }

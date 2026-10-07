@@ -1,0 +1,26 @@
+{
+  "segments": [
+    "context_percentage",
+    "total_input_tokens",
+    "output_tokens",
+    "divider",
+    "cwd",
+    "divider",
+    { "type": "git_branch", "dirty": true },
+    "divider",
+    "model",
+    "divider",
+    "five_hour",
+    "seven_day",
+    "divider",
+    "cost",
+    "divider",
+    "cache_warm"
+  ],
+  "settings": { "five_hour_reset_threshold": 70, "seven_day_reset_threshold": 90 },
+  "configure": {
+    "keys": ["down", "down", "down", "down", "down", "down", "down", "down", "down", "down", "down", "down", "down", "down", "down", "enter_options"],
+    "width": 112,
+    "rows": 40
+  }
+}
