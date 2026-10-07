@@ -94,7 +94,8 @@ statusline install --plugin
 
 This creates `~/.statusline/settings.json` if it is missing, adds the `ryanclark` marketplace and installs the plugin at
 user scope, pointed at the binary you ran. Pass `--dry-run` to see what would change, and `--claude <PATH>` when
-`claude` is not on your `PATH`.
+`claude` is not on your `PATH`. If you installed the plugin with statusline 2.0.0, upgrade and run it again so the
+marketplace checks out the plugin's new path.
 
 While the plugin draws, a `statusLine` that runs `statusline` prints nothing, so the line never shows twice. Claude
 Code still keeps an empty row for it, so an existing `statusLine` in `~/.claude/settings.json` is saved to

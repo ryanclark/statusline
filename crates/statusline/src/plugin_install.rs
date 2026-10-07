@@ -20,6 +20,8 @@ use std::process::{Command, Output, Stdio};
 const PLUGIN_ID: &str = "statusline@ryanclark";
 const MARKETPLACE: &str = "ryanclark";
 const MARKETPLACE_SOURCE: &str = "ryanclark/statusline";
+/// A marketplace added with older paths no longer checks out the plugin, so it is re-added.
+const SPARSE_PATHS: [&str; 2] = [".claude-plugin", "crates/statusline/plugin"];
 /// The first release that loads plugin hooks modules. An older CLI installs the plugin but never runs it.
 const MIN_CLAUDE: semver::Version = semver::Version::new(2, 1, 287);
 
@@ -171,10 +173,64 @@ fn ensure_settings(ctx: &Context, opts: &PluginOptions, out: &mut dyn Write) -> 
 }
 
 fn ensure_marketplace(ctx: &Context, claude: &Claude<'_>, out: &mut dyn Write) -> Result<()> {
-	if has_marketplace(&claude.list(&["plugin", "marketplace", "list", "--json"])?) {
-		return skip(out, format_args!("Marketplace {MARKETPLACE} already added"));
+	let old_paths =
+		if has_marketplace(&claude.list(&["plugin", "marketplace", "list", "--json"])?) {
+			let Some(old_paths) = read_settings(&ctx.claude_settings())
+				.ok()
+				.and_then(|s| stale_sparse_paths(&s))
+			else {
+				return skip(out, format_args!("Marketplace {MARKETPLACE} already added"));
+			};
+			// A declared marketplace cannot be re-added with other paths. Removing it keeps the plugin and its options.
+			let args = [
+				"plugin",
+				"marketplace",
+				"remove",
+				MARKETPLACE,
+				"--scope",
+				"user",
+				"--json",
+			];
+			if ctx.dry_run {
+				would_run(out, &ctx.claude, &args)?;
+			} else {
+				claude.mutate(&args, None)?;
+			}
+			Some(old_paths)
+		} else {
+			None
+		};
+	let args = marketplace_add_args(SPARSE_PATHS);
+	if ctx.dry_run {
+		return would_run(out, &ctx.claude, &args);
 	}
-	let args = [
+	if let Err(err) = claude.mutate(&args, None) {
+		let Some(old_paths) = old_paths else {
+			return Err(err);
+		};
+		// The add clones from GitHub, so it can fail after the remove. Restoring the old entry keeps the installed
+		// plugin backed by a marketplace until a rerun moves it.
+		let _ = claude.mutate(
+			&marketplace_add_args(old_paths.iter().map(String::as_str)),
+			None,
+		);
+		return Err(err.wrap_err(format!(
+			"re-adding marketplace {MARKETPLACE} with the moved plugin path failed. Run `statusline install --plugin` \
+			 again to retry"
+		)));
+	}
+	if old_paths.is_some() {
+		ok(
+			out,
+			format_args!("Re-added marketplace {MARKETPLACE} with the moved plugin path"),
+		)
+	} else {
+		ok(out, format_args!("Added marketplace {MARKETPLACE}"))
+	}
+}
+
+fn marketplace_add_args<'a>(sparse: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
+	let mut args = vec![
 		"plugin",
 		"marketplace",
 		"add",
@@ -182,15 +238,10 @@ fn ensure_marketplace(ctx: &Context, claude: &Claude<'_>, out: &mut dyn Write) -
 		"--scope",
 		"user",
 		"--sparse",
-		".claude-plugin",
-		"plugin",
-		"--json",
 	];
-	if ctx.dry_run {
-		return would_run(out, &ctx.claude, &args);
-	}
-	claude.mutate(&args, None)?;
-	ok(out, format_args!("Added marketplace {MARKETPLACE}"))
+	args.extend(sparse);
+	args.push("--json");
+	args
 }
 
 fn ensure_plugin(
@@ -539,6 +590,22 @@ fn has_marketplace(list: &[Value]) -> bool {
 		.any(|m| m.get("name").and_then(Value::as_str) == Some(MARKETPLACE))
 }
 
+/// Returns the recorded sparse paths when they miss one we need. A full checkout, with none, always has the plugin.
+fn stale_sparse_paths(settings: &Value) -> Option<Vec<String>> {
+	let paths: Vec<String> = settings
+		.pointer(&format!(
+			"/extraKnownMarketplaces/{MARKETPLACE}/source/sparsePaths"
+		))?
+		.as_array()?
+		.iter()
+		.filter_map(|v| v.as_str().map(str::to_owned))
+		.collect();
+	SPARSE_PATHS
+		.iter()
+		.any(|p| !paths.iter().any(|v| v == p))
+		.then_some(paths)
+}
+
 /// Only the user-scope install is ours, since that is the scope `--plugin` installs into and `--native` removes from.
 fn find_plugin(list: &[Value]) -> Option<&Value> {
 	list.iter().find(|p| {
@@ -776,6 +843,22 @@ mod tests {
   }
 }"#;
 
+	/// What `claude plugin marketplace add … --sparse .claude-plugin plugin` wrote before the plugin moved.
+	const SETTINGS_OLD_SPARSE: &str = r#"{
+  "extraKnownMarketplaces": {
+    "ryanclark": {
+      "source": {
+        "source": "github",
+        "repo": "ryanclark/statusline",
+        "sparsePaths": [
+          ".claude-plugin",
+          "plugin"
+        ]
+      }
+    }
+  }
+}"#;
+
 	#[test]
 	fn recorded_lists_are_matched_by_name_id_and_scope() {
 		let marketplaces: Vec<Value> = serde_json::from_str(MARKETPLACE_LIST).unwrap();
@@ -817,6 +900,23 @@ mod tests {
 			Some("/opt/homebrew/bin/statusline")
 		);
 		assert_eq!(configured_binary(&json!({})), None);
+	}
+
+	#[test]
+	fn sparse_paths_are_stale_only_when_the_plugin_path_is_missing() {
+		let old: Value = serde_json::from_str(SETTINGS_OLD_SPARSE).unwrap();
+		assert_eq!(
+			stale_sparse_paths(&old),
+			Some(vec![".claude-plugin".to_owned(), "plugin".to_owned()])
+		);
+		let current = SETTINGS_OLD_SPARSE.replace(r#""plugin""#, r#""crates/statusline/plugin""#);
+		assert_eq!(
+			stale_sparse_paths(&serde_json::from_str(&current).unwrap()),
+			None
+		);
+		let full: Value = serde_json::from_str(SETTINGS_AFTER_INSTALL).unwrap();
+		assert_eq!(stale_sparse_paths(&full), None);
+		assert_eq!(stale_sparse_paths(&json!({})), None);
 	}
 
 	fn temp_dir(name: &str) -> PathBuf {
@@ -885,6 +985,9 @@ printf '%s\n' "$*" >> "$d/calls.log"
 case "$*" in
 --version) cat "$d/version" ;;
 "plugin marketplace list --json") if [ -f "$d/has-marketplace" ]; then cat "$d/marketplaces.json"; else echo '[]'; fi ;;
+"plugin marketplace add "*" crates/statusline/plugin "*)
+  if [ -f "$d/add-fails" ]; then cat "$d/add-fails"; exit 1; fi
+  touch "$d/has-marketplace"; cat "$d/add.json" ;;
 "plugin marketplace add "*) touch "$d/has-marketplace"; cat "$d/add.json" ;;
 "plugin marketplace remove "*) rm "$d/has-marketplace"; cat "$d/remove.json" ;;
 "plugin list --json") if [ -f "$d/installed" ]; then cat "$d/plugins.json"; else echo '[]'; fi ;;
@@ -994,7 +1097,7 @@ esac
 			vec![
 				"--version".to_owned(),
 				"plugin marketplace list --json".to_owned(),
-				"plugin marketplace add ryanclark/statusline --scope user --sparse .claude-plugin plugin --json"
+				"plugin marketplace add ryanclark/statusline --scope user --sparse .claude-plugin crates/statusline/plugin --json"
 					.to_owned(),
 				"plugin list --json".to_owned(),
 				format!("plugin install statusline@ryanclark -s user --config {BINARY_CONFIG} --json"),
@@ -1035,6 +1138,105 @@ esac
 		assert!(!out.contains("Saved the native"), "{out}");
 		assert_eq!(fs::read_to_string(fake.settings_path()).unwrap(), saved);
 		assert_eq!(fake.backups(), 0);
+	}
+
+	#[test]
+	fn plugin_install_re_adds_a_marketplace_with_the_old_sparse_paths() {
+		let fake = Fake::new("sparse");
+		fs::write(fake.root.join("installed"), "").unwrap();
+		fs::write(fake.root.join("has-marketplace"), "").unwrap();
+		let mut settings: Value = serde_json::from_str(SETTINGS_AFTER_INSTALL).unwrap();
+		settings["extraKnownMarketplaces"] = serde_json::from_str::<Value>(SETTINGS_OLD_SPARSE)
+			.unwrap()["extraKnownMarketplaces"]
+			.clone();
+		fs::write(fake.settings_path(), settings.to_string()).unwrap();
+
+		let (result, out) = fake.plugin(true, false);
+		result.unwrap();
+		let calls = fake.calls();
+		assert_eq!(
+			calls,
+			[
+				"--version",
+				"plugin marketplace list --json",
+				"plugin list --json"
+			]
+		);
+		assert!(
+			out.contains("would run")
+				&& out.contains("plugin marketplace remove ryanclark --scope user --json"),
+			"{out}"
+		);
+		assert!(
+			out.contains("--sparse .claude-plugin crates/statusline/plugin --json"),
+			"{out}"
+		);
+
+		let (result, out) = fake.plugin(false, false);
+		result.unwrap();
+		assert_eq!(
+			fake.calls(),
+			[
+				"--version",
+				"plugin marketplace list --json",
+				"plugin marketplace remove ryanclark --scope user --json",
+				"plugin marketplace add ryanclark/statusline --scope user --sparse .claude-plugin crates/statusline/plugin --json",
+				"plugin list --json",
+			]
+		);
+		assert!(out.contains("Re-added marketplace ryanclark"), "{out}");
+
+		// The CLI rewrites the entry with the new paths, so a rerun leaves the marketplace alone.
+		settings["extraKnownMarketplaces"]["ryanclark"]["source"]["sparsePaths"] =
+			json!([".claude-plugin", "crates/statusline/plugin"]);
+		fs::write(fake.settings_path(), settings.to_string()).unwrap();
+		let (result, out) = fake.plugin(false, false);
+		result.unwrap();
+		assert_eq!(
+			fake.calls(),
+			[
+				"--version",
+				"plugin marketplace list --json",
+				"plugin list --json"
+			]
+		);
+		assert!(out.contains("Marketplace ryanclark already added"), "{out}");
+	}
+
+	#[test]
+	fn plugin_install_restores_the_old_marketplace_when_the_re_add_fails() {
+		let fake = Fake::new("sparse-fails");
+		fs::write(fake.root.join("installed"), "").unwrap();
+		fs::write(fake.root.join("has-marketplace"), "").unwrap();
+		fs::write(
+			fake.root.join("add-fails"),
+			r#"{"command":"marketplace-add","outcome":"error","message":"Failed to clone ryanclark/statusline"}"#,
+		)
+		.unwrap();
+		let mut settings: Value = serde_json::from_str(SETTINGS_AFTER_INSTALL).unwrap();
+		settings["extraKnownMarketplaces"] = serde_json::from_str::<Value>(SETTINGS_OLD_SPARSE)
+			.unwrap()["extraKnownMarketplaces"]
+			.clone();
+		fs::write(fake.settings_path(), settings.to_string()).unwrap();
+
+		let (result, _) = fake.plugin(false, false);
+		let err = format!("{:?}", result.unwrap_err());
+		assert!(
+			err.contains("Failed to clone ryanclark/statusline"),
+			"{err}"
+		);
+		assert!(err.contains("statusline install --plugin"), "{err}");
+		assert_eq!(
+			fake.calls(),
+			[
+				"--version",
+				"plugin marketplace list --json",
+				"plugin marketplace remove ryanclark --scope user --json",
+				"plugin marketplace add ryanclark/statusline --scope user --sparse .claude-plugin crates/statusline/plugin --json",
+				"plugin marketplace add ryanclark/statusline --scope user --sparse .claude-plugin plugin --json",
+			]
+		);
+		assert!(fake.root.join("has-marketplace").exists());
 	}
 
 	#[test]

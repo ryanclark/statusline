@@ -13,4 +13,4 @@ docs/superpowers/
 justfile.local
 
 # Claude Code lays its API declarations here each time it loads the plugin from this folder
-plugin/.claude-plugin/types/
+crates/statusline/plugin/.claude-plugin/types/

@@ -23,6 +23,21 @@ jobs:
       - uses: actions/checkout@v4
       # Pinned so a Claude Code release that changes the validator or the test kit fails a bump PR, not every PR.
       - run: npm install -g @anthropic-ai/claude-code@2.1.290
-      - run: claude plugin validate --strict plugin
+      - run: claude plugin validate --strict crates/statusline/plugin
       - run: claude plugin validate --strict .
-      - run: claude plugin test plugin
+      - run: claude plugin test crates/statusline/plugin
+
+  # The plugin-version job in release-plz.yml syncs this on release PRs. Until it lands the PR must not merge, or the
+  # release ships a plugin.json that Claude Code sees as unchanged.
+  plugin-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          crate=$(python3 -c 'import sys, tomllib; print(tomllib.load(sys.stdin.buffer)["package"]["version"])' \
+            < crates/statusline/Cargo.toml)
+          plugin=$(jq -r .version crates/statusline/plugin/.claude-plugin/plugin.json)
+          if [ "$crate" != "$plugin" ]; then
+            echo "::error::plugin.json version $plugin does not match crates/statusline $crate"
+            exit 1
+          fi

@@ -1,6 +1,6 @@
 {
   "name": "statusline",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "description": "Draws the statusline binary's segments next to the prompt and refreshes them on its own clock",
   "author": {
     "name": "Ryan Clark"
