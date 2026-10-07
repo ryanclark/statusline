@@ -1,9 +1,10 @@
+use crate::OutputFormat;
 use crate::settings::Settings;
 use statusline_core::constants::DIVIDER;
 use statusline_core::subagent::{SubagentInput, default_subagent_segments, render_rows};
 use std::io::{IsTerminal, Write};
 
-pub(crate) fn run(spans: bool) {
+pub(crate) fn run(format: OutputFormat) {
 	let stdin = std::io::stdin();
 	if stdin.is_terminal() {
 		eprintln!("statusline subagent reads Claude Code's subagentStatusLine JSON on stdin");
@@ -32,19 +33,22 @@ pub(crate) fn run(spans: bool) {
 
 	let rows = render_rows(&input, &segments, &divider, nerd_font, grid);
 	let mut out = std::io::stdout().lock();
-	if spans {
-		let spans: Vec<_> = rows
-			.iter()
-			.flat_map(|row| statusline_core::spans::ansi_to_spans(&row.content))
-			.collect();
-		if let Ok(json) = serde_json::to_string(&spans) {
-			let _ = write!(out, "{json}");
+	match format {
+		OutputFormat::Spans => {
+			let spans: Vec<_> = rows
+				.iter()
+				.flat_map(|row| statusline_core::spans::ansi_to_spans(&row.content))
+				.collect();
+			if let Ok(json) = serde_json::to_string(&spans) {
+				let _ = write!(out, "{json}");
+			}
 		}
-		return;
-	}
-	for row in rows {
-		if let Ok(line) = serde_json::to_string(&row) {
-			let _ = writeln!(out, "{line}");
+		OutputFormat::Ansi => {
+			for row in rows {
+				if let Ok(line) = serde_json::to_string(&row) {
+					let _ = writeln!(out, "{line}");
+				}
+			}
 		}
 	}
 }

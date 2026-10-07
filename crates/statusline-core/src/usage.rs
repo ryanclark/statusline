@@ -44,7 +44,7 @@ impl UsageResponse {
 	pub fn credits(&self) -> Option<PrepaidCredits> {
 		let balance = self.spend.as_ref()?.balance.as_ref()?;
 		Some(PrepaidCredits {
-			amount: balance.as_cents().into(),
+			amount: balance.as_cents()?.into(),
 		})
 	}
 }
@@ -148,13 +148,26 @@ pub struct Spend {
 	pub balance: Option<Money>,
 }
 
-/// Minor units plus the exponent that scales them, e.g. `{"amount_minor": 3690, "exponent": 2}` is $36.90.
+/// Minor units plus the exponent that scales them, e.g. `{"amount_minor": 3690, "currency": "USD", "exponent": 2}`
+/// is $36.90.
 #[derive(Debug, Deserialize)]
 pub struct Money {
+	/// A missing amount is unknown rather than zero, so it shows no balance instead of a false $0.
 	#[serde(default)]
-	pub amount_minor: f64,
+	pub amount_minor: Option<i64>,
+	#[serde(default)]
+	pub currency: Option<Currency>,
 	#[serde(default = "cents_exponent")]
 	pub exponent: i32,
+}
+
+/// Only US dollars can be shown, so every other ISO code reads as one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum Currency {
+	#[serde(rename = "USD")]
+	Usd,
+	#[serde(other)]
+	Other,
 }
 
 fn cents_exponent() -> i32 {
@@ -162,10 +175,15 @@ fn cents_exponent() -> i32 {
 }
 
 impl Money {
-	/// The amount in cents, which is what [`Cents`] stores.
+	/// The amount in US cents, which is what [`Cents`] stores and prints as dollars. Any other currency is `None`
+	/// rather than a wrong dollar figure.
 	#[must_use]
-	pub fn as_cents(&self) -> f64 {
-		self.amount_minor * 10f64.powi(2 - self.exponent)
+	pub fn as_cents(&self) -> Option<f64> {
+		if self.currency != Some(Currency::Usd) {
+			return None;
+		}
+		let scale = 2i32.checked_sub(self.exponent)?;
+		Some(self.amount_minor? as f64 * 10f64.powi(scale)).filter(|cents| cents.is_finite())
 	}
 }
 
@@ -203,13 +221,35 @@ mod tests {
 		String::from_utf8(strip_ansi_escapes::strip(s)).unwrap()
 	}
 
+	fn money(json: &str) -> Option<String> {
+		let resp: UsageResponse =
+			serde_json::from_str(&format!(r#"{{"spend": {{"balance": {json}}}}}"#)).unwrap();
+		resp.credits().map(|c| c.balance().to_string())
+	}
+
 	#[test]
 	fn money_scales_minor_units_to_cents() {
-		let m: Money = serde_json::from_str(r#"{"amount_minor": 3690, "exponent": 2}"#).unwrap();
-		assert!((m.as_cents() - 3690.0).abs() < 1e-6);
+		assert_eq!(
+			money(r#"{"amount_minor": 3690, "currency": "USD", "exponent": 2}"#).as_deref(),
+			Some("$37")
+		);
 		// A whole-dollar exponent must scale up to cents rather than read as cents directly.
-		let d: Money = serde_json::from_str(r#"{"amount_minor": 50, "exponent": 0}"#).unwrap();
-		assert!((d.as_cents() - 5000.0).abs() < 1e-6);
+		assert_eq!(
+			money(r#"{"amount_minor": 50, "currency": "USD", "exponent": 0}"#).as_deref(),
+			Some("$50")
+		);
+	}
+
+	#[test]
+	fn money_that_cannot_be_read_as_dollars_shows_no_balance() {
+		for json in [
+			r#"{"currency": "USD", "exponent": 2}"#,
+			r#"{"amount_minor": 3690, "currency": "EUR", "exponent": 2}"#,
+			r#"{"amount_minor": 3690, "exponent": 2}"#,
+			r#"{"amount_minor": 3690, "currency": "USD", "exponent": -2147483648}"#,
+		] {
+			assert_eq!(money(json), None, "{json}");
+		}
 	}
 
 	#[test]

@@ -22,6 +22,11 @@ use crate::settings::Settings;
 use clap::{Parser, Subcommand};
 use format::Percentage;
 use owo_colors::OwoColorize;
+use std::time::Duration;
+
+/// The longest a heartbeat may silence the native line, since a plugin that stops without a final heartbeat leaves
+/// the session with no line until it expires.
+const MAX_HEARTBEAT: Duration = Duration::from_secs(30);
 
 #[derive(Parser)]
 #[command(version)]
@@ -40,8 +45,12 @@ struct Cli {
 	format: OutputFormat,
 
 	/// With `--format spans`, how long the native status line stays silent for this session. Capped at 30 seconds.
-	#[arg(long, value_name = "MS", default_value_t = 10_000)]
-	heartbeat_ms: u64,
+	#[arg(long = "heartbeat-ms", value_name = "MS", default_value = "10000", value_parser = parse_heartbeat)]
+	heartbeat: Duration,
+}
+
+fn parse_heartbeat(ms: &str) -> Result<Duration, std::num::ParseIntError> {
+	Ok(Duration::from_millis(ms.parse()?).min(MAX_HEARTBEAT))
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -69,7 +78,7 @@ enum Commands {
 		subagent: bool,
 
 		/// Install the Claude Code plugin pointed at this binary and remove the native statusLine.
-		#[arg(long, conflicts_with = "native")]
+		#[arg(long)]
 		plugin: bool,
 
 		/// Uninstall the plugin and put back the native statusLine it replaced.
@@ -77,11 +86,11 @@ enum Commands {
 		native: bool,
 
 		/// With --plugin, keep the native statusLine as a fallback for sessions where the plugin does not load.
-		#[arg(long, requires = "mode", conflicts_with = "native")]
+		#[arg(long, requires = "plugin", conflicts_with = "native")]
 		keep_native: bool,
 
 		/// With --native, also remove the ryanclark marketplace.
-		#[arg(long, requires = "mode", conflicts_with = "plugin")]
+		#[arg(long, requires = "native", conflicts_with = "plugin")]
 		remove_marketplace: bool,
 
 		/// The Claude Code executable to run, when `claude` is not on PATH.
@@ -167,7 +176,7 @@ fn main() {
 				}
 			}
 		}
-		Some(Commands::Subagent) => subagent::run(matches!(cli.format, OutputFormat::Spans)),
+		Some(Commands::Subagent) => subagent::run(cli.format),
 		Some(Commands::Configure) => {
 			let path = match Settings::settings_path() {
 				Ok(p) => p,
@@ -227,7 +236,7 @@ fn main() {
 			let spans = matches!(cli.format, OutputFormat::Spans);
 
 			if spans {
-				session::heartbeat(&raw, std::time::Duration::from_millis(cli.heartbeat_ms));
+				session::heartbeat(&raw, cli.heartbeat);
 			} else if !is_tty && session::drawn_by_plugin(&raw) {
 				// The plugin is drawing, so print nothing but still capture, since this input is complete where the
 				// plugin's is not.
@@ -342,7 +351,7 @@ fn main() {
 				usage_cache::read,
 				needs_usage,
 				needs_credits,
-				chrono::Utc::now().timestamp_millis(),
+				chrono::Utc::now(),
 			);
 
 			match resolved {
@@ -457,6 +466,8 @@ mod tests {
 			"--keep-native",
 			"--native"
 		]));
+		assert!(!parses(&["statusline", "install", "--keep-native"]));
+		assert!(!parses(&["statusline", "install", "--remove-marketplace"]));
 		assert!(!parses(&["statusline", "install", "--dry-run"]));
 		let Some(Commands::Install { keep_native, .. }) =
 			Cli::parse_from(["statusline", "install", "--plugin"]).command
@@ -468,5 +479,16 @@ mod tests {
 			"--plugin removes the native statusLine unless told to keep it"
 		);
 		assert!(!parses(&["statusline", "install", "--claude", "/x/claude"]));
+	}
+
+	#[test]
+	fn heartbeat_is_capped_at_thirty_seconds() {
+		let heartbeat = |args: &[&str]| Cli::try_parse_from(args).map(|cli| cli.heartbeat);
+		assert_eq!(heartbeat(&["statusline"]).unwrap(), Duration::from_secs(10));
+		assert_eq!(
+			heartbeat(&["statusline", "--heartbeat-ms", "1802000"]).unwrap(),
+			MAX_HEARTBEAT
+		);
+		assert!(heartbeat(&["statusline", "--heartbeat-ms", "soon"]).is_err());
 	}
 }

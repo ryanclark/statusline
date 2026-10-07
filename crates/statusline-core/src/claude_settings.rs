@@ -82,7 +82,7 @@ pub fn ensure_entries(
 		.collect())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Removal {
 	Removed,
 	Absent,
@@ -117,7 +117,7 @@ pub fn remove_entry(
 pub fn restore_entry(
 	settings: &mut serde_json::Value,
 	entry: Entry,
-	value: serde_json::Value,
+	value: &serde_json::Value,
 	confirm_overwrite: &mut dyn FnMut(Entry) -> bool,
 ) -> Result<Outcome, ClaudeSettingsError> {
 	let Some(object) = settings.as_object_mut() else {
@@ -125,10 +125,10 @@ pub fn restore_entry(
 	};
 
 	Ok(match object.get(entry.key()) {
-		Some(existing) if *existing == value => Outcome::Kept,
+		Some(existing) if existing == value => Outcome::Kept,
 		Some(_) if !confirm_overwrite(entry) => Outcome::Skipped,
 		_ => {
-			object.insert(entry.key().to_owned(), value);
+			object.insert(entry.key().to_owned(), value.clone());
 			Outcome::Written
 		}
 	})
@@ -595,18 +595,18 @@ mod tests {
 		let saved = json!({"type": "command", "command": "statusline", "padding": 1});
 		let mut settings = json!({"model": "opus"});
 		assert_eq!(
-			restore_entry(&mut settings, Entry::StatusLine, saved.clone(), &mut never).unwrap(),
+			restore_entry(&mut settings, Entry::StatusLine, &saved, &mut never).unwrap(),
 			Outcome::Written
 		);
 		assert_eq!(settings["statusLine"], saved);
 		assert_eq!(
-			restore_entry(&mut settings, Entry::StatusLine, saved.clone(), &mut never).unwrap(),
+			restore_entry(&mut settings, Entry::StatusLine, &saved, &mut never).unwrap(),
 			Outcome::Kept
 		);
 
 		settings["statusLine"] = json!({"type": "command", "command": "other"});
 		assert_eq!(
-			restore_entry(&mut settings, Entry::StatusLine, saved, &mut |_| false).unwrap(),
+			restore_entry(&mut settings, Entry::StatusLine, &saved, &mut |_| false).unwrap(),
 			Outcome::Skipped
 		);
 		assert_eq!(settings["statusLine"]["command"], "other");

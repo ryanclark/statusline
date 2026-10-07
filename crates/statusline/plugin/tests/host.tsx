@@ -99,6 +99,8 @@ type Host = {
   ) => HttpResponse | { reject: string } | Promise<HttpResponse | { reject: string }>
   // Paths whose `fs.write` fails, as on a full disk or a read-only home.
   unwritable?: Set<string>
+  // The message `$.session.model()` rejects with.
+  modelError?: string
 }
 
 export const transcript = [{ role: 'user' as const, text: 'Summary of the conversation so far', toolUses: [] }]
@@ -154,7 +156,7 @@ function host(on: On, cfg: Host, seen: Seen = {}): MockClock {
   on('session.id', () => ({ value: 'abc' }))
   on('session.cwd', () => ({ value: '/work' }))
   on('session.root', () => ({ value: '/repo-root' }))
-  on('session.model', () => ({ value: opus }))
+  on('session.model', () => (cfg.modelError ? { deny: cfg.modelError } : { value: opus }))
   on('session.usage', (_$, e) => {
     if (!e?.breakdown) {
       return { value: liveUsage }
@@ -203,6 +205,8 @@ function host(on: On, cfg: Host, seen: Seen = {}): MockClock {
   on('classic.StopFailure', () => ({}))
   on('classic.Stop', () => ({}))
   on('classic.SubagentStop', () => ({}))
+  on('classic.UserPromptSubmit', () => ({}))
+  on('classic.SessionStart', () => ({}))
   on('fs.stat', (_$, e) => {
     const file = cfg.files?.get(e.path)
     if (file !== undefined) {

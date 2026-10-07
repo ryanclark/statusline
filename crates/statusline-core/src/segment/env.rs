@@ -1,4 +1,5 @@
 use owo_colors::{DynColors, OwoColorize};
+use std::borrow::Cow;
 
 use crate::constants::{CYAN, GRAY, ORANGE, PURPLE, RED, YELLOW};
 
@@ -50,10 +51,10 @@ pub(super) fn project_dir(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> O
 }
 
 pub(super) fn model(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
-	let name = if ctx.input.model.display_name.is_empty() {
-		display_name_from_id(&ctx.input.model.id)?
+	let name: Cow<'_, str> = if ctx.input.model.display_name.is_empty() {
+		display_name_from_id(&ctx.input.model.id)?.into()
 	} else {
-		ctx.input.model.display_name.clone()
+		ctx.input.model.display_name.as_str().into()
 	};
 
 	let raw = name.replace("1M context", "1M");
@@ -84,7 +85,7 @@ fn display_name_from_id(id: &str) -> Option<String> {
 
 	let mut family = None;
 	let mut version = Vec::new();
-	for part in rest.split('-') {
+	for part in rest.split('-').filter(|part| !part.is_empty()) {
 		if part.chars().all(|c| c.is_ascii_digit()) {
 			// Dates are eight digits, version parts one or two.
 			if part.len() <= 2 {
@@ -230,6 +231,7 @@ mod tests {
 			("claude-opus-5-5[1m]", Some("Opus 5.5 (1M context)")),
 			("us.anthropic.claude-sonnet-5-5-v1:0", Some("Sonnet 5.5")),
 			("claude-opus-5-5@20260101", Some("Opus 5.5")),
+			("claude-opus-5-5-", Some("Opus 5.5")),
 			("gpt-5", None),
 			("", None),
 		] {

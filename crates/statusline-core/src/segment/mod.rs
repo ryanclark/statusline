@@ -252,7 +252,7 @@ pub enum Within {
 }
 
 impl Within {
-	pub const DEFAULT: Duration = Duration::from_secs(30 * 60);
+	pub const DEFAULT_WINDOW: Duration = Duration::from_secs(30 * 60);
 
 	/// The window, `None` for the whole session.
 	#[must_use]
@@ -260,7 +260,7 @@ impl Within {
 		match self {
 			Self::Session => None,
 			Self::Window(window) => Some(*window),
-			Self::Unparsed(_) => Some(Self::DEFAULT),
+			Self::Unparsed(_) => Some(Self::DEFAULT_WINDOW),
 		}
 	}
 
@@ -480,11 +480,11 @@ impl SegmentConfig {
 	#[must_use]
 	pub fn within(&self) -> Option<Duration> {
 		match self {
-			Self::Simple(_) => Some(Within::DEFAULT),
+			Self::Simple(_) => Some(Within::DEFAULT_WINDOW),
 			Self::Advanced(opts) => opts
 				.within
 				.as_ref()
-				.map_or(Some(Within::DEFAULT), Within::duration),
+				.map_or(Some(Within::DEFAULT_WINDOW), Within::duration),
 		}
 	}
 
@@ -569,7 +569,7 @@ impl SegmentConfig {
 				&& opts
 					.within
 					.as_ref()
-					.is_none_or(|w| *w == Within::Window(Within::DEFAULT))
+					.is_none_or(|w| *w == Within::Window(Within::DEFAULT_WINDOW))
 				&& opts.details.unwrap_or(true)
 				&& opts.enabled
 				&& opts.extra.is_empty();
@@ -619,6 +619,15 @@ pub struct RenderContext<'a> {
 pub const STYLES: &[&str] = &["bold", "dim", "italic", "underline"];
 
 pub const DIRTY_INDICATOR: &str = "\u{2731}";
+
+/// A code this build does not know reads as words.
+fn unknown_code(code: &str) -> std::borrow::Cow<'_, str> {
+	if code.contains('_') {
+		code.replace('_', " ").into()
+	} else {
+		code.into()
+	}
+}
 
 fn apply_style(text: &str, style: Option<&str>) -> String {
 	match style {
@@ -1047,7 +1056,7 @@ mod tests {
 		}
 		assert_eq!(
 			SegmentConfig::Simple(SegmentType::CacheLastMiss).within(),
-			Some(Within::DEFAULT)
+			Some(Within::DEFAULT_WINDOW)
 		);
 	}
 

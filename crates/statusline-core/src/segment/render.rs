@@ -1,6 +1,6 @@
 use super::{
-	RenderContext, SegmentConfig, SegmentType, account, activity, context, cost, credits, env, git,
-	rate_limit, task,
+	RenderContext, SegmentConfig, SegmentType, account, activity, apply_style, context, cost,
+	credits, env, git, rate_limit, task,
 };
 use crate::text::plain;
 use owo_colors::OwoColorize;
@@ -83,9 +83,10 @@ pub fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Optio
 		segment.segment_type(),
 		SegmentType::FableUsage | SegmentType::ExtraUsage | SegmentType::Credits
 	);
-	let result = if ctx.usage_stale && from_usage {
-		// The segment's own resets would end an outer dim early, so its colours go and the plain text is dimmed.
-		result.map(|s| plain(&s).dimmed().to_string())
+	let result = if ctx.usage_stale && from_usage && segment.colors() {
+		// The segment's own resets would end an outer dim early, so its colours go and the plain text is dimmed, with
+		// the configured style laid back over it.
+		result.map(|s| apply_style(&plain(&s).dimmed().to_string(), segment.style()))
 	} else {
 		result
 	};
@@ -98,9 +99,10 @@ mod tests {
 	use super::*;
 	use crate::constants::DIVIDER;
 	use crate::context_window::ContextWindow;
-	use crate::input::{CostInfo, InputData, RateLimits};
+	use crate::input::{Code, CostInfo, InputData, MissCauseCode, RateLimits};
 	use crate::segment::SegmentLine;
-	use chrono::Utc;
+	use crate::subagent::TaskStatus;
+	use chrono::{TimeDelta, Utc};
 
 	fn default_input() -> InputData {
 		InputData::default()
@@ -411,9 +413,9 @@ mod tests {
 			requests: 14,
 			misses: 2,
 			hit_ratio: Some(0.91),
-			last_miss_at: Some(Utc::now().timestamp() - 180),
+			last_miss_at: Some(Utc::now() - TimeDelta::seconds(180)),
 			last_miss_cause: Some(crate::input::MissCause {
-				causes: vec!["tools_changed".to_owned()],
+				causes: vec![Code::Known(MissCauseCode::ToolsChanged)],
 				..Default::default()
 			}),
 			..Default::default()
@@ -593,8 +595,8 @@ mod tests {
 		let mut input = cache_input(true, true);
 		input.prompt_cache.as_mut().unwrap().last_miss_cause = Some(crate::input::MissCause {
 			causes: vec![
-				"tools_changed".to_owned(),
-				"system_prompt_changed".to_owned(),
+				Code::Known(MissCauseCode::ToolsChanged),
+				Code::Known(MissCauseCode::SystemChanged),
 			],
 			..Default::default()
 		});
@@ -840,7 +842,7 @@ mod tests {
 			"running is cyan: {out:?}"
 		);
 		let mut task = sample_task();
-		task.status = "waiting".to_owned();
+		task.status = Code::Known(TaskStatus::Waiting);
 		let input = task.to_input();
 		let mut ctx = default_ctx(&input);
 		ctx.task = Some(&task);
@@ -892,7 +894,7 @@ mod tests {
 		let usage: crate::usage::UsageResponse = serde_json::from_str(
 			r#"{"extra_usage": {"monthly_limit": 10000, "used_credits": 2500},
 				"limits": [{"kind": "weekly_scoped", "percent": 42, "scope": {"model": {"display_name": "Fable"}}}],
-				"spend": {"balance": {"amount_minor": 5000, "exponent": 2}}}"#,
+				"spend": {"balance": {"amount_minor": 5000, "currency": "USD", "exponent": 2}}}"#,
 		)
 		.unwrap();
 		let credits = usage.credits().unwrap();
@@ -900,20 +902,26 @@ mod tests {
 		ctx.usage = Some(Ok(&usage));
 		ctx.credits = Some(Ok(&credits));
 		ctx.usage_stale = true;
-		for ty in [
-			SegmentType::FableUsage,
-			SegmentType::ExtraUsage,
-			SegmentType::Credits,
-		] {
-			let out = render_segment(&SegmentConfig::Simple(ty.clone()), &ctx).unwrap();
+		for ty in ["fable_usage", "extra_usage", "credits"] {
+			let seg: SegmentConfig =
+				serde_json::from_str(&format!(r#"{{"type":"{ty}","style":"bold"}}"#)).unwrap();
+			let out = render_segment(&seg, &ctx).unwrap();
 			let spans: Vec<_> = crate::spans::ansi_to_spans(&out)
 				.into_iter()
 				.flatten()
 				.collect();
-			assert!(!spans.is_empty(), "{ty:?} drew nothing");
+			assert!(!spans.is_empty(), "{ty} drew nothing");
 			assert!(
-				spans.iter().all(|s| s.style.dim),
-				"{ty:?} not dimmed throughout: {out:?}"
+				spans.iter().all(|s| s.style.dim && s.style.bold),
+				"{ty} not dimmed and bold throughout: {out:?}"
+			);
+
+			let seg: SegmentConfig =
+				serde_json::from_str(&format!(r#"{{"type":"{ty}","colors":false}}"#)).unwrap();
+			let out = render_segment(&seg, &ctx).unwrap();
+			assert!(
+				!out.contains('\u{1b}'),
+				"{ty} escaped with colours off: {out:?}"
 			);
 		}
 		let divider = render_segment(&SegmentConfig::Simple(SegmentType::Divider), &ctx).unwrap();

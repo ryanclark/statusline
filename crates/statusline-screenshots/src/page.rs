@@ -2,7 +2,7 @@ use std::path::Path;
 
 use eyre::{Result, bail};
 use serde_json::Value;
-use statusline_core::spans::Span;
+use statusline_core::spans::{Color, Span};
 
 use crate::chrome::file_url;
 use crate::render::{Frame, Row};
@@ -167,11 +167,14 @@ fn rows_html(rows: &[Row], default: &str) -> String {
 /// `default` is the colour of a span with none of its own.
 fn span_html(span: &Span, default: &str) -> String {
 	let style = &span.style;
-	let mut css = format!("color:{}", color(style.fg.as_deref()).unwrap_or(default));
-	if let Some(bg) = color(style.bg.as_deref()) {
+	let mut css = match style.fg {
+		Some(fg) => format!("color:{}", css_color(fg)),
+		None => format!("color:{default}"),
+	};
+	if let Some(bg) = style.bg {
 		// An inline background covers only the glyph box, leaving gaps between rows a terminal would fill.
 		css.push_str(";display:inline-block;background:");
-		css.push_str(bg);
+		css.push_str(&css_color(bg));
 	}
 	for (on, rule) in [
 		(style.bold, "font-weight:700"),
@@ -191,14 +194,16 @@ fn span_html(span: &Span, default: &str) -> String {
 	)
 }
 
-/// A span colour as CSS, mapping the terminal colour names and passing hex through.
-fn color(name: Option<&str>) -> Option<&str> {
-	let name = name.filter(|name| !name.is_empty())?;
-	Some(
-		ANSI.iter()
+/// A span colour as CSS, mapping the terminal colour names to the theme.
+fn css_color(color: Color) -> String {
+	match color {
+		Color::Named(name) => ANSI
+			.iter()
 			.find(|(ansi, _)| *ansi == name)
-			.map_or(name, |(_, hex)| hex),
-	)
+			.map_or(name, |(_, hex)| hex)
+			.to_owned(),
+		Color::Rgb(..) => color.to_string(),
+	}
 }
 
 /// Escapes text for element content and quoted attributes alike.
@@ -267,7 +272,7 @@ mod tests {
 			vec![vec![Span {
 				text: "<5m".to_owned(),
 				style: Style {
-					fg: Some("green".to_owned()),
+					fg: Some(Color::Named("green")),
 					..Style::default()
 				},
 			}]]
@@ -297,7 +302,7 @@ mod tests {
 		let span = Span {
 			text: "<a & 'b'>".to_owned(),
 			style: Style {
-				fg: Some("green".to_owned()),
+				fg: Some(Color::Named("green")),
 				bold: true,
 				dim: true,
 				..Style::default()
@@ -315,22 +320,11 @@ mod tests {
 			span_html(&plain, INACTIVE),
 			r#"<span style="color:#999999">x</span>"#
 		);
-		let empty = Span {
-			text: "x".to_owned(),
-			style: Style {
-				fg: Some(String::new()),
-				..Style::default()
-			},
-		};
-		assert_eq!(
-			span_html(&empty, INACTIVE),
-			r#"<span style="color:#999999">x</span>"#
-		);
 		let selected = Span {
 			text: "x".to_owned(),
 			style: Style {
-				fg: Some("#ffffff".to_owned()),
-				bg: Some("blue".to_owned()),
+				fg: Some(Color::Rgb(255, 255, 255)),
+				bg: Some(Color::Named("blue")),
 				..Style::default()
 			},
 		};

@@ -2,12 +2,16 @@ use crate::constants::DIVIDER;
 use crate::context_window::{ContextWindow, CurrentUsage};
 use crate::format::{Percentage, Tokens};
 use crate::input::{
-	AgentInfo, CostInfo, EffortInfo, InputData, MissCause, ModInfo, ModelInfo, PrInfo, PromptCache,
-	RateLimitPeriod, RateLimits, RepoInfo, ThinkingInfo, VimInfo, Workspace, WorktreeInfo,
+	AgentCounts, AgentInfo, ApiError, AutocompactInfo, BackgroundTask, Code, CompactionInfo,
+	CostInfo, EffortInfo, ErrorKind, InputData, MissCause, MissCauseCode, ModInfo, ModelInfo,
+	PermissionWait, PrInfo, PromptCache, RateLimitPeriod, RateLimits, RepoInfo, TaskKind,
+	ThinkingInfo, TodoProgress, ToolCall, TurnInfo, VimInfo, Workspace, WorktreeInfo,
 };
 use crate::segment::{AccountDisplay, GitCache, RenderContext};
-use crate::subagent::{Effort, Task};
+use crate::subagent::{Effort, Task, TaskStatus};
 use crate::usage::{PrepaidCredits, UsageError, UsageResponse};
+use chrono::{TimeDelta, Utc};
+use std::time::Duration;
 
 pub struct SampleData {
 	pub input: InputData,
@@ -24,43 +28,76 @@ pub struct SampleData {
 
 /// Live activity as the plugin would send it, so the editor preview shows the activity segments.
 fn sample_mod_info() -> ModInfo {
-	let now_ms = chrono::Utc::now().timestamp_millis();
-	serde_json::from_str(&format!(
-		r#"{{
-			"tools": [
-				{{"tool": "Bash", "detail": "cargo test -p statusline-core", "started_at_ms": {tool}}},
-				{{"tool": "Read", "detail": "src/main.rs", "started_at_ms": {now_ms}}}
-			],
-			"turn": {{"started_at_ms": {turn}, "last_duration_ms": 130000}},
-			"permission": {{"tool": "Bash", "since_ms": {permission}}},
-			"last_error": {{"kind": "overloaded", "detail": "529 Overloaded", "at_ms": {error}}},
-			"todos": {{"done": 3, "total": 7, "active": "Running tests"}},
-			"agents": {{"running": 3, "idle": 1}},
-			"background_tasks": [
-				{{"type": "shell", "description": "npm run dev"}},
-				{{"type": "monitor", "description": "CI on #42"}}
-			],
-			"compaction": {{"count": 2, "last_at_ms": {compacted}, "tokens_before": 182000,
-				"tokens_after": 21000, "running_since_ms": null}},
-			"autocompact": {{"enabled": true, "headroom_tokens": 38000}}
-		}}"#,
-		tool = now_ms - 12_000,
-		turn = now_ms - 102_000,
-		permission = now_ms - 45_000,
-		error = now_ms - 120_000,
-		compacted = now_ms - 14 * 60_000,
-	))
-	.expect("sample activity JSON parses")
+	let now = Utc::now();
+	let ago = |secs| Some(now - TimeDelta::seconds(secs));
+	ModInfo {
+		tools: vec![
+			ToolCall {
+				tool: "Bash".to_owned(),
+				detail: "cargo test -p statusline-core".to_owned(),
+				started_at: ago(12),
+			},
+			ToolCall {
+				tool: "Read".to_owned(),
+				detail: "src/main.rs".to_owned(),
+				started_at: Some(now),
+			},
+		],
+		turn: Some(TurnInfo {
+			started_at: ago(102),
+			last_duration: Some(Duration::from_secs(130)),
+		}),
+		permission: Some(PermissionWait {
+			tool: "Bash".to_owned(),
+			since: ago(45),
+		}),
+		last_error: Some(ApiError {
+			kind: Code::Known(ErrorKind::Overloaded),
+			detail: "529 Overloaded".to_owned(),
+			at: ago(120),
+		}),
+		todos: Some(TodoProgress {
+			done: 3,
+			total: 7,
+			active: "Running tests".to_owned(),
+		}),
+		agents: Some(AgentCounts {
+			running: 3,
+			idle: 1,
+		}),
+		background_tasks: vec![
+			BackgroundTask {
+				kind: Code::Known(TaskKind::Shell),
+				description: "npm run dev".to_owned(),
+			},
+			BackgroundTask {
+				kind: Code::Known(TaskKind::Monitor),
+				description: "CI on #42".to_owned(),
+			},
+		],
+		compaction: Some(CompactionInfo {
+			count: 2,
+			last_at: ago(14 * 60),
+			tokens_before: Some(Tokens::from(182_000)),
+			tokens_after: Some(Tokens::from(21_000)),
+			running_since: None,
+		}),
+		autocompact: Some(AutocompactInfo {
+			enabled: true,
+			headroom_tokens: Some(Tokens::from(38_000)),
+		}),
+		usage: None,
+	}
 }
 
 impl SampleData {
 	#[must_use]
 	pub fn representative() -> Self {
-		let five_reset = chrono::Utc::now().timestamp() + 7200; // +2h
-		let seven_reset = chrono::Utc::now().timestamp() + 86_400 * 5; // +5d
-		let spend_reset = chrono::Utc::now().timestamp() + 86_400 * 19; // +19d
-		let cache_expires = chrono::Utc::now().timestamp() + 1800; // +30m
-		let last_miss = chrono::Utc::now().timestamp() - 300; // -5m
+		let five_reset = Utc::now().timestamp() + 7200; // +2h
+		let seven_reset = Utc::now().timestamp() + 86_400 * 5; // +5d
+		let spend_reset = Utc::now().timestamp() + 86_400 * 19; // +19d
+		let cache_expires = Utc::now().timestamp() + 1800; // +30m
+		let last_miss = Utc::now() - TimeDelta::minutes(5);
 
 		let input = InputData {
 			cwd: "/home/user/project".to_owned(),
@@ -144,14 +181,14 @@ impl SampleData {
 				miss_recache_tokens: Tokens::from(310_200),
 				last_miss_at: Some(last_miss),
 				last_miss_cause: Some(MissCause {
-					causes: vec!["tools_changed".to_owned()],
+					causes: vec![Code::Known(MissCauseCode::ToolsChanged)],
 					tools_added: Some(2),
 					tools_removed: Some(0),
 					system_char_delta: None,
 				}),
 				miss_causes: [("tools_changed".to_owned(), 2)].into_iter().collect(),
 				recache_tokens_if_cold: Some(Tokens::from(45_000)),
-				miss_times: Some(vec![last_miss - 600, last_miss]),
+				miss_times: Some(vec![last_miss - TimeDelta::minutes(10), last_miss]),
 			}),
 			mod_info: Some(sample_mod_info()),
 			pr: PrInfo {
@@ -170,7 +207,7 @@ impl SampleData {
 			stash_count: 1,
 		};
 
-		let fable_reset = (chrono::Utc::now() + chrono::Duration::days(3)).to_rfc3339();
+		let fable_reset = (Utc::now() + TimeDelta::days(3)).to_rfc3339();
 		let usage: UsageResponse = serde_json::from_str(&format!(
 			r#"{{
 				"extra_usage": {{"monthly_limit": 10000.0, "used_credits": 2500.0}},
@@ -190,13 +227,13 @@ impl SampleData {
 			color: Some("cyan".to_owned()),
 		};
 
-		let task_started = (chrono::Utc::now().timestamp() - 95) * 1000; // -1m35s, in millis
+		let task_started = (Utc::now().timestamp() - 95) * 1000; // -1m35s, in millis
 		let tasks = vec![
 			Task {
 				id: "task-1".to_owned(),
 				name: "security-reviewer".to_owned(),
 				kind: "agent".to_owned(),
-				status: "running".to_owned(),
+				status: Code::Known(TaskStatus::Running),
 				description: "Review the auth flow for injection risks".to_owned(),
 				label: "Reviewing auth middleware".to_owned(),
 				start_time: Some(task_started),
@@ -210,7 +247,7 @@ impl SampleData {
 				id: "task-2".to_owned(),
 				name: "Explore".to_owned(),
 				kind: "agent".to_owned(),
-				status: "completed".to_owned(),
+				status: Code::Known(TaskStatus::Completed),
 				description: "Find call sites of parse_color".to_owned(),
 				label: "Grepping for parse_color".to_owned(),
 				start_time: Some(task_started - 40_000),

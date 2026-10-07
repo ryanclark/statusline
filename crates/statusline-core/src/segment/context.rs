@@ -1,11 +1,16 @@
 use crate::constants::{CYAN, DOWN_ARROW, GRAY, GREEN, ORANGE, PURPLE, UP_ARROW, YELLOW};
-use crate::format::{ColoredPercentage, Percentage, Tokens, elapsed_since, format_window};
-use crate::input::{MissCause, PromptCache};
-use chrono::Utc;
+use crate::format::{
+	ColoredPercentage, Percentage, Tokens, elapsed, format_duration_secs, format_window,
+};
+use crate::input::{Code, MissCause, MissCauseCode, PromptCache};
+use chrono::{DateTime, Utc};
 use owo_colors::OwoColorize;
+use std::borrow::Cow;
 use std::time::Duration;
 
-use super::{Icon, RenderContext, SegmentConfig, apply_style, dim, format_icon, paint};
+use super::{
+	Icon, RenderContext, SegmentConfig, apply_style, dim, format_icon, paint, unknown_code,
+};
 
 pub(super) fn context_percentage(
 	segment: &SegmentConfig,
@@ -225,7 +230,7 @@ pub(super) fn cache_misses(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> 
 	// Claude Code only sends the session total, so a window can only be applied to the plugin's miss times.
 	let (misses, window) = match (&cache.miss_times, segment.within()) {
 		(Some(times), Some(window)) => (
-			misses_within(times, window, Utc::now().timestamp()),
+			misses_within(times, window, Utc::now()) as u64,
 			Some(window),
 		),
 		_ => (cache.misses, None),
@@ -245,14 +250,15 @@ pub(super) fn cache_misses(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> 
 	Some(apply_style(&text, segment.style()))
 }
 
-fn misses_within(times: &[i64], window: Duration, now: i64) -> u64 {
-	let since = now.saturating_sub(i64::try_from(window.as_secs()).unwrap_or(i64::MAX));
-	let recent = times.iter().filter(|at| **at >= since).count();
-	u64::try_from(recent).unwrap_or(u64::MAX)
+fn misses_within(times: &[DateTime<Utc>], window: Duration, now: DateTime<Utc>) -> usize {
+	times
+		.iter()
+		.filter(|at| !is_older_than(**at, window, now))
+		.count()
 }
 
-fn is_older_than(at: i64, window: Duration, now: i64) -> bool {
-	u64::try_from(now.saturating_sub(at)).is_ok_and(|age| age > window.as_secs())
+fn is_older_than(at: DateTime<Utc>, window: Duration, now: DateTime<Utc>) -> bool {
+	elapsed(at, now).is_some_and(|age| age.as_secs() > window.as_secs())
 }
 
 pub(super) fn cache_last_miss(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
@@ -266,7 +272,7 @@ pub(super) fn cache_last_miss(segment: &SegmentConfig, ctx: &RenderContext<'_>) 
 	}
 	let now = Utc::now();
 	if let (Some(at), Some(window)) = (cache.last_miss_at, segment.within())
-		&& is_older_than(at, window, now.timestamp())
+		&& is_older_than(at, window, now)
 	{
 		return None;
 	}
@@ -274,7 +280,8 @@ pub(super) fn cache_last_miss(segment: &SegmentConfig, ctx: &RenderContext<'_>) 
 	let label = paint(segment, &describe_miss(cause, segment.details()), ORANGE);
 	let age = cache
 		.last_miss_at
-		.and_then(|at| elapsed_since(at, now))
+		.and_then(|at| elapsed(at, now))
+		.map(|ago| format_duration_secs(ago.as_secs()))
 		.map(|ago| dim_suffix(segment, &format!("{ago} ago")))
 		.unwrap_or_default();
 
@@ -284,9 +291,9 @@ pub(super) fn cache_last_miss(segment: &SegmentConfig, ctx: &RenderContext<'_>) 
 /// Claude Code reports a miss it could not diagnose with a null cause or `unknown`.
 const UNEXPLAINED: &str = "unexplained miss";
 
-fn describe_miss(cause: Option<&MissCause>, details: bool) -> String {
+fn describe_miss(cause: Option<&MissCause>, details: bool) -> Cow<'_, str> {
 	let Some(cause) = cause else {
-		return UNEXPLAINED.to_owned();
+		return UNEXPLAINED.into();
 	};
 
 	cause
@@ -295,53 +302,59 @@ fn describe_miss(cause: Option<&MissCause>, details: bool) -> String {
 		.map(|code| describe_cause(code, cause, details))
 		.collect::<Vec<_>>()
 		.join(", ")
+		.into()
 }
 
-/// Phrases for the plugin's codes and for Claude Code's own closed set (`PROMPT_CACHE_MISS_CAUSES`, as listed in
-/// its status line docs). Codes neither knows yet still read as words.
-fn describe_cause(code: &str, cause: &MissCause, details: bool) -> String {
+fn describe_cause<'a>(
+	code: &'a Code<MissCauseCode>,
+	cause: &MissCause,
+	details: bool,
+) -> Cow<'a, str> {
+	let code = match code {
+		Code::Known(code) => code,
+		Code::Other(code) => return unknown_code(code),
+	};
 	let phrase = match code {
-		"ttl_expired" => "expired after idle",
-		"ttl_expired_5m" => "expired after 5m idle",
-		"ttl_expired_1h" => "expired after 1h idle",
-		"tools_changed" => {
+		MissCauseCode::TtlExpired => "expired after idle",
+		MissCauseCode::TtlExpired5m => "expired after 5m idle",
+		MissCauseCode::TtlExpired1h => "expired after 1h idle",
+		MissCauseCode::ToolsChanged => {
 			let delta = details
 				.then(|| tools_delta(cause.tools_added, cause.tools_removed))
 				.flatten();
 			return with_detail("tools changed", delta);
 		}
-		"system_changed" | "system_prompt_changed" => {
+		MissCauseCode::SystemChanged => {
 			let delta = cause
 				.system_char_delta
 				.filter(|d| details && *d != 0)
 				.map(|d| format!("{}{} chars", sign(d), Tokens::from(d.unsigned_abs())));
 			return with_detail("system prompt changed", delta);
 		}
-		"model_changed" => "model switched",
-		"compacted" => "compacted",
-		"fast_mode_changed" => "fast mode toggled",
-		"cache_scope_or_ttl_changed" => "cache scope or TTL changed",
-		"betas_changed" => "beta headers changed",
-		"effort_changed" => "effort changed",
-		"thinking_mode_changed" => "thinking toggled",
-		"thinking_display_changed" => "thinking display changed",
-		"auto_mode_changed" => "auto mode toggled",
-		"overage_changed" => "usage limit state changed",
-		"extra_body_changed" => "extra request fields changed",
-		"defer_loading_changed" => "deferred tool loading changed",
-		"messages_rewritten" => "earlier messages changed",
-		"likely_server_side" => "prompt unchanged, likely server side",
-		"unknown" | "" => UNEXPLAINED,
-		other => return other.replace('_', " "),
+		MissCauseCode::ModelChanged => "model switched",
+		MissCauseCode::Compacted => "compacted",
+		MissCauseCode::FastModeChanged => "fast mode toggled",
+		MissCauseCode::CacheScopeOrTtlChanged => "cache scope or TTL changed",
+		MissCauseCode::BetasChanged => "beta headers changed",
+		MissCauseCode::EffortChanged => "effort changed",
+		MissCauseCode::ThinkingModeChanged => "thinking toggled",
+		MissCauseCode::ThinkingDisplayChanged => "thinking display changed",
+		MissCauseCode::AutoModeChanged => "auto mode toggled",
+		MissCauseCode::OverageChanged => "usage limit state changed",
+		MissCauseCode::ExtraBodyChanged => "extra request fields changed",
+		MissCauseCode::DeferLoadingChanged => "deferred tool loading changed",
+		MissCauseCode::MessagesRewritten => "earlier messages changed",
+		MissCauseCode::LikelyServerSide => "prompt unchanged, likely server side",
+		MissCauseCode::Unknown => UNEXPLAINED,
 	};
 
-	phrase.to_owned()
+	phrase.into()
 }
 
-fn with_detail(phrase: &str, detail: Option<String>) -> String {
+fn with_detail(phrase: &'static str, detail: Option<String>) -> Cow<'static, str> {
 	match detail {
-		Some(detail) => format!("{phrase} ({detail})"),
-		None => phrase.to_owned(),
+		Some(detail) => format!("{phrase} ({detail})").into(),
+		None => phrase.into(),
 	}
 }
 
@@ -365,6 +378,7 @@ mod tests {
 	use super::*;
 	use crate::input::InputData;
 	use crate::segment::render_segment;
+	use chrono::TimeDelta;
 
 	fn cause(json: &str) -> MissCause {
 		serde_json::from_str(json).unwrap()
@@ -438,6 +452,7 @@ mod tests {
 				"fast mode toggled, effort changed",
 			),
 			(r#"{"causes": ["unknown"]}"#, true, "unexplained miss"),
+			(r#"{"causes": [""]}"#, true, "unexplained miss"),
 			(
 				r#"{"causes": ["brand_new_reason"]}"#,
 				true,
@@ -494,8 +509,8 @@ mod tests {
 
 	#[test]
 	fn misses_within_counts_only_the_window() {
-		let now = 1_791_280_000;
-		let times = [now - 3600, now - 1800, now - 600, now - 60];
+		let now = DateTime::from_timestamp(1_791_280_000, 0).unwrap();
+		let times = [3600, 1800, 600, 60].map(|ago| now - TimeDelta::seconds(ago));
 		assert_eq!(misses_within(&times, Duration::from_secs(1800), now), 3);
 		assert_eq!(misses_within(&times, Duration::from_secs(90), now), 1);
 		assert_eq!(misses_within(&[], Duration::from_secs(1800), now), 0);
@@ -503,12 +518,12 @@ mod tests {
 
 	#[test]
 	fn is_older_than_keeps_a_miss_at_the_edge_of_the_window() {
-		let now = 1_791_280_000;
+		let now = DateTime::from_timestamp(1_791_280_000, 0).unwrap();
 		let window = Duration::from_secs(1800);
-		assert!(!is_older_than(now - 1800, window, now));
-		assert!(is_older_than(now - 1801, window, now));
+		assert!(!is_older_than(now - TimeDelta::seconds(1800), window, now));
+		assert!(is_older_than(now - TimeDelta::seconds(1801), window, now));
 		assert!(
-			!is_older_than(now + 5, window, now),
+			!is_older_than(now + TimeDelta::seconds(5), window, now),
 			"a clock behind Claude Code's"
 		);
 	}

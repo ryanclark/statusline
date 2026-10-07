@@ -172,6 +172,23 @@ describe('usage', () => {
     })
   }
 
+  test('a failed authorize is asked again on a later refresh', async ($, on) => {
+    const files = new Map<string, string>()
+    let calls = 0
+    const authorize = (): SessionAuthorization => {
+      if (++calls === 1) {
+        throw new Error('$.session.authorize: the session is still starting')
+      }
+      return { handle: 'h1', kind: 'bearer' }
+    }
+    const { seen, clock } = await boot($, on, { authorize, files, fetch: () => reply(200) })
+    expect(seen.fetches ?? []).toHaveLength(0)
+    await clock.advance(1000)
+    expect(seen.authorizes).toBe(2)
+    expect(seen.fetches).toHaveLength(1)
+    expect(modOf(seen).usage.body).toEqual(BODY)
+  })
+
   test('another chat’s body is not shown without a login of this chat’s own', async ($, on) => {
     const files = new Map([[PATH, file({ fetched_at_ms: T0, body: BODY })]])
     const { seen } = await boot($, on, { files })
