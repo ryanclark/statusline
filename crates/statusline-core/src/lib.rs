@@ -14,6 +14,7 @@ pub mod input;
 pub mod sample;
 pub mod segment;
 pub mod settings;
+pub mod spans;
 pub mod subagent;
 pub mod text;
 pub mod usage;

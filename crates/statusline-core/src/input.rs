@@ -48,6 +48,9 @@ pub struct InputData {
 	/// Absent until the main conversation's first API response.
 	#[serde(default)]
 	pub prompt_cache: Option<PromptCache>,
+	/// Live activity that only the plugin sends, so segments reading it stay hidden under the native line.
+	#[serde(default, rename = "mod")]
+	pub mod_info: Option<ModInfo>,
 }
 
 impl InputData {
@@ -195,6 +198,9 @@ pub struct PromptCache {
 	pub miss_causes: BTreeMap<String, u64>,
 	#[serde(default)]
 	pub recache_tokens_if_cold: Option<Tokens>,
+	/// Epoch seconds of each miss, oldest first. Only the plugin sends it.
+	#[serde(default)]
+	pub miss_times: Option<Vec<i64>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -207,6 +213,105 @@ pub struct MissCause {
 	pub tools_removed: Option<u64>,
 	#[serde(default)]
 	pub system_char_delta: Option<i64>,
+}
+
+/// Session activity from the plugin. Every `*_ms` value is epoch milliseconds.
+#[derive(Debug, Default, Deserialize)]
+pub struct ModInfo {
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub tools: Vec<ToolCall>,
+	#[serde(default)]
+	pub turn: Option<TurnInfo>,
+	#[serde(default)]
+	pub permission: Option<PermissionWait>,
+	#[serde(default)]
+	pub last_error: Option<ApiError>,
+	#[serde(default)]
+	pub todos: Option<TodoProgress>,
+	#[serde(default)]
+	pub agents: Option<AgentCounts>,
+	#[serde(default)]
+	pub compaction: Option<CompactionInfo>,
+	#[serde(default)]
+	pub autocompact: Option<AutocompactInfo>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct ToolCall {
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub tool: String,
+	/// The Bash command, file path or search pattern, already truncated by the plugin.
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub detail: String,
+	#[serde(default)]
+	pub started_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct TurnInfo {
+	#[serde(default)]
+	pub started_at_ms: Option<i64>,
+	#[serde(default)]
+	pub last_duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct PermissionWait {
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub tool: String,
+	#[serde(default)]
+	pub since_ms: Option<i64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct ApiError {
+	/// An `SDKAssistantMessageError` code, or `max_tokens`, `refusal`, `aborted` or `error`.
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub kind: String,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub detail: String,
+	#[serde(default)]
+	pub at_ms: Option<i64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct TodoProgress {
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub done: u64,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub total: u64,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub active: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct AgentCounts {
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub running: u64,
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub idle: u64,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct CompactionInfo {
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub count: u64,
+	#[serde(default)]
+	pub last_at_ms: Option<i64>,
+	#[serde(default)]
+	pub tokens_before: Option<Tokens>,
+	#[serde(default)]
+	pub tokens_after: Option<Tokens>,
+	#[serde(default)]
+	pub running_since_ms: Option<i64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct AutocompactInfo {
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub enabled: bool,
+	#[serde(default)]
+	pub headroom_tokens: Option<Tokens>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -369,6 +474,133 @@ mod tests {
 		assert!(!cache.warm);
 		assert!(cache.hit_ratio.is_none());
 		assert!(cache.last_miss_cause.is_none());
+	}
+
+	#[test]
+	fn parse_prompt_cache_miss_times() {
+		for (json, want) in [
+			(r#"{"prompt_cache": {}}"#, None),
+			(r#"{"prompt_cache": {"miss_times": null}}"#, None),
+			(r#"{"prompt_cache": {"miss_times": []}}"#, Some(vec![])),
+			(
+				r#"{"prompt_cache": {"miss_times": [1791279000, 1791280100]}}"#,
+				Some(vec![1_791_279_000, 1_791_280_100]),
+			),
+		] {
+			let cache = InputData::from_reader(json.as_bytes())
+				.unwrap()
+				.prompt_cache
+				.unwrap();
+			assert_eq!(cache.miss_times, want, "{json}");
+		}
+	}
+
+	#[test]
+	fn mod_is_absent_on_the_cli_path_and_null_tolerant() {
+		assert!(
+			InputData::from_reader(b"{}" as &[u8])
+				.unwrap()
+				.mod_info
+				.is_none()
+		);
+		assert!(
+			InputData::from_reader(r#"{"mod": null}"#.as_bytes())
+				.unwrap()
+				.mod_info
+				.is_none()
+		);
+		let json = r#"{"mod": {"tools": null, "turn": null, "permission": null, "last_error": null,
+			"todos": null, "agents": null, "compaction": null, "autocompact": null}}"#;
+		let m = InputData::from_reader(json.as_bytes())
+			.unwrap()
+			.mod_info
+			.unwrap();
+		assert!(m.tools.is_empty());
+		assert!(m.turn.is_none() && m.permission.is_none() && m.last_error.is_none());
+		assert!(m.todos.is_none() && m.agents.is_none());
+		assert!(m.compaction.is_none() && m.autocompact.is_none());
+		let empty = InputData::from_reader(r#"{"mod": {}}"#.as_bytes())
+			.unwrap()
+			.mod_info
+			.unwrap();
+		assert!(empty.tools.is_empty() && empty.turn.is_none());
+	}
+
+	#[test]
+	fn parse_mod_from_the_contract_shape() {
+		let json = r#"{"mod": {
+			"tools": [{"tool": "Bash", "detail": "cargo test -p core", "started_at_ms": 1791280000000},
+				{"tool": "Read", "detail": null, "started_at_ms": 1791280001000}],
+			"turn": {"started_at_ms": 1791280000000, "last_duration_ms": 130000, "ended_at_ms": 1791279900000},
+			"permission": {"tool": "Bash", "since_ms": 1791280000000},
+			"last_error": {"kind": "overloaded", "detail": "529 Overloaded", "at_ms": 1791280000000},
+			"todos": {"done": 3, "total": 7, "active": "Running tests"},
+			"agents": {"running": 3, "idle": 1},
+			"compaction": {"count": 2, "last_at_ms": 1791279000000, "tokens_before": 182000,
+				"tokens_after": 21000, "running_since_ms": null, "trigger": "auto"},
+			"autocompact": {"enabled": true, "headroom_tokens": 38000}
+		}}"#;
+		let m = InputData::from_reader(json.as_bytes())
+			.unwrap()
+			.mod_info
+			.unwrap();
+		assert_eq!(m.tools.len(), 2);
+		assert_eq!(m.tools[0].tool, "Bash");
+		assert_eq!(m.tools[0].detail, "cargo test -p core");
+		assert_eq!(m.tools[0].started_at_ms, Some(1_791_280_000_000));
+		assert_eq!(m.tools[1].detail, "");
+		let turn = m.turn.unwrap();
+		assert_eq!(turn.started_at_ms, Some(1_791_280_000_000));
+		assert_eq!(turn.last_duration_ms, Some(130_000));
+		let permission = m.permission.unwrap();
+		assert_eq!(
+			(permission.tool.as_str(), permission.since_ms),
+			("Bash", Some(1_791_280_000_000))
+		);
+		let error = m.last_error.unwrap();
+		assert_eq!(
+			(error.kind.as_str(), error.detail.as_str()),
+			("overloaded", "529 Overloaded")
+		);
+		let todos = m.todos.unwrap();
+		assert_eq!(
+			(todos.done, todos.total, todos.active.as_str()),
+			(3, 7, "Running tests")
+		);
+		let agents = m.agents.unwrap();
+		assert_eq!((agents.running, agents.idle), (3, 1));
+		let compaction = m.compaction.unwrap();
+		assert_eq!(compaction.count, 2);
+		assert_eq!(compaction.tokens_before, Some(182_000.into()));
+		assert_eq!(compaction.tokens_after, Some(21_000.into()));
+		assert!(compaction.running_since_ms.is_none());
+		let autocompact = m.autocompact.unwrap();
+		assert!(autocompact.enabled);
+		assert_eq!(autocompact.headroom_tokens, Some(38_000.into()));
+	}
+
+	#[test]
+	fn mod_nullable_leaves_parse_as_defaults() {
+		let json = r#"{"mod": {
+			"turn": {"started_at_ms": null, "last_duration_ms": null, "ended_at_ms": null},
+			"permission": {"tool": null, "since_ms": null},
+			"last_error": {"kind": "aborted", "detail": null, "at_ms": null},
+			"todos": {"done": 0, "total": 2, "active": null},
+			"compaction": {"count": 0, "last_at_ms": null, "tokens_before": null, "tokens_after": null,
+				"running_since_ms": 1791280000000, "trigger": null},
+			"autocompact": {"enabled": false, "headroom_tokens": null}
+		}}"#;
+		let m = InputData::from_reader(json.as_bytes())
+			.unwrap()
+			.mod_info
+			.unwrap();
+		assert!(m.turn.unwrap().last_duration_ms.is_none());
+		assert_eq!(m.permission.unwrap().tool, "");
+		assert_eq!(m.last_error.unwrap().detail, "");
+		assert_eq!(m.todos.unwrap().active, "");
+		let compaction = m.compaction.unwrap();
+		assert_eq!(compaction.running_since_ms, Some(1_791_280_000_000));
+		assert!(m.autocompact.unwrap().headroom_tokens.is_none());
 	}
 
 	#[test]

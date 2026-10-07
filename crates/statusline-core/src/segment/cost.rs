@@ -1,12 +1,8 @@
 use crate::constants::{GREEN, RED};
-use crate::format::format_duration_secs;
+use crate::format::format_duration_ms;
 use owo_colors::OwoColorize;
 
 use super::{RenderContext, SegmentConfig, apply_style};
-
-fn format_duration_ms(ms: u64) -> String {
-	format_duration_secs(ms / 1000)
-}
 
 fn format_cost_usd(cost: f64) -> String {
 	if cost < 0.01 {

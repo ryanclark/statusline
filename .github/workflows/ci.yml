@@ -16,3 +16,13 @@ jobs:
     with:
       codesigned-clippy: true
       cargo-deny: true
+
+  plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned so a Claude Code release that changes the validator or the test kit fails a bump PR, not every PR.
+      - run: npm install -g @anthropic-ai/claude-code@2.1.290
+      - run: claude plugin validate --strict plugin
+      - run: claude plugin validate --strict .
+      - run: claude plugin test plugin

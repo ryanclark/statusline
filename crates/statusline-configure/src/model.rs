@@ -1,6 +1,6 @@
 use crate::colorpick::ColorPick;
 use crate::lineedit::LineEdit;
-use crate::options::{OptionKind, applicable_fields, next_style};
+use crate::options::{OptionKind, applicable_fields, next_style, next_within};
 use crate::picker::{self, PickerState};
 use statusline_core::catalog::meta;
 use statusline_core::format::Percentage;
@@ -474,6 +474,7 @@ impl EditorModel {
 		let show_countdown = row.config.show_countdown();
 		let show_time = row.config.show_time();
 		let time_format = row.config.time_format();
+		let details = row.config.details();
 		let opts = row.config.options_mut();
 
 		match kind {
@@ -487,6 +488,8 @@ impl EditorModel {
 					TimeFormat::H12 => TimeFormat::H24,
 				});
 			}
+			OptionKind::Within => opts.within = Some(next_within(opts.within.as_ref())),
+			OptionKind::Details => opts.details = Some(!details),
 			OptionKind::Capitalize => {
 				let current = opts.capitalize.unwrap_or(true);
 
@@ -1487,6 +1490,32 @@ mod tests {
 		m.apply(Key::Toggle);
 		let opts = m.rows[0].config.clone().options_mut().clone();
 		assert_eq!(opts.time_format, Some(TimeFormat::H24));
+	}
+
+	#[test]
+	fn within_and_details_are_editable_on_the_cache_miss_segments() {
+		use statusline_core::segment::Within;
+		let mut m = model(&[SegmentType::CacheLastMiss]);
+		m.cursor = 0;
+		m.apply(Key::Enter);
+		m.options.field = 2;
+		m.apply(Key::Toggle);
+		let opts = m.rows[0].config.clone().options_mut().clone();
+		assert_eq!(opts.within, Some(Within::parse("1h")));
+		assert!(m.dirty);
+		m.apply(Key::Toggle);
+		m.apply(Key::Toggle);
+		let opts = m.rows[0].config.clone().options_mut().clone();
+		assert_eq!(opts.within, Some(Within::Session));
+		m.options.field = 3;
+		m.apply(Key::Toggle);
+		let opts = m.rows[0].config.clone().options_mut().clone();
+		assert_eq!(opts.details, Some(false));
+		let json = serde_json::to_string(&m.rows[0].config).unwrap();
+		assert!(
+			json.contains(r#""within":"session""#) && json.contains(r#""details":false"#),
+			"{json}"
+		);
 	}
 
 	#[test]

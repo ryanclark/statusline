@@ -1,4 +1,6 @@
 use statusline_core::catalog::OptionSet;
+use statusline_core::segment::Within;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OptionKind {
@@ -15,6 +17,8 @@ pub enum OptionKind {
 	ShowCountdown,
 	ShowTime,
 	TimeFormat,
+	Within,
+	Details,
 }
 
 #[must_use]
@@ -50,8 +54,36 @@ pub fn applicable_fields(set: OptionSet) -> Vec<OptionKind> {
 	if set.capitalize {
 		fields.push(OptionKind::Capitalize);
 	}
+	if set.within {
+		fields.push(OptionKind::Within);
+	}
+	if set.details {
+		fields.push(OptionKind::Details);
+	}
 
 	fields
+}
+
+/// The windows `within` steps through. A hand-written window steps to the next larger preset.
+const WITHIN_PRESETS: &[Within] = &[
+	Within::Window(Duration::from_secs(5 * 60)),
+	Within::Window(Duration::from_secs(15 * 60)),
+	Within::Window(Within::DEFAULT),
+	Within::Window(Duration::from_secs(60 * 60)),
+	Within::Window(Duration::from_secs(2 * 60 * 60)),
+	Within::Session,
+];
+
+#[must_use]
+pub fn next_within(current: Option<&Within>) -> Within {
+	let next = match current.map_or(Some(Within::DEFAULT), Within::duration) {
+		None => WITHIN_PRESETS.first(),
+		Some(window) => WITHIN_PRESETS
+			.iter()
+			.find(|w| w.duration().is_none_or(|preset| preset > window)),
+	};
+
+	next.cloned().unwrap_or(Within::Session)
 }
 
 #[must_use]
@@ -162,6 +194,41 @@ mod tests {
 				OptionKind::Capitalize
 			]
 		);
+	}
+
+	#[test]
+	fn cache_miss_fields_end_with_within_and_details() {
+		let fields = applicable_fields(meta(&SegmentType::CacheMisses).options);
+		assert_eq!(
+			fields,
+			vec![OptionKind::Colors, OptionKind::Style, OptionKind::Within]
+		);
+		let fields = applicable_fields(meta(&SegmentType::CacheLastMiss).options);
+		assert_eq!(
+			fields,
+			vec![
+				OptionKind::Colors,
+				OptionKind::Style,
+				OptionKind::Within,
+				OptionKind::Details,
+			]
+		);
+	}
+
+	#[test]
+	fn within_cycles_through_the_presets() {
+		let mut seen = Vec::new();
+		let mut current: Option<Within> = None;
+		for _ in 0..WITHIN_PRESETS.len() {
+			let next = next_within(current.as_ref());
+			seen.push(next.to_string());
+			current = Some(next);
+		}
+		assert_eq!(seen, vec!["1h", "2h", "session", "5m", "15m", "30m"]);
+		let mins = |m: u64| Within::Window(Duration::from_secs(m * 60));
+		assert_eq!(next_within(Some(&mins(45))), mins(60));
+		assert_eq!(next_within(Some(&mins(24 * 60))), Within::Session);
+		assert_eq!(next_within(Some(&Within::parse("soon"))), mins(60));
 	}
 
 	#[test]

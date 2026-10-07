@@ -1,0 +1,13 @@
+{
+  "name": "ryanclark",
+  "owner": {
+    "name": "Ryan Clark"
+  },
+  "description": "Claude Code plugins from Ryan Clark",
+  "plugins": [
+    {
+      "name": "statusline",
+      "source": "./plugin"
+    }
+  ]
+}

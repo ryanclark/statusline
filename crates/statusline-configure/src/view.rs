@@ -2,6 +2,7 @@ use crate::model::{EditorModel, Focus, Mode};
 use crate::options::{OptionKind, applicable_fields};
 use crate::picker;
 use statusline_core::catalog::{OptionSet, meta};
+use statusline_core::format::format_window;
 use statusline_core::sample::SampleData;
 use statusline_core::segment::{
 	DirtyConfig, PartKind, SegmentConfig, SegmentLine, SegmentType, TimeFormat, align_rows,
@@ -447,6 +448,8 @@ fn option_label(kind: OptionKind) -> &'static str {
 		OptionKind::ShowCountdown => "countdown",
 		OptionKind::ShowTime => "show time",
 		OptionKind::TimeFormat => "time format",
+		OptionKind::Within => "within",
+		OptionKind::Details => "details",
 	}
 }
 
@@ -486,6 +489,10 @@ fn option_value(model: &EditorModel, config: &SegmentConfig, kind: OptionKind) -
 			TimeFormat::H24 => "24h".to_owned(),
 			TimeFormat::H12 => "12h".to_owned(),
 		},
+		OptionKind::Within => config
+			.within()
+			.map_or_else(|| "session".to_owned(), format_window),
+		OptionKind::Details => on_off(config.details()).to_owned(),
 		OptionKind::IconColor => {
 			let value = opts
 				.and_then(|o| o.icon_color.clone())
@@ -758,6 +765,24 @@ mod tests {
 		let texts: Vec<String> = rows.iter().map(|r| strip_ansi(&r.text)).collect();
 		let show_time = texts.iter().find(|t| t.contains("show time")).unwrap();
 		assert!(show_time.ends_with("on"), "{show_time}");
+	}
+
+	#[test]
+	fn options_block_shows_within_and_details() {
+		let mut m = model(&[SegmentType::CacheLastMiss]);
+		m.cursor = 0;
+		m.apply(Key::Enter);
+		let rows = block(&m, &SampleData::representative(), 60);
+		let texts: Vec<String> = rows.iter().map(|r| strip_ansi(&r.text)).collect();
+		let find = |label: &str| {
+			texts
+				.iter()
+				.find(|t| t.contains(label))
+				.unwrap_or_else(|| panic!("{label} missing from {texts:?}"))
+				.clone()
+		};
+		assert!(find("within").ends_with("30m"));
+		assert!(find("details").ends_with("on"));
 	}
 
 	#[test]

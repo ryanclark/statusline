@@ -1,4 +1,5 @@
 mod account;
+mod activity;
 mod context;
 mod cost;
 mod credits;
@@ -11,13 +12,14 @@ mod render;
 mod task;
 mod timing;
 
-use crate::format::{Percentage, parse_color};
+use crate::format::{Percentage, format_window, parse_color, parse_duration};
 use crate::input::InputData;
 use crate::subagent::Task;
 use crate::usage::{PrepaidCredits, UsageError, UsageResponse};
 use owo_colors::{DynColors, OwoColorize};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::time::Duration;
 
 pub use git::{GitCache, load_git_cache};
 pub use render::render_segment;
@@ -78,6 +80,14 @@ pub enum SegmentType {
 	TaskElapsed,
 	TaskTokens,
 	TaskLabel,
+	CurrentTool,
+	TurnElapsed,
+	PermissionPending,
+	LastApiError,
+	TodoProgress,
+	Agents,
+	Compaction,
+	AutocompactHeadroom,
 }
 
 impl SegmentType {
@@ -140,7 +150,15 @@ impl SegmentType {
 				TaskDescription => TaskElapsed,
 				TaskElapsed => TaskTokens,
 				TaskTokens => TaskLabel,
-				TaskLabel => return None,
+				TaskLabel => CurrentTool,
+				CurrentTool => TurnElapsed,
+				TurnElapsed => PermissionPending,
+				PermissionPending => LastApiError,
+				LastApiError => TodoProgress,
+				TodoProgress => Agents,
+				Agents => Compaction,
+				Compaction => AutocompactHeadroom,
+				AutocompactHeadroom => return None,
 			})
 		}
 
@@ -197,6 +215,14 @@ pub struct SegmentOptions {
 	pub time_format: Option<TimeFormat>,
 	#[serde(default)]
 	pub show_countdown: Option<bool>,
+	#[serde(
+		default,
+		deserialize_with = "deserialize_within",
+		skip_serializing_if = "Option::is_none"
+	)]
+	pub within: Option<Within>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub details: Option<bool>,
 	#[serde(default = "default_true", skip_serializing_if = "is_true")]
 	pub enabled: bool,
 	#[serde(flatten)]
@@ -211,6 +237,79 @@ pub enum TimeFormat {
 	H24,
 	#[serde(rename = "12h")]
 	H12,
+}
+
+/// How far back the cache miss segments look.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Within {
+	Session,
+	Window(Duration),
+	/// A value that does not parse. It renders as the default window and is saved back as written, so a typo is not
+	/// lost.
+	Unparsed(serde_json::Value),
+}
+
+impl Within {
+	pub const DEFAULT: Duration = Duration::from_secs(30 * 60);
+
+	/// The window, `None` for the whole session.
+	#[must_use]
+	pub fn duration(&self) -> Option<Duration> {
+		match self {
+			Self::Session => None,
+			Self::Window(window) => Some(*window),
+			Self::Unparsed(_) => Some(Self::DEFAULT),
+		}
+	}
+
+	/// Reads `"session"` or a duration such as `"30m"`.
+	#[must_use]
+	pub fn parse(s: &str) -> Self {
+		let trimmed = s.trim();
+		if trimmed.eq_ignore_ascii_case("session") {
+			return Self::Session;
+		}
+		parse_duration(trimmed)
+			.filter(|window| !window.is_zero())
+			.map_or_else(|| Self::Unparsed(s.into()), Self::Window)
+	}
+}
+
+impl fmt::Display for Within {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Session => f.write_str("session"),
+			Self::Window(window) => f.write_str(&format_window(*window)),
+			Self::Unparsed(serde_json::Value::String(s)) => f.write_str(s),
+			Self::Unparsed(value) => write!(f, "{value}"),
+		}
+	}
+}
+
+impl Serialize for Within {
+	fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		match self {
+			Self::Unparsed(value) => value.serialize(serializer),
+			_ => serializer.collect_str(self),
+		}
+	}
+}
+
+impl<'de> Deserialize<'de> for Within {
+	fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		Ok(match serde_json::Value::deserialize(deserializer)? {
+			serde_json::Value::Null => Self::Session,
+			serde_json::Value::String(s) => Self::parse(&s),
+			other => Self::Unparsed(other),
+		})
+	}
+}
+
+/// Serde maps `null` on an `Option` field to `None` without asking `Within`, which would make it the default window.
+fn deserialize_within<'de, D: serde::Deserializer<'de>>(
+	deserializer: D,
+) -> Result<Option<Within>, D::Error> {
+	Within::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -248,6 +347,7 @@ impl Serialize for DirtyConfig {
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)] // a layout is a few dozen segments parsed once per render
 pub enum SegmentConfig {
 	Simple(SegmentType),
 	Advanced(SegmentOptions),
@@ -368,6 +468,27 @@ impl SegmentConfig {
 		}
 	}
 
+	/// The cache miss window, `None` for the whole session.
+	#[must_use]
+	pub fn within(&self) -> Option<Duration> {
+		match self {
+			Self::Simple(_) => Some(Within::DEFAULT),
+			Self::Advanced(opts) => opts
+				.within
+				.as_ref()
+				.map_or(Some(Within::DEFAULT), Within::duration),
+		}
+	}
+
+	/// Whether `cache_last_miss` adds the tool and system prompt deltas to its cause.
+	#[must_use]
+	pub fn details(&self) -> bool {
+		match self {
+			Self::Simple(_) => true,
+			Self::Advanced(opts) => opts.details.unwrap_or(true),
+		}
+	}
+
 	#[must_use]
 	pub fn enabled(&self) -> bool {
 		match self {
@@ -408,6 +529,8 @@ impl SegmentConfig {
 				show_time: None,
 				time_format: None,
 				show_countdown: None,
+				within: None,
+				details: None,
 				enabled: true,
 				extra: serde_json::Map::new(),
 			});
@@ -435,6 +558,11 @@ impl SegmentConfig {
 				&& opts.show_time.is_none()
 				&& opts.time_format.is_none()
 				&& opts.show_countdown.is_none()
+				&& opts
+					.within
+					.as_ref()
+					.is_none_or(|w| *w == Within::Window(Within::DEFAULT))
+				&& opts.details.unwrap_or(true)
 				&& opts.enabled
 				&& opts.extra.is_empty();
 			if is_default {
@@ -523,6 +651,15 @@ fn format_icon(
 fn paint(segment: &SegmentConfig, text: &str, color: DynColors) -> String {
 	if segment.colors() {
 		format!("{}", text.color(color))
+	} else {
+		text.to_owned()
+	}
+}
+
+/// Empty text stays empty, so a caller can still drop it after styling.
+fn dim(segment: &SegmentConfig, text: &str) -> String {
+	if segment.colors() && !text.is_empty() {
+		format!("{}", text.dimmed())
 	} else {
 		text.to_owned()
 	}
@@ -856,6 +993,100 @@ mod tests {
 		let off: SegmentConfig =
 			serde_json::from_str(r#"{"type":"cache_warm","show_time":false}"#).unwrap();
 		assert!(!off.show_time());
+	}
+
+	#[test]
+	fn within_defaults_to_thirty_minutes() {
+		let within = |json: &str| {
+			serde_json::from_str::<SegmentConfig>(&format!(r#"{{"type":"cache_misses"{json}}}"#))
+				.unwrap()
+				.within()
+				.map(|w| w.as_secs())
+		};
+		for (json, want) in [
+			("", Some(1800)),
+			(r#","within":"30m""#, Some(1800)),
+			(r#","within":"2h""#, Some(7200)),
+			(r#","within":"90s""#, Some(90)),
+			(r#","within":"1h30m""#, Some(5400)),
+			(r#","within":"1d""#, Some(86_400)),
+			(r#","within":"session""#, None),
+			(r#","within":null"#, None),
+			(r#","within":"soon""#, Some(1800)),
+			(r#","within":"0m""#, Some(1800)),
+			(r#","within":15"#, Some(1800)),
+		] {
+			assert_eq!(within(json), want, "{json}");
+		}
+		assert_eq!(
+			SegmentConfig::Simple(SegmentType::CacheLastMiss).within(),
+			Some(Within::DEFAULT)
+		);
+	}
+
+	#[test]
+	fn within_and_details_round_trip() {
+		for (json, written) in [
+			(
+				r#"{"type":"cache_misses","within":"2h"}"#,
+				r#""within":"2h""#,
+			),
+			(
+				r#"{"type":"cache_misses","within":"1h30m"}"#,
+				r#""within":"90m""#,
+			),
+			(
+				r#"{"type":"cache_misses","within":"session"}"#,
+				r#""within":"session""#,
+			),
+			(
+				r#"{"type":"cache_misses","within":null}"#,
+				r#""within":"session""#,
+			),
+			(
+				r#"{"type":"cache_misses","within":"soon"}"#,
+				r#""within":"soon""#,
+			),
+			(r#"{"type":"cache_misses","within":15}"#, r#""within":15"#),
+			(
+				r#"{"type":"cache_last_miss","details":false}"#,
+				r#""details":false"#,
+			),
+		] {
+			let seg: SegmentConfig = serde_json::from_str(json).unwrap();
+			let out = serde_json::to_string(&seg).unwrap();
+			assert!(out.contains(written), "{json} wrote {out}");
+		}
+		let mut plain = SegmentConfig::Simple(SegmentType::CacheMisses);
+		let out = serde_json::to_string(plain.options_mut()).unwrap();
+		assert!(
+			!out.contains("within") && !out.contains("details"),
+			"unset options must not be written: {out}"
+		);
+	}
+
+	#[test]
+	fn details_defaults_on() {
+		assert!(SegmentConfig::Simple(SegmentType::CacheLastMiss).details());
+		let off: SegmentConfig =
+			serde_json::from_str(r#"{"type":"cache_last_miss","details":false}"#).unwrap();
+		assert!(!off.details());
+	}
+
+	#[test]
+	fn normalize_keeps_within_and_details_off_their_defaults() {
+		for (json, simple) in [
+			(r#"{"type":"cache_misses","within":"30m"}"#, true),
+			(r#"{"type":"cache_misses","details":true}"#, true),
+			(r#"{"type":"cache_misses","within":"session"}"#, false),
+			(r#"{"type":"cache_misses","within":null}"#, false),
+			(r#"{"type":"cache_misses","within":"soon"}"#, false),
+			(r#"{"type":"cache_last_miss","details":false}"#, false),
+		] {
+			let mut seg: SegmentConfig = serde_json::from_str(json).unwrap();
+			seg.normalize();
+			assert_eq!(matches!(seg, SegmentConfig::Simple(_)), simple, "{json}");
+		}
 	}
 
 	#[test]

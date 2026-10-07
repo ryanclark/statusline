@@ -1,6 +1,7 @@
 mod accounts;
 mod browser;
 mod install;
+mod plugin_install;
 mod profiles;
 mod session;
 mod subagent;
@@ -23,6 +24,7 @@ use format::Percentage;
 use owo_colors::OwoColorize;
 
 #[derive(Parser)]
+#[command(version)]
 struct Cli {
 	#[command(subcommand)]
 	command: Option<Commands>,
@@ -32,10 +34,25 @@ struct Cli {
 
 	#[arg(short)]
 	seven_day_reset_threshold: Option<Percentage>,
+
+	/// Output format. `spans` prints JSON rows of styled text for the Claude Code plugin.
+	#[arg(long, value_enum, default_value_t = OutputFormat::Ansi)]
+	format: OutputFormat,
+
+	/// With `--format spans`, how long the native status line stays silent for this session. Capped at 30 seconds.
+	#[arg(long, value_name = "MS", default_value_t = 10_000)]
+	heartbeat_ms: u64,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum OutputFormat {
+	Ansi,
+	Spans,
 }
 
 #[derive(Subcommand)]
 enum Commands {
+	#[command(group(clap::ArgGroup::new("mode").args(["plugin", "native"])))]
 	Install {
 		/// Show the 5-hour reset countdown above this percentage (default 70). An existing settings
 		/// file keeps its value unless this is given.
@@ -50,6 +67,30 @@ enum Commands {
 		/// Also wire Claude Code's subagentStatusLine to `statusline subagent`.
 		#[arg(long)]
 		subagent: bool,
+
+		/// Install the Claude Code plugin pointed at this binary and remove the native statusLine.
+		#[arg(long, conflicts_with = "native")]
+		plugin: bool,
+
+		/// Uninstall the plugin and put back the native statusLine it replaced.
+		#[arg(long)]
+		native: bool,
+
+		/// With --plugin, keep the native statusLine as a fallback for sessions where the plugin does not load.
+		#[arg(long, requires = "mode", conflicts_with = "native")]
+		keep_native: bool,
+
+		/// With --native, also remove the ryanclark marketplace.
+		#[arg(long, requires = "mode", conflicts_with = "plugin")]
+		remove_marketplace: bool,
+
+		/// The Claude Code executable to run, when `claude` is not on PATH.
+		#[arg(long, value_name = "PATH", default_value = "claude", requires = "mode")]
+		claude: std::path::PathBuf,
+
+		/// Print what --plugin or --native would change without changing it.
+		#[arg(long, requires = "mode")]
+		dry_run: bool,
 	},
 	Profiles {
 		#[arg(short, long)]
@@ -79,6 +120,33 @@ fn main() {
 			five_hour_reset_threshold,
 			seven_day_reset_threshold,
 			subagent,
+			plugin,
+			native,
+			keep_native,
+			remove_marketplace,
+			claude,
+			dry_run,
+		}) if plugin || native => {
+			let mode = if plugin {
+				plugin_install::Mode::Plugin(plugin_install::PluginOptions {
+					keep_native,
+					subagent,
+					five_hour_reset_threshold,
+					seven_day_reset_threshold,
+				})
+			} else {
+				plugin_install::Mode::Native { remove_marketplace }
+			};
+			if let Err(e) = plugin_install::run(mode, claude, dry_run) {
+				eprintln!("{} {e:?}", "Installation failed:".red().bold());
+				std::process::exit(1);
+			}
+		}
+		Some(Commands::Install {
+			five_hour_reset_threshold,
+			seven_day_reset_threshold,
+			subagent,
+			..
 		}) => {
 			if let Err(e) = install(
 				five_hour_reset_threshold,
@@ -156,14 +224,38 @@ fn main() {
 				return;
 			}
 
+			let spans = matches!(cli.format, OutputFormat::Spans);
+
+			if spans {
+				session::heartbeat(&raw, std::time::Duration::from_millis(cli.heartbeat_ms));
+			} else if !is_tty && session::drawn_by_plugin(&raw) {
+				// The plugin is drawing, so print nothing but still capture, since this input is complete where the
+				// plugin's is not.
+				if Settings::load().is_ok_and(|s| s.capture_snapshots) {
+					session::capture(&raw, session::Origin::Native);
+				}
+				return;
+			}
+
 			let settings = match Settings::load() {
 				Ok(s) => s,
+				// A plugin can be installed without `statusline install`, and the defaults are a usable line.
+				Err(settings::SettingsError::Io(e))
+					if spans && e.kind() == std::io::ErrorKind::NotFound =>
+				{
+					Settings::default()
+				}
 				Err(e) => {
 					eprintln!(
 						"{} {e}. Run {} to set up.",
 						"! error:".red().bold(),
 						"statusline install".green()
 					);
+					// The plugin surfaces an error only on a non-zero exit, while Claude Code's own line ignores the
+					// status.
+					if spans {
+						std::process::exit(1);
+					}
 
 					return;
 				}
@@ -181,14 +273,23 @@ fn main() {
 			} else {
 				InputData::from_reader(raw.as_slice()).unwrap_or_else(|e| {
 					eprintln!("{} {e}", "failed to parse input".red().bold());
+					if spans {
+						std::process::exit(1);
+					}
 					InputData::default()
 				})
 			};
 			if settings.capture_snapshots {
-				session::capture(&raw);
+				let origin = if spans {
+					session::Origin::Plugin
+				} else {
+					session::Origin::Native
+				};
+				session::capture(&raw, origin);
 			}
 			let is_fresh = input.context_window.used_percentage == 0.0.into();
-			let update = if is_fresh && !settings.skip_update_check {
+			// A spans host polls every second, and a fresh session would otherwise run the network check on each poll.
+			let update = if is_fresh && !spans && !settings.skip_update_check {
 				update::check()
 			} else {
 				None
@@ -269,6 +370,7 @@ fn main() {
 				},
 			};
 
+			let mut rendered = format!("{line}");
 			if let Some(update) = update {
 				let update_msg = format!(
 					"{} {} {}",
@@ -276,14 +378,25 @@ fn main() {
 					divider.color(GRAY),
 					"brew upgrade ryanclark/tap/statusline".dimmed()
 				);
-				let rendered = format!("{line}");
 				if rendered.is_empty() {
-					print!("{update_msg}");
+					rendered = update_msg;
 				} else {
-					print!("{rendered} {} {update_msg}", divider.color(GRAY));
+					rendered = format!("{rendered} {} {update_msg}", divider.color(GRAY));
 				}
-			} else {
-				print!("{line}");
+			}
+
+			match cli.format {
+				OutputFormat::Ansi => print!("{rendered}"),
+				OutputFormat::Spans => {
+					let rows = statusline_core::spans::ansi_to_spans(&rendered);
+					match serde_json::to_string(&rows) {
+						Ok(json) => print!("{json}"),
+						Err(e) => {
+							eprintln!("{} {e}", "failed to encode spans".red().bold());
+							std::process::exit(1);
+						}
+					}
+				}
 			}
 		}
 	}
@@ -297,5 +410,51 @@ mod tests {
 	fn cli_definition_is_consistent() {
 		use clap::CommandFactory as _;
 		Cli::command().debug_assert();
+	}
+
+	#[test]
+	fn plugin_flags_leave_plain_install_alone() {
+		let parses = |args: &[&str]| Cli::try_parse_from(args).is_ok();
+		assert!(parses(&["statusline", "install"]));
+		assert!(parses(&["statusline", "install", "--subagent"]));
+		assert!(parses(&[
+			"statusline",
+			"install",
+			"--plugin",
+			"--keep-native",
+			"--dry-run"
+		]));
+		assert!(parses(&[
+			"statusline",
+			"install",
+			"--native",
+			"--remove-marketplace",
+			"--claude",
+			"/x/claude"
+		]));
+		assert!(!parses(&["statusline", "install", "--plugin", "--native"]));
+		assert!(!parses(&[
+			"statusline",
+			"install",
+			"--remove-marketplace",
+			"--plugin"
+		]));
+		assert!(!parses(&[
+			"statusline",
+			"install",
+			"--keep-native",
+			"--native"
+		]));
+		assert!(!parses(&["statusline", "install", "--dry-run"]));
+		let Some(Commands::Install { keep_native, .. }) =
+			Cli::parse_from(["statusline", "install", "--plugin"]).command
+		else {
+			panic!("install should parse");
+		};
+		assert!(
+			!keep_native,
+			"--plugin removes the native statusLine unless told to keep it"
+		);
+		assert!(!parses(&["statusline", "install", "--claude", "/x/claude"]));
 	}
 }

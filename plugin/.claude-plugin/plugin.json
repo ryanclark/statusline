@@ -1,0 +1,43 @@
+{
+  "name": "statusline",
+  "version": "0.1.0",
+  "description": "Draws the statusline binary's segments next to the prompt and refreshes them on its own clock",
+  "author": {
+    "name": "Ryan Clark"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "binary": {
+      "type": "string",
+      "title": "Binary",
+      "description": "Path to a statusline build that supports --format spans",
+      "default": "statusline"
+    },
+    "placement": {
+      "type": "string",
+      "title": "Placement",
+      "description": "below replaces the hint line under the prompt, above uses the band over it",
+      "options": [
+        "below",
+        "above"
+      ],
+      "default": "below"
+    },
+    "intervalMs": {
+      "type": "number",
+      "title": "Refresh interval (ms)",
+      "description": "How often countdowns and git state are re-rendered between turns",
+      "default": 1000
+    },
+    "cacheTtl": {
+      "type": "string",
+      "title": "Prompt cache TTL",
+      "description": "Assumed until a model switch reports the real one",
+      "options": [
+        "1h",
+        "5m"
+      ],
+      "default": "1h"
+    }
+  }
+}

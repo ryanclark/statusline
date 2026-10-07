@@ -1,5 +1,5 @@
 use super::{
-	RenderContext, SegmentConfig, SegmentType, account, context, cost, credits, env, git,
+	RenderContext, SegmentConfig, SegmentType, account, activity, context, cost, credits, env, git,
 	rate_limit, task,
 };
 
@@ -65,6 +65,15 @@ pub fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Optio
 		SegmentType::TaskElapsed => task::task_elapsed(segment, ctx),
 		SegmentType::TaskTokens => task::task_tokens(segment, ctx),
 		SegmentType::TaskLabel => task::task_label(segment, ctx),
+
+		SegmentType::CurrentTool => activity::current_tool(segment, ctx),
+		SegmentType::TurnElapsed => activity::turn_elapsed(segment, ctx),
+		SegmentType::PermissionPending => activity::permission_pending(segment, ctx),
+		SegmentType::LastApiError => activity::last_api_error(segment, ctx),
+		SegmentType::TodoProgress => activity::todo_progress(segment, ctx),
+		SegmentType::Agents => activity::agents(segment, ctx),
+		SegmentType::Compaction => activity::compaction(segment, ctx),
+		SegmentType::AutocompactHeadroom => activity::autocompact_headroom(segment, ctx),
 	};
 
 	result.filter(|s| !s.is_empty())
@@ -481,7 +490,7 @@ mod tests {
 	fn render_cache_last_miss_shows_cause_and_age() {
 		let out = rendered(SegmentType::CacheLastMiss, &cache_input(true, true)).unwrap();
 		assert!(
-			out.contains("tools_changed") && out.contains("3m"),
+			out.contains("tools changed") && out.contains("3m"),
 			"got: {out}"
 		);
 	}
@@ -554,7 +563,7 @@ mod tests {
 		input.prompt_cache.as_mut().unwrap().last_miss_cause = None;
 		let out = rendered(SegmentType::CacheLastMiss, &input).unwrap();
 		assert!(
-			out.starts_with("miss ") && out.contains("ago"),
+			out.starts_with("unexplained miss ") && out.contains("ago"),
 			"got: {out}"
 		);
 		input.prompt_cache.as_mut().unwrap().last_miss_at = None;
@@ -576,7 +585,7 @@ mod tests {
 		});
 		let out = rendered(SegmentType::CacheLastMiss, &input).unwrap();
 		assert!(
-			out.starts_with("tools_changed+system_prompt_changed "),
+			out.starts_with("tools changed, system prompt changed "),
 			"got: {out}"
 		);
 	}

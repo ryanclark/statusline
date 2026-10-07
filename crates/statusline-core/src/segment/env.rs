@@ -50,11 +50,13 @@ pub(super) fn project_dir(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> O
 }
 
 pub(super) fn model(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
-	if ctx.input.model.display_name.is_empty() {
-		return None;
-	}
+	let name = if ctx.input.model.display_name.is_empty() {
+		display_name_from_id(&ctx.input.model.id)?
+	} else {
+		ctx.input.model.display_name.clone()
+	};
 
-	let raw = ctx.input.model.display_name.replace("1M context", "1M");
+	let raw = name.replace("1M context", "1M");
 	let text = if segment.colors() {
 		if let Some((base, suffix)) = raw.split_once(" (") {
 			format!("{base} {}", format!("({suffix}").dimmed())
@@ -66,6 +68,45 @@ pub(super) fn model(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<
 	};
 
 	Some(apply_style(&text, segment.style()))
+}
+
+/// Builds Claude Code's label for a model from its id, for inputs that carry only the id. Handles
+/// `claude-<family>-<major>-<minor>[-date]`, the older `claude-<major>-<minor>-<family>`, and wrappers like Bedrock's
+/// `us.anthropic.` and `-v1:0`.
+fn display_name_from_id(id: &str) -> Option<String> {
+	let (id, long_context) = match id.strip_suffix("[1m]") {
+		Some(base) => (base, true),
+		None => (id, false),
+	};
+	let id = id.split_once('@').map_or(id, |(base, _)| base);
+	let rest = &id[id.find("claude-")? + "claude-".len()..];
+	let rest = rest.split_once("-v").map_or(rest, |(base, _)| base);
+
+	let mut family = None;
+	let mut version = Vec::new();
+	for part in rest.split('-') {
+		if part.chars().all(|c| c.is_ascii_digit()) {
+			// Dates are eight digits, version parts one or two.
+			if part.len() <= 2 {
+				version.push(part);
+			}
+		} else if family.is_none() && part.chars().all(|c| c.is_ascii_alphabetic()) {
+			family = Some(part);
+		}
+	}
+
+	let family = family?;
+	if version.is_empty() {
+		return None;
+	}
+	let mut chars = family.chars();
+	let first = chars.next()?.to_ascii_uppercase();
+	let mut name = format!("{first}{} {}", chars.as_str(), version.join("."));
+	if long_context {
+		name.push_str(" (1M context)");
+	}
+
+	Some(name)
 }
 
 pub(super) fn model_id(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
@@ -175,5 +216,24 @@ mod tests {
 	#[test]
 	fn shorten_path_outside_home() {
 		assert_eq!(shorten_path("/tmp/test"), "/tmp/test");
+	}
+
+	#[test]
+	fn display_name_is_derived_from_model_ids() {
+		for (id, want) in [
+			("claude-opus-5-5", Some("Opus 5.5")),
+			("claude-fable-5-1", Some("Fable 5.1")),
+			("claude-haiku-4-5-20251001", Some("Haiku 4.5")),
+			("claude-opus-4-1", Some("Opus 4.1")),
+			("claude-sonnet-4-20250514", Some("Sonnet 4")),
+			("claude-3-5-sonnet-20241022", Some("Sonnet 3.5")),
+			("claude-opus-5-5[1m]", Some("Opus 5.5 (1M context)")),
+			("us.anthropic.claude-sonnet-5-5-v1:0", Some("Sonnet 5.5")),
+			("claude-opus-5-5@20260101", Some("Opus 5.5")),
+			("gpt-5", None),
+			("", None),
+		] {
+			assert_eq!(display_name_from_id(id).as_deref(), want, "{id}");
+		}
 	}
 }

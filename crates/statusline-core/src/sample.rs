@@ -2,7 +2,7 @@ use crate::constants::DIVIDER;
 use crate::context_window::{ContextWindow, CurrentUsage};
 use crate::format::{Percentage, Tokens};
 use crate::input::{
-	AgentInfo, CostInfo, EffortInfo, InputData, MissCause, ModelInfo, PrInfo, PromptCache,
+	AgentInfo, CostInfo, EffortInfo, InputData, MissCause, ModInfo, ModelInfo, PrInfo, PromptCache,
 	RateLimitPeriod, RateLimits, RepoInfo, ThinkingInfo, VimInfo, Workspace, WorktreeInfo,
 };
 use crate::segment::{AccountDisplay, GitCache, RenderContext};
@@ -20,6 +20,33 @@ pub struct SampleData {
 	pub account: AccountDisplay,
 	pub divider: String,
 	pub nerd_font: bool,
+}
+
+/// Live activity as the plugin would send it, so the editor preview shows the activity segments.
+fn sample_mod_info() -> ModInfo {
+	let now_ms = chrono::Utc::now().timestamp_millis();
+	serde_json::from_str(&format!(
+		r#"{{
+			"tools": [
+				{{"tool": "Bash", "detail": "cargo test -p statusline-core", "started_at_ms": {tool}}},
+				{{"tool": "Read", "detail": "src/main.rs", "started_at_ms": {now_ms}}}
+			],
+			"turn": {{"started_at_ms": {turn}, "last_duration_ms": 130000}},
+			"permission": {{"tool": "Bash", "since_ms": {permission}}},
+			"last_error": {{"kind": "overloaded", "detail": "529 Overloaded", "at_ms": {error}}},
+			"todos": {{"done": 3, "total": 7, "active": "Running tests"}},
+			"agents": {{"running": 3, "idle": 1}},
+			"compaction": {{"count": 2, "last_at_ms": {compacted}, "tokens_before": 182000,
+				"tokens_after": 21000, "running_since_ms": null}},
+			"autocompact": {{"enabled": true, "headroom_tokens": 38000}}
+		}}"#,
+		tool = now_ms - 12_000,
+		turn = now_ms - 102_000,
+		permission = now_ms - 45_000,
+		error = now_ms - 120_000,
+		compacted = now_ms - 14 * 60_000,
+	))
+	.expect("sample activity JSON parses")
 }
 
 impl SampleData {
@@ -120,7 +147,9 @@ impl SampleData {
 				}),
 				miss_causes: [("tools_changed".to_owned(), 2)].into_iter().collect(),
 				recache_tokens_if_cold: Some(Tokens::from(45_000)),
+				miss_times: Some(vec![last_miss - 600, last_miss]),
 			}),
+			mod_info: Some(sample_mod_info()),
 			pr: PrInfo {
 				number: Some(1234),
 				url: "https://github.com/ryanclark/statusline/pull/1234".to_owned(),

@@ -17,6 +17,21 @@ const REPORTED_KEYS: [&str; 4] = ["model", "context_window", "cost", "exceeds_20
 /// for its report, so it never finds its own snapshot pruned.
 const SNAPSHOT_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
+/// The longest a heartbeat may silence the native line, since a plugin that stops without a final heartbeat leaves
+/// the session with no line until it expires.
+const MAX_HEARTBEAT: Duration = Duration::from_secs(30);
+
+/// How long a native capture keeps the plugin's captures out, since native input is complete and the plugin's is not.
+const NATIVE_CAPTURE_FRESH: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+	/// Claude Code's own statusLine command, piped its real input.
+	Native,
+	/// The plugin's `--format spans` refresh, piped the input it rebuilt.
+	Plugin,
+}
+
 /// The session to report on when Claude runs `statusline` itself. Claude Code's own status line invocation may
 /// inherit `CLAUDECODE` too, but it always pipes JSON, while the Bash tool's stdin is empty.
 #[must_use]
@@ -43,19 +58,25 @@ struct Envelope {
 }
 
 /// Best effort, so a failed write never costs the status line its render.
-pub fn capture(raw: &[u8]) {
+pub fn capture(raw: &[u8], origin: Origin) {
 	if let Some(dir) = sessions_dir() {
-		capture_in(&dir, raw, SystemTime::now());
+		capture_in(&dir, raw, SystemTime::now(), origin);
 	}
 }
 
-fn capture_in(dir: &Path, raw: &[u8], now: SystemTime) {
-	let Ok(Envelope { session_id }) = serde_json::from_slice(raw) else {
+fn capture_in(dir: &Path, raw: &[u8], now: SystemTime, origin: Origin) {
+	let Some(session_id) = session_id(raw) else {
 		return;
 	};
-	let Some(path) = snapshot_path(dir, &session_id) else {
+	let (Some(path), Some(marker)) = (
+		session_file(dir, &session_id, "json"),
+		session_file(dir, &session_id, "native"),
+	) else {
 		return;
 	};
+	if origin == Origin::Plugin && captured_natively_since(&marker, now) {
+		return;
+	}
 	if !path.exists() {
 		prepare(dir, now);
 	}
@@ -63,12 +84,83 @@ fn capture_in(dir: &Path, raw: &[u8], now: SystemTime) {
 	// Renames are atomic, so a concurrent `statusline` run from Claude never reads a half-written file. The pid
 	// keeps overlapping renders from sharing a temp file.
 	let tmp = dir.join(format!(".{session_id}.{}.tmp", std::process::id()));
-	if fs::write(&tmp, raw)
-		.and_then(|()| fs::rename(&tmp, &path))
+	replace(&tmp, &path, raw);
+	if origin == Origin::Native {
+		let tmp = dir.join(format!(".{session_id}.{}.native.tmp", std::process::id()));
+		replace(&tmp, &marker, epoch_ms(now).to_string().as_bytes());
+	}
+}
+
+fn captured_natively_since(marker: &Path, now: SystemTime) -> bool {
+	fs::read_to_string(marker)
+		.ok()
+		.and_then(|text| text.trim().parse::<u64>().ok())
+		.is_some_and(|at| epoch_ms(now) < at.saturating_add(epoch_ms_of(NATIVE_CAPTURE_FRESH)))
+}
+
+/// Marks the session as drawn by the plugin until `ttl` from now, so the native line prints nothing. Best effort like
+/// `capture`.
+pub fn heartbeat(raw: &[u8], ttl: Duration) {
+	if let Some(dir) = sessions_dir() {
+		heartbeat_in(&dir, raw, SystemTime::now(), ttl);
+	}
+}
+
+fn heartbeat_in(dir: &Path, raw: &[u8], now: SystemTime, ttl: Duration) {
+	let Some(session_id) = session_id(raw) else {
+		return;
+	};
+	let Some(path) = session_file(dir, &session_id, "plugin") else {
+		return;
+	};
+	// Snapshot capture is off by default, so this may be the first write to a directory that does not exist yet.
+	if !path.exists() {
+		prepare(dir, now);
+	}
+
+	let expires = epoch_ms(now).saturating_add(epoch_ms_of(ttl.min(MAX_HEARTBEAT)));
+	let tmp = dir.join(format!(".{session_id}.{}.plugin.tmp", std::process::id()));
+	replace(&tmp, &path, expires.to_string().as_bytes());
+}
+
+/// A missing or unreadable heartbeat counts as expired, so a crashed plugin never leaves the session without a line.
+#[must_use]
+pub fn drawn_by_plugin(raw: &[u8]) -> bool {
+	sessions_dir().is_some_and(|dir| drawn_by_plugin_in(&dir, raw, SystemTime::now()))
+}
+
+fn drawn_by_plugin_in(dir: &Path, raw: &[u8], now: SystemTime) -> bool {
+	session_id(raw)
+		.and_then(|id| session_file(dir, &id, "plugin"))
+		.and_then(|path| fs::read_to_string(path).ok())
+		.and_then(|text| text.trim().parse::<u64>().ok())
+		.is_some_and(|expires| epoch_ms(now) < expires)
+}
+
+fn session_id(raw: &[u8]) -> Option<String> {
+	serde_json::from_slice::<Envelope>(raw)
+		.ok()
+		.map(|e| e.session_id)
+}
+
+fn replace(tmp: &Path, path: &Path, contents: &[u8]) {
+	if fs::write(tmp, contents)
+		.and_then(|()| fs::rename(tmp, path))
 		.is_err()
 	{
-		let _ = fs::remove_file(&tmp);
+		let _ = fs::remove_file(tmp);
 	}
+}
+
+fn epoch_ms(at: SystemTime) -> u64 {
+	epoch_ms_of(
+		at.duration_since(SystemTime::UNIX_EPOCH)
+			.unwrap_or_default(),
+	)
+}
+
+fn epoch_ms_of(d: Duration) -> u64 {
+	u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Runs once per session rather than per render. Snapshots carry paths and costs, so the directory is private,
@@ -90,7 +182,7 @@ fn prepare(dir: &Path, now: SystemTime) {
 		let path = entry.path();
 		let ours = path
 			.extension()
-			.is_some_and(|ext| ext == "json" || ext == "tmp");
+			.is_some_and(|ext| ext == "json" || ext == "plugin" || ext == "native" || ext == "tmp");
 		let stale = entry
 			.metadata()
 			.and_then(|m| m.modified())
@@ -103,7 +195,7 @@ fn prepare(dir: &Path, now: SystemTime) {
 
 pub fn print_report(session_id: &str) {
 	let snapshot = sessions_dir()
-		.and_then(|dir| snapshot_path(&dir, session_id))
+		.and_then(|dir| session_file(&dir, session_id, "json"))
 		.and_then(|path| Snapshot::load(&path));
 	// usage.json is rewritten in place, so stat it first: a refresh landing in between then overstates the age
 	// rather than passing old limits off as fresh.
@@ -281,13 +373,13 @@ fn sessions_dir() -> Option<PathBuf> {
 
 /// The id comes from stdin or the environment and becomes a file name, so anything beyond a plain token
 /// could escape the sessions directory.
-fn snapshot_path(dir: &Path, session_id: &str) -> Option<PathBuf> {
+fn session_file(dir: &Path, session_id: &str, ext: &str) -> Option<PathBuf> {
 	let valid = !session_id.is_empty()
 		&& session_id.len() <= 128
 		&& session_id
 			.bytes()
 			.all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
-	valid.then(|| dir.join(format!("{session_id}.json")))
+	valid.then(|| dir.join(format!("{session_id}.{ext}")))
 }
 
 #[cfg(test)]
@@ -371,7 +463,7 @@ mod tests {
 	fn capture_writes_the_piped_bytes_verbatim() {
 		let dir = temp_dir("capture");
 		let raw = piped("abc-123_x");
-		capture_in(&dir, &raw, SystemTime::now());
+		capture_in(&dir, &raw, SystemTime::now(), Origin::Plugin);
 
 		assert_eq!(fs::read(dir.join("abc-123_x.json")).unwrap(), raw);
 		assert_eq!(
@@ -381,7 +473,7 @@ mod tests {
 		);
 
 		let smaller = br#"{"session_id":"abc-123_x"}"#;
-		capture_in(&dir, smaller, SystemTime::now());
+		capture_in(&dir, smaller, SystemTime::now(), Origin::Plugin);
 		assert_eq!(fs::read(dir.join("abc-123_x.json")).unwrap(), smaller);
 
 		fs::remove_dir_all(&dir).unwrap();
@@ -395,7 +487,7 @@ mod tests {
 		let raw = serde_json::to_vec(&drifted).unwrap();
 		assert!(InputData::from_reader(raw.as_slice()).is_err());
 
-		capture_in(&dir, &raw, SystemTime::now());
+		capture_in(&dir, &raw, SystemTime::now(), Origin::Plugin);
 		assert_eq!(fs::read(dir.join("drifted.json")).unwrap(), raw);
 
 		fs::remove_dir_all(&dir).unwrap();
@@ -405,10 +497,15 @@ mod tests {
 	fn capture_ignores_input_without_a_plain_token_id() {
 		let dir = temp_dir("capture-unsafe");
 		for id in ["", "../escape", "a/b", "a.b", "..", &"x".repeat(129)] {
-			capture_in(&dir, &piped(id), SystemTime::now());
+			capture_in(&dir, &piped(id), SystemTime::now(), Origin::Plugin);
 		}
-		capture_in(&dir, b"not json", SystemTime::now());
-		capture_in(&dir, br#"{"cwd":"/tmp"}"#, SystemTime::now());
+		capture_in(&dir, b"not json", SystemTime::now(), Origin::Plugin);
+		capture_in(
+			&dir,
+			br#"{"cwd":"/tmp"}"#,
+			SystemTime::now(),
+			Origin::Plugin,
+		);
 
 		assert!(!dir.exists(), "nothing should have been written");
 	}
@@ -417,7 +514,7 @@ mod tests {
 	fn a_new_session_prunes_stale_snapshots_and_orphaned_temp_files() {
 		let dir = temp_dir("capture-prune");
 		let now = SystemTime::now();
-		capture_in(&dir, &piped("live"), now);
+		capture_in(&dir, &piped("live"), now, Origin::Plugin);
 
 		let stale = now - SNAPSHOT_TTL - HOUR;
 		for (name, modified) in [
@@ -432,17 +529,134 @@ mod tests {
 				.unwrap();
 		}
 
-		capture_in(&dir, &piped("live"), now);
+		capture_in(&dir, &piped("live"), now, Origin::Plugin);
 		assert!(
 			dir.join("gone.json").exists(),
 			"a render of a known session must not scan the directory"
 		);
 
-		capture_in(&dir, &piped("next"), now);
+		capture_in(&dir, &piped("next"), now, Origin::Plugin);
 		assert_eq!(
 			names(&dir),
 			["live.json", "next.json", "notes.txt", "recent.json"]
 		);
+
+		fs::remove_dir_all(&dir).unwrap();
+	}
+
+	#[test]
+	fn a_heartbeat_silences_the_native_line_until_it_expires() {
+		let dir = temp_dir("heartbeat");
+		let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_738_400_000);
+		let raw = piped("abc");
+		assert!(!drawn_by_plugin_in(&dir, &raw, now), "no heartbeat yet");
+
+		heartbeat_in(&dir, &raw, now, Duration::from_secs(10));
+		assert_eq!(
+			fs::read_to_string(dir.join("abc.plugin")).unwrap(),
+			"1738400010000"
+		);
+		assert_eq!(
+			names(&dir),
+			["abc.plugin"],
+			"the temp file must be renamed away"
+		);
+		assert!(drawn_by_plugin_in(&dir, &raw, now + Duration::from_secs(9)));
+		assert!(!drawn_by_plugin_in(
+			&dir,
+			&raw,
+			now + Duration::from_secs(10)
+		));
+		assert!(
+			!drawn_by_plugin_in(&dir, &piped("other"), now),
+			"a heartbeat covers only its own session"
+		);
+
+		fs::write(dir.join("abc.plugin"), "not a number").unwrap();
+		assert!(!drawn_by_plugin_in(&dir, &raw, now));
+
+		fs::remove_dir_all(&dir).unwrap();
+	}
+
+	#[test]
+	fn a_heartbeat_never_silences_the_native_line_past_the_cap() {
+		let dir = temp_dir("heartbeat-cap");
+		let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_738_400_000);
+		heartbeat_in(&dir, &piped("abc"), now, Duration::from_millis(1_802_000));
+		assert_eq!(
+			fs::read_to_string(dir.join("abc.plugin")).unwrap(),
+			"1738400030000"
+		);
+
+		fs::remove_dir_all(&dir).unwrap();
+	}
+
+	#[test]
+	fn a_fresh_native_capture_keeps_the_plugins_capture_out() {
+		let dir = temp_dir("capture-origin");
+		let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_738_400_000);
+		let native = piped("abc");
+		let mut rebuilt = input("abc");
+		rebuilt["model"]["display_name"] = "".into();
+		let rebuilt = serde_json::to_vec(&rebuilt).unwrap();
+
+		capture_in(&dir, &native, now, Origin::Native);
+		assert_eq!(names(&dir), ["abc.json", "abc.native"]);
+		capture_in(
+			&dir,
+			&rebuilt,
+			now + Duration::from_secs(29),
+			Origin::Plugin,
+		);
+		assert_eq!(fs::read(dir.join("abc.json")).unwrap(), native);
+
+		capture_in(
+			&dir,
+			&rebuilt,
+			now + Duration::from_secs(30),
+			Origin::Plugin,
+		);
+		assert_eq!(
+			fs::read(dir.join("abc.json")).unwrap(),
+			rebuilt,
+			"a native line that stopped running hands capture back to the plugin"
+		);
+
+		capture_in(&dir, &native, now + Duration::from_secs(31), Origin::Native);
+		assert_eq!(fs::read(dir.join("abc.json")).unwrap(), native);
+
+		fs::remove_dir_all(&dir).unwrap();
+	}
+
+	#[test]
+	fn heartbeat_ignores_input_without_a_plain_token_id() {
+		let dir = temp_dir("heartbeat-unsafe");
+		for id in ["", "../escape", "a/b", "a.b", ".."] {
+			heartbeat_in(&dir, &piped(id), SystemTime::now(), HOUR);
+		}
+		heartbeat_in(&dir, b"not json", SystemTime::now(), HOUR);
+
+		assert!(!dir.exists(), "nothing should have been written");
+	}
+
+	#[test]
+	fn a_new_heartbeat_prunes_stale_ones_and_keeps_live_ones() {
+		let dir = temp_dir("heartbeat-prune");
+		let now = SystemTime::now();
+		fs::create_dir_all(&dir).unwrap();
+		for (name, modified) in [
+			("gone.plugin", now - SNAPSHOT_TTL - HOUR),
+			(".gone.123.plugin.tmp", now - SNAPSHOT_TTL - HOUR),
+			("recent.plugin", now - HOUR),
+		] {
+			File::create(dir.join(name))
+				.unwrap()
+				.set_modified(modified)
+				.unwrap();
+		}
+
+		heartbeat_in(&dir, &piped("next"), now, HOUR);
+		assert_eq!(names(&dir), ["next.plugin", "recent.plugin"]);
 
 		fs::remove_dir_all(&dir).unwrap();
 	}
@@ -456,7 +670,7 @@ mod tests {
 		fs::create_dir_all(&dir).unwrap();
 		fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
 
-		capture_in(&dir, &piped("abc"), SystemTime::now());
+		capture_in(&dir, &piped("abc"), SystemTime::now(), Origin::Plugin);
 		let mode = fs::metadata(&dir).unwrap().permissions().mode();
 		assert_eq!(mode & 0o777, 0o700);
 
@@ -467,7 +681,7 @@ mod tests {
 	fn snapshot_load_reads_content_and_mtime() {
 		let dir = temp_dir("snapshot-load");
 		let raw = piped("abc");
-		capture_in(&dir, &raw, SystemTime::now());
+		capture_in(&dir, &raw, SystemTime::now(), Origin::Plugin);
 		let path = dir.join("abc.json");
 		let written = SystemTime::UNIX_EPOCH + Duration::from_secs(1_738_400_000);
 		File::options()

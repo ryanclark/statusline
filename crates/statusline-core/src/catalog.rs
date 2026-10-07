@@ -10,6 +10,7 @@ pub enum Category {
 	Account,
 	Layout,
 	Subagent,
+	Activity,
 }
 
 impl Category {
@@ -24,6 +25,7 @@ impl Category {
 			Self::Account => "Account",
 			Self::Layout => "Layout",
 			Self::Subagent => "Subagent",
+			Self::Activity => "Activity",
 		}
 	}
 }
@@ -40,6 +42,9 @@ pub struct OptionSet {
 	pub cache_state: bool,
 	/// Countdown and clock time options, for segments that count down to a reset or expiry.
 	pub countdown: bool,
+	pub within: bool,
+	/// Whether the last cache miss spells out the tool and system prompt deltas.
+	pub details: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +66,8 @@ const ICON_TEXT: OptionSet = OptionSet {
 	capitalize: false,
 	cache_state: false,
 	countdown: false,
+	within: false,
+	details: false,
 };
 
 const COLORED_TEXT: OptionSet = OptionSet {
@@ -72,6 +79,8 @@ const COLORED_TEXT: OptionSet = OptionSet {
 	capitalize: false,
 	cache_state: false,
 	countdown: false,
+	within: false,
+	details: false,
 };
 
 const NO_OPTIONS: OptionSet = OptionSet {
@@ -83,6 +92,8 @@ const NO_OPTIONS: OptionSet = OptionSet {
 	capitalize: false,
 	cache_state: false,
 	countdown: false,
+	within: false,
+	details: false,
 };
 
 const STYLED_TEXT: OptionSet = OptionSet {
@@ -94,6 +105,8 @@ const STYLED_TEXT: OptionSet = OptionSet {
 	capitalize: false,
 	cache_state: false,
 	countdown: false,
+	within: false,
+	details: false,
 };
 
 #[must_use]
@@ -215,16 +228,23 @@ static CATALOG: &[SegmentMeta] = &[
 		id: "cache_misses",
 		label: "Cache misses",
 		category: Category::Context,
-		description: "Prompt cache misses this session",
-		options: COLORED_TEXT,
+		description: "Prompt cache misses in the last 30m, or the `within` window",
+		options: OptionSet {
+			within: true,
+			..COLORED_TEXT
+		},
 	},
 	SegmentMeta {
 		ty: SegmentType::CacheLastMiss,
 		id: "cache_last_miss",
 		label: "Last cache miss",
 		category: Category::Context,
-		description: "Cause of the last prompt cache miss (or `miss` when undiagnosed) and how long ago",
-		options: COLORED_TEXT,
+		description: "Cause and age of the last prompt cache miss, hidden after 30m or `within`",
+		options: OptionSet {
+			within: true,
+			details: true,
+			..COLORED_TEXT
+		},
 	},
 	SegmentMeta {
 		ty: SegmentType::Exceeds200k,
@@ -365,6 +385,8 @@ static CATALOG: &[SegmentMeta] = &[
 			capitalize: false,
 			cache_state: false,
 			countdown: false,
+			within: false,
+			details: false,
 		},
 	},
 	SegmentMeta {
@@ -518,6 +540,8 @@ static CATALOG: &[SegmentMeta] = &[
 			capitalize: true,
 			cache_state: false,
 			countdown: false,
+			within: false,
+			details: false,
 		},
 	},
 	SegmentMeta {
@@ -535,6 +559,8 @@ static CATALOG: &[SegmentMeta] = &[
 			capitalize: false,
 			cache_state: false,
 			countdown: false,
+			within: false,
+			details: false,
 		},
 	},
 	SegmentMeta {
@@ -592,6 +618,70 @@ static CATALOG: &[SegmentMeta] = &[
 		category: Category::Subagent,
 		description: "What the task is doing right now, from its live label",
 		options: STYLED_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::CurrentTool,
+		id: "current_tool",
+		label: "Current tool",
+		category: Category::Activity,
+		description: "Tool call in flight with its command or path and how long it has run, `+N` for parallel calls",
+		options: ICON_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::TurnElapsed,
+		id: "turn_elapsed",
+		label: "Turn elapsed",
+		category: Category::Activity,
+		description: "Time the running turn has taken, or the last turn's length (dimmed) between turns",
+		options: ICON_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::PermissionPending,
+		id: "permission_pending",
+		label: "Permission pending",
+		category: Category::Activity,
+		description: "Tool waiting for your approval or running after it, and for how long",
+		options: ICON_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::LastApiError,
+		id: "last_api_error",
+		label: "Last API error",
+		category: Category::Activity,
+		description: "Why the last turn failed (e.g. overloaded, rate limited) and how long ago",
+		options: ICON_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::TodoProgress,
+		id: "todo_progress",
+		label: "Todo progress",
+		category: Category::Activity,
+		description: "Todo items done out of total, with the active item",
+		options: ICON_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::Agents,
+		id: "agents",
+		label: "Agents",
+		category: Category::Activity,
+		description: "Background agents running and idle",
+		options: ICON_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::Compaction,
+		id: "compaction",
+		label: "Compaction",
+		category: Category::Activity,
+		description: "Running compaction, or how many happened, when, and the tokens before and after",
+		options: ICON_TEXT,
+	},
+	SegmentMeta {
+		ty: SegmentType::AutocompactHeadroom,
+		id: "autocompact_headroom",
+		label: "Autocompact headroom",
+		category: Category::Activity,
+		description: "Tokens left before autocompact triggers, or `autocompact off`",
+		options: ICON_TEXT,
 	},
 ];
 
@@ -777,8 +867,37 @@ mod tests {
 	}
 
 	#[test]
+	fn activity_segments_take_the_icon_options() {
+		let activity: Vec<&SegmentMeta> = catalog()
+			.iter()
+			.filter(|m| m.category == Category::Activity)
+			.collect();
+		assert_eq!(activity.len(), 8);
+		for m in activity {
+			assert_eq!(m.options, ICON_TEXT, "{}", m.id);
+		}
+	}
+
+	#[test]
+	fn within_and_details_belong_to_the_cache_miss_segments() {
+		let within: Vec<&str> = catalog()
+			.iter()
+			.filter(|m| m.options.within)
+			.map(|m| m.id)
+			.collect();
+		assert_eq!(within, vec!["cache_misses", "cache_last_miss"]);
+		let details: Vec<&str> = catalog()
+			.iter()
+			.filter(|m| m.options.details)
+			.map(|m| m.id)
+			.collect();
+		assert_eq!(details, vec!["cache_last_miss"]);
+	}
+
+	#[test]
 	fn category_labels_non_empty() {
 		for c in [
+			Category::Activity,
 			Category::Context,
 			Category::RateLimits,
 			Category::Cost,

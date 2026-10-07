@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Formatter;
+use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
 pub struct Cents(f64);
@@ -205,6 +206,51 @@ pub fn format_duration_secs(total_secs: u64) -> String {
 	}
 }
 
+#[must_use]
+pub fn format_duration_ms(ms: u64) -> String {
+	format_duration_secs(ms / 1000)
+}
+
+/// Parses `"30m"`, `"2h"`, `"90s"`, `"1d"` or a mix like `"1h30m"`.
+#[must_use]
+pub fn parse_duration(s: &str) -> Option<Duration> {
+	let mut total: u64 = 0;
+	let mut digits = String::new();
+	for c in s.chars() {
+		if c.is_ascii_digit() {
+			digits.push(c);
+			continue;
+		}
+		let unit = match c {
+			's' => 1,
+			'm' => 60,
+			'h' => 3600,
+			'd' => 86_400,
+			_ => return None,
+		};
+		let n: u64 = digits.parse().ok()?;
+		total = total.checked_add(n.checked_mul(unit)?)?;
+		digits.clear();
+	}
+	if !digits.is_empty() || s.is_empty() {
+		return None;
+	}
+
+	Some(Duration::from_secs(total))
+}
+
+/// Writes a window in its largest whole unit, so `"2h"` reads back as written instead of `"2h0m"`.
+#[must_use]
+pub fn format_window(window: Duration) -> String {
+	let secs = window.as_secs();
+	for (unit, suffix) in [(86_400, "d"), (3600, "h"), (60, "m")] {
+		if secs >= unit && secs.is_multiple_of(unit) {
+			return format!("{}{suffix}", secs / unit);
+		}
+	}
+	format!("{secs}s")
+}
+
 /// Time left until the epoch second `at`, or `None` once it has passed.
 #[must_use]
 pub fn countdown_to(at: i64, now: DateTime<Utc>) -> Option<String> {
@@ -292,6 +338,37 @@ fn parse_hex_color(hex: &str) -> Option<DynColors> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn parse_duration_reads_each_unit_and_mixes() {
+		for (s, want) in [
+			("30m", Some(1800)),
+			("2h", Some(7200)),
+			("90s", Some(90)),
+			("1d", Some(86_400)),
+			("1h30m", Some(5400)),
+			("0m", Some(0)),
+			("", None),
+			("30", None),
+			("soon", None),
+		] {
+			assert_eq!(parse_duration(s), want.map(Duration::from_secs), "{s}");
+		}
+	}
+
+	#[test]
+	fn format_window_uses_the_largest_whole_unit() {
+		for (secs, want) in [
+			(45, "45s"),
+			(90, "90s"),
+			(1800, "30m"),
+			(5400, "90m"),
+			(7200, "2h"),
+			(86_400, "1d"),
+		] {
+			assert_eq!(format_window(Duration::from_secs(secs)), want);
+		}
+	}
 
 	#[test]
 	fn cents_rounds_to_whole_dollars() {

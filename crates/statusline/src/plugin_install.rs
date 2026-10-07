@@ -1,0 +1,1407 @@
+//! `statusline install --plugin` and `--native`. Plugin state goes through `claude plugin`, and only `statusLine` and
+//! `subagentStatusLine` are edited directly.
+
+use crate::format::Percentage;
+use crate::install::{Ask, offer_subagent, prompt_yes_no};
+use crate::settings::Settings;
+use crate::util::home_dir;
+use eyre::{Result, WrapErr, bail, eyre};
+use owo_colors::OwoColorize;
+use serde_json::Value;
+use statusline_core::claude_settings::{
+	Edit, Entry, Outcome, Removal, ensure_entries, is_ours, read_settings, remove_entry, replay,
+	restore_entry, write_settings,
+};
+use std::ffi::OsStr;
+use std::io::{IsTerminal, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+
+const PLUGIN_ID: &str = "statusline@ryanclark";
+const MARKETPLACE: &str = "ryanclark";
+const MARKETPLACE_SOURCE: &str = "ryanclark/statusline";
+/// The first release that loads plugin hooks modules. An older CLI installs the plugin but never runs it.
+const MIN_CLAUDE: semver::Version = semver::Version::new(2, 1, 287);
+
+pub(crate) struct Context {
+	pub claude: PathBuf,
+	pub home: PathBuf,
+	pub interactive: bool,
+	pub dry_run: bool,
+}
+
+impl Context {
+	fn claude_settings(&self) -> PathBuf {
+		self.home.join(".claude").join("settings.json")
+	}
+
+	fn data_dir(&self) -> PathBuf {
+		self.home.join(".statusline")
+	}
+
+	fn native_file(&self) -> PathBuf {
+		self.data_dir().join("native-statusline.json")
+	}
+
+	fn claude(&self) -> Claude<'_> {
+		Claude {
+			program: &self.claude,
+			cwd: &self.home,
+		}
+	}
+}
+
+pub(crate) struct PluginOptions {
+	pub keep_native: bool,
+	pub subagent: bool,
+	pub five_hour_reset_threshold: Option<Percentage>,
+	pub seven_day_reset_threshold: Option<Percentage>,
+}
+
+pub(crate) enum Mode {
+	Plugin(PluginOptions),
+	Native { remove_marketplace: bool },
+}
+
+pub(crate) fn run(mode: Mode, claude: PathBuf, dry_run: bool) -> Result<()> {
+	let ctx = Context {
+		claude,
+		home: home_dir()?,
+		interactive: std::io::stdin().is_terminal(),
+		dry_run,
+	};
+	let mut out = std::io::stdout();
+	let mut ask = prompt_yes_no;
+	match mode {
+		Mode::Plugin(opts) => {
+			let exe = std::env::current_exe()?;
+			let binary = locate_binary(std::env::var_os("PATH").as_deref(), &exe);
+			install_plugin(&ctx, &binary, &opts, &mut out, &mut ask)
+		}
+		Mode::Native { remove_marketplace } => {
+			install_native(&ctx, remove_marketplace, &mut out, &mut ask)
+		}
+	}
+}
+
+fn install_plugin(
+	ctx: &Context,
+	binary: &Path,
+	opts: &PluginOptions,
+	out: &mut dyn Write,
+	ask: Ask<'_>,
+) -> Result<()> {
+	let claude = ctx.claude();
+	let version = claude.version()?;
+	if version < MIN_CLAUDE {
+		bail!(
+			"Claude Code {MIN_CLAUDE} or newer is required for the plugin and {} is {version}. Run `claude update`, or \
+			 keep the native line with `statusline install`",
+			ctx.claude.display()
+		);
+	}
+	ok(out, format_args!("Claude Code {version}"))?;
+
+	ensure_settings(ctx, opts, out)?;
+	ensure_marketplace(ctx, &claude, out)?;
+	let enabled = ensure_plugin(ctx, &claude, binary, out)?;
+
+	// Read after the `claude` calls above, which write this file. `commit` replays the edits onto a fresh read.
+	let path = ctx.claude_settings();
+	let original = read_settings(&path)?;
+	let mut settings = original.clone();
+	let mut actions: Vec<Action> =
+		plan_native_line(ctx, opts.keep_native, enabled, &mut settings, out, ask)?
+			.into_iter()
+			.collect();
+
+	if settings.get(Entry::Subagent.key()).is_some() {
+		ok(out, "Kept subagent status line")?;
+	} else if opts.subagent
+		|| offer_subagent(ctx.interactive, || {
+			ask("Also install the subagent status line?", true)
+		}) {
+		ensure_entries(&mut settings, &[Entry::Subagent], &mut |_| false)?;
+		actions.push(Action::new(
+			Entry::Subagent,
+			"Configured the subagent status line",
+			"configure the subagent status line",
+		));
+	}
+
+	commit(ctx, &path, &original, &settings, &actions, out)?;
+
+	if ctx.dry_run {
+		writeln!(out, "{}", "Dry run: nothing was changed".dimmed())?;
+	} else {
+		writeln!(
+			out,
+			"{} Restart open Claude Code sessions to load it. To go back: {}",
+			"Plugin installed.".green().bold(),
+			"statusline install --native".green()
+		)?;
+	}
+
+	Ok(())
+}
+
+fn ensure_settings(ctx: &Context, opts: &PluginOptions, out: &mut dyn Write) -> Result<()> {
+	let path = ctx.data_dir().join("settings.json");
+	let existed = path.exists();
+	if ctx.dry_run {
+		return if existed {
+			skip(out, format_args!("Kept {}", path.display()))
+		} else {
+			would(
+				out,
+				format_args!("save default settings to {}", path.display()),
+			)
+		};
+	}
+	Settings::ensure_at(
+		&path,
+		opts.five_hour_reset_threshold,
+		opts.seven_day_reset_threshold,
+	)?;
+	if existed {
+		skip(out, format_args!("Kept {}", path.display()))
+	} else {
+		ok(out, "Saved default settings")
+	}
+}
+
+fn ensure_marketplace(ctx: &Context, claude: &Claude<'_>, out: &mut dyn Write) -> Result<()> {
+	if has_marketplace(&claude.list(&["plugin", "marketplace", "list", "--json"])?) {
+		return skip(out, format_args!("Marketplace {MARKETPLACE} already added"));
+	}
+	let args = [
+		"plugin",
+		"marketplace",
+		"add",
+		MARKETPLACE_SOURCE,
+		"--scope",
+		"user",
+		"--sparse",
+		".claude-plugin",
+		"plugin",
+		"--json",
+	];
+	if ctx.dry_run {
+		return would_run(out, &ctx.claude, &args);
+	}
+	claude.mutate(&args, None)?;
+	ok(out, format_args!("Added marketplace {MARKETPLACE}"))
+}
+
+fn ensure_plugin(
+	ctx: &Context,
+	claude: &Claude<'_>,
+	binary: &Path,
+	out: &mut dyn Write,
+) -> Result<bool> {
+	let binary = binary.to_string_lossy();
+	let Some(plugin) = find_plugin(&claude.list(&["plugin", "list", "--json"])?).cloned() else {
+		let config = format!("binary={binary}");
+		let args = [
+			"plugin", "install", PLUGIN_ID, "-s", "user", "--config", &config, "--json",
+		];
+		if ctx.dry_run {
+			would_run(out, &ctx.claude, &args)?;
+		} else {
+			claude.mutate(&args, None)?;
+			ok(out, format_args!("Installed {PLUGIN_ID} (binary={binary})"))?;
+		}
+		// A fresh install is enabled, so only a plugin that was already installed can be disabled.
+		return Ok(true);
+	};
+
+	let enabled = plugin.get("enabled").and_then(Value::as_bool) != Some(false);
+	if !enabled {
+		warn(
+			out,
+			format_args!(
+				"{PLUGIN_ID} is installed but disabled. Run `claude plugin enable {PLUGIN_ID}`"
+			),
+		)?;
+	}
+	let current = read_settings(&ctx.claude_settings())
+		.ok()
+		.and_then(|s| configured_binary(&s).map(str::to_owned));
+	if current.as_deref() == Some(&*binary) {
+		skip(
+			out,
+			format_args!("{PLUGIN_ID} already installed with binary={binary}"),
+		)?;
+		return Ok(enabled);
+	}
+
+	let args = ["plugin", "configure", PLUGIN_ID, "--values-stdin"];
+	let values = serde_json::json!({ "binary": binary }).to_string();
+	if ctx.dry_run {
+		would_run(out, &ctx.claude, &args)?;
+		writeln!(out, "    with stdin {values}")?;
+	} else {
+		claude.mutate(&args, Some(&values))?;
+		ok(
+			out,
+			format_args!("Configured {PLUGIN_ID} (binary={binary})"),
+		)?;
+	}
+
+	Ok(enabled)
+}
+
+/// Saves the native statusLine and removes it unless it should stay, returning the removal to commit.
+fn plan_native_line(
+	ctx: &Context,
+	keep_native: bool,
+	plugin_enabled: bool,
+	settings: &mut Value,
+	out: &mut dyn Write,
+	ask: Ask<'_>,
+) -> Result<Option<Action>> {
+	let Some(current) = settings.get(Entry::StatusLine.key()).cloned() else {
+		skip(out, "No native statusLine to keep or remove")?;
+		return Ok(None);
+	};
+	save_native(ctx, &current, out)?;
+
+	if keep_native {
+		if is_ours(Entry::StatusLine, &current) {
+			ok(
+				out,
+				"Kept native statusLine as the fallback. It stays silent while the plugin draws",
+			)?;
+		} else {
+			warn(
+				out,
+				format_args!(
+					"Kept your statusLine ({}). It draws alongside the plugin. Rerun without --keep-native to drop it",
+					describe(&current)
+				),
+			)?;
+		}
+		return Ok(None);
+	}
+	if !plugin_enabled {
+		// Nothing else draws while the plugin is disabled.
+		warn(
+			out,
+			format_args!(
+				"Kept the native statusLine ({}) because {PLUGIN_ID} is disabled. Enable it, then rerun statusline \
+				 install --plugin",
+				describe(&current)
+			),
+		)?;
+		return Ok(None);
+	}
+
+	let removal = remove_entry(settings, Entry::StatusLine, &mut |_, value| {
+		ctx.interactive
+			&& ask(
+				&format!(
+					"Remove your own statusLine ({})? It is saved for `statusline install --native`",
+					describe(value)
+				),
+				false,
+			)
+	})?;
+	match removal {
+		Removal::Removed => Ok(Some(Action::new(
+			Entry::StatusLine,
+			"Removed native statusLine",
+			"remove the native statusLine",
+		))),
+		Removal::Declined => {
+			skip(
+				out,
+				format_args!(
+					"Kept your statusLine ({}), so it draws alongside the plugin",
+					describe(&current)
+				),
+			)?;
+			Ok(None)
+		}
+		Removal::Absent => Ok(None),
+	}
+}
+
+fn install_native(
+	ctx: &Context,
+	remove_marketplace: bool,
+	out: &mut dyn Write,
+	ask: Ask<'_>,
+) -> Result<()> {
+	// Restore first, so a failed restore leaves the plugin drawing rather than no line at all.
+	let path = ctx.claude_settings();
+	let original = read_settings(&path)?;
+	let mut settings = original.clone();
+	let saved = read_native(ctx)?;
+	let value = saved.clone().unwrap_or_else(|| Entry::StatusLine.desired());
+	let restored = restore_entry(&mut settings, Entry::StatusLine, value.clone(), &mut |_| {
+		ctx.interactive
+			&& ask(
+				&format!(
+					"statusLine is set to {}. Replace it with {}?",
+					settings_value(&original),
+					describe(&value)
+				),
+				false,
+			)
+	})?;
+	let mut actions = Vec::new();
+	match restored {
+		Outcome::Written if saved.is_some() => {
+			actions.push(Action {
+				entry: Entry::StatusLine,
+				done: format!("Restored native statusLine ({})", describe(&value)),
+				planned: format!("restore native statusLine ({})", describe(&value)),
+			});
+		}
+		Outcome::Written => actions.push(Action::new(
+			Entry::StatusLine,
+			"Configured the native statusLine",
+			"configure the native statusLine",
+		)),
+		Outcome::Kept => skip(out, "Native statusLine already set")?,
+		Outcome::Skipped => skip(out, "Left the native statusLine as it was")?,
+	}
+	commit(ctx, &path, &original, &settings, &actions, out)?;
+
+	// Rollback must work when `claude` is missing or broken, so plugin failures are reported and the rest still runs.
+	let claude = ctx.claude();
+	let mut failed = None;
+	if let Err(e) = uninstall_plugin(ctx, &claude, out) {
+		warn(out, format_args!("Skipped the plugin uninstall: {e}"))?;
+		failed = Some(e);
+	}
+	if remove_marketplace && let Err(e) = drop_marketplace(ctx, &claude, out) {
+		warn(out, format_args!("Skipped the marketplace removal: {e}"))?;
+		failed = failed.or(Some(e));
+	}
+
+	if ctx.dry_run {
+		writeln!(out, "{}", "Dry run: nothing was changed".dimmed())?;
+	} else if failed.is_none() {
+		writeln!(
+			out,
+			"{} Restart open Claude Code sessions to apply it",
+			"Native statusLine installed.".green().bold()
+		)?;
+	}
+
+	failed.map_or(Ok(()), Err)
+}
+
+fn uninstall_plugin(ctx: &Context, claude: &Claude<'_>, out: &mut dyn Write) -> Result<()> {
+	if find_plugin(&claude.list(&["plugin", "list", "--json"])?).is_none() {
+		return skip(out, format_args!("{PLUGIN_ID} is not installed"));
+	}
+	let args = ["plugin", "uninstall", PLUGIN_ID, "-s", "user", "--json"];
+	if ctx.dry_run {
+		would_run(out, &ctx.claude, &args)
+	} else if claude.mutate_unless(&args, "not_installed")? {
+		ok(out, format_args!("Uninstalled {PLUGIN_ID}"))
+	} else {
+		skip(out, format_args!("{PLUGIN_ID} is not installed"))
+	}
+}
+
+fn drop_marketplace(ctx: &Context, claude: &Claude<'_>, out: &mut dyn Write) -> Result<()> {
+	if !has_marketplace(&claude.list(&["plugin", "marketplace", "list", "--json"])?) {
+		return skip(out, format_args!("Marketplace {MARKETPLACE} is not added"));
+	}
+	let args = [
+		"plugin",
+		"marketplace",
+		"remove",
+		MARKETPLACE,
+		"--scope",
+		"user",
+		"--json",
+	];
+	if ctx.dry_run {
+		would_run(out, &ctx.claude, &args)
+	} else if claude.mutate_unless(&args, "not_configured")? {
+		ok(out, format_args!("Removed marketplace {MARKETPLACE}"))
+	} else {
+		skip(out, format_args!("Marketplace {MARKETPLACE} is not added"))
+	}
+}
+
+/// Backs up and writes Claude Code's settings only when something changed. Edits are replayed onto the file as it is
+/// now, and one whose entry changed underneath is skipped.
+fn commit(
+	ctx: &Context,
+	path: &Path,
+	original: &Value,
+	settings: &Value,
+	actions: &[Action],
+	out: &mut dyn Write,
+) -> Result<()> {
+	let edits = Edit::between(original, settings, &[Entry::StatusLine, Entry::Subagent]);
+	if edits.is_empty() {
+		return Ok(());
+	}
+	if ctx.dry_run {
+		for action in actions {
+			would(out, &action.planned)?;
+		}
+		return would(out, format_args!("back up and update {}", path.display()));
+	}
+
+	let current = read_settings(path)?;
+	let mut next = current.clone();
+	let stale = replay(&mut next, &edits)?;
+	for entry in &stale {
+		warn(
+			out,
+			format_args!(
+				"{} changed while waiting, so it was left as it now is",
+				entry.key()
+			),
+		)?;
+	}
+	if next == current {
+		return Ok(());
+	}
+
+	if path.exists() {
+		let backups = ctx.data_dir().join("backups");
+		std::fs::create_dir_all(&backups)?;
+		let millis = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map_or(0, |d| d.as_millis());
+		let backup = backups.join(format!("claude-settings.{millis}.json"));
+		std::fs::copy(path, &backup).wrap_err_with(|| format!("backing up {}", path.display()))?;
+		ok(
+			out,
+			format_args!("Backed up {} to {}", path.display(), backup.display()),
+		)?;
+	}
+	write_settings(path, &next)?;
+	for action in actions.iter().filter(|a| !stale.contains(&a.entry)) {
+		ok(out, &action.done)?;
+	}
+
+	Ok(())
+}
+
+/// Saves the user's line, ours or not, for `--native` to restore. A rerun finds no statusLine, so the saved one is
+/// never overwritten.
+fn save_native(ctx: &Context, current: &Value, out: &mut dyn Write) -> Result<()> {
+	if read_native(ctx)?.as_ref() == Some(current) {
+		return Ok(());
+	}
+	let file = ctx.native_file();
+	if ctx.dry_run {
+		return would(
+			out,
+			format_args!("save the native statusLine to {}", file.display()),
+		);
+	}
+	std::fs::create_dir_all(ctx.data_dir())?;
+	std::fs::write(&file, serde_json::to_string_pretty(current)?)?;
+	ok(
+		out,
+		format_args!("Saved the native statusLine to {}", file.display()),
+	)
+}
+
+fn read_native(ctx: &Context) -> Result<Option<Value>> {
+	let file = ctx.native_file();
+	match std::fs::read_to_string(&file) {
+		Ok(data) => Ok(Some(
+			serde_json::from_str(&data).wrap_err_with(|| format!("reading {}", file.display()))?,
+		)),
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+		Err(e) => Err(e.into()),
+	}
+}
+
+/// Prefers a PATH entry that resolves to this executable, so a Homebrew install stores /opt/homebrew/bin/statusline,
+/// which survives `brew upgrade`.
+fn locate_binary(path_var: Option<&OsStr>, exe: &Path) -> PathBuf {
+	let Ok(target) = exe.canonicalize() else {
+		return exe.to_path_buf();
+	};
+	path_var
+		.into_iter()
+		.flat_map(std::env::split_paths)
+		.filter(|dir| dir.is_absolute())
+		.map(|dir| dir.join("statusline"))
+		.find(|candidate| candidate.canonicalize().is_ok_and(|c| c == target))
+		.unwrap_or_else(|| exe.to_path_buf())
+}
+
+fn has_marketplace(list: &[Value]) -> bool {
+	list.iter()
+		.any(|m| m.get("name").and_then(Value::as_str) == Some(MARKETPLACE))
+}
+
+/// Only the user-scope install is ours, since that is the scope `--plugin` installs into and `--native` removes from.
+fn find_plugin(list: &[Value]) -> Option<&Value> {
+	list.iter().find(|p| {
+		p.get("id").and_then(Value::as_str) == Some(PLUGIN_ID)
+			&& p.get("scope")
+				.and_then(Value::as_str)
+				.is_none_or(|s| s == "user")
+	})
+}
+
+fn configured_binary(settings: &Value) -> Option<&str> {
+	settings
+		.get("pluginConfigs")?
+		.get(PLUGIN_ID)?
+		.get("options")?
+		.get("binary")?
+		.as_str()
+}
+
+fn parse_version(stdout: &str) -> Option<semver::Version> {
+	semver::Version::parse(stdout.split_whitespace().next()?).ok()
+}
+
+/// The `--json` result of a mutating command, printed as the last line of stdout.
+fn result_line(stdout: &str) -> Option<Value> {
+	let line = stdout.lines().rev().find(|l| !l.trim().is_empty())?;
+	serde_json::from_str(line).ok().filter(Value::is_object)
+}
+
+fn describe(value: &Value) -> String {
+	value
+		.get("command")
+		.and_then(Value::as_str)
+		.map_or_else(|| value.to_string(), str::to_owned)
+}
+
+fn settings_value(settings: &Value) -> String {
+	settings
+		.get(Entry::StatusLine.key())
+		.map_or_else(|| "nothing".to_owned(), describe)
+}
+
+/// A settings edit, worded for both the applied message and the dry run.
+struct Action {
+	entry: Entry,
+	done: String,
+	planned: String,
+}
+
+impl Action {
+	fn new(entry: Entry, done: &str, planned: &str) -> Self {
+		Self {
+			entry,
+			done: done.to_owned(),
+			planned: planned.to_owned(),
+		}
+	}
+}
+
+struct Claude<'a> {
+	program: &'a Path,
+	/// The home dir, so project settings from the current directory do not leak into the lists.
+	cwd: &'a Path,
+}
+
+impl Claude<'_> {
+	fn run(&self, args: &[&str], stdin: Option<&str>) -> Result<Output> {
+		let mut child = Command::new(self.program)
+			.args(args)
+			.current_dir(self.cwd)
+			// A child waiting on a prompt nobody can see would hang the install.
+			.stdin(if stdin.is_some() {
+				Stdio::piped()
+			} else {
+				Stdio::null()
+			})
+			.stdout(Stdio::piped())
+			.stderr(Stdio::piped())
+			.spawn()
+			.wrap_err_with(|| {
+				format!(
+					"running {} (pass --claude <path> if it is not on PATH)",
+					self.program.display()
+				)
+			})?;
+		if let Some(input) = stdin
+			&& let Some(mut pipe) = child.stdin.take()
+		{
+			pipe.write_all(input.as_bytes())?;
+		}
+
+		Ok(child.wait_with_output()?)
+	}
+
+	fn ok_stdout(&self, args: &[&str], stdin: Option<&str>) -> Result<String> {
+		let output = self.run(args, stdin)?;
+		if !output.status.success() {
+			return Err(failure(args, &output));
+		}
+
+		Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+	}
+
+	fn version(&self) -> Result<semver::Version> {
+		let stdout = self.ok_stdout(&["--version"], None)?;
+		parse_version(&stdout).ok_or_else(|| {
+			eyre!(
+				"could not read a version from `{} --version`: {}",
+				self.program.display(),
+				stdout.trim()
+			)
+		})
+	}
+
+	fn list(&self, args: &[&str]) -> Result<Vec<Value>> {
+		serde_json::from_str(&self.ok_stdout(args, None)?)
+			.wrap_err_with(|| format!("parsing `claude {}`", args.join(" ")))
+	}
+
+	fn mutate(&self, args: &[&str], stdin: Option<&str>) -> Result<()> {
+		self.ok_stdout(args, stdin).map(drop)
+	}
+
+	/// Returns `Ok(false)` when the command fails with the `failureCode` `already`, meaning the thing was already gone.
+	fn mutate_unless(&self, args: &[&str], already: &str) -> Result<bool> {
+		let output = self.run(args, None)?;
+		if output.status.success() {
+			return Ok(true);
+		}
+		let code = result_line(&String::from_utf8_lossy(&output.stdout)).and_then(|r| {
+			r.get("failureCode")
+				.and_then(Value::as_str)
+				.map(str::to_owned)
+		});
+		if code.as_deref() == Some(already) {
+			return Ok(false);
+		}
+		Err(failure(args, &output))
+	}
+}
+
+/// Prefers the `--json` result's message, since stderr also carries warnings about unrelated settings.
+fn failure(args: &[&str], output: &Output) -> eyre::Report {
+	let message = result_line(&String::from_utf8_lossy(&output.stdout))
+		.and_then(|r| r.get("message").and_then(Value::as_str).map(str::to_owned))
+		.unwrap_or_else(|| String::from_utf8_lossy(&output.stderr).trim().to_owned());
+	eyre!("`claude {}` failed: {message}", args.join(" "))
+}
+
+fn ok(out: &mut dyn Write, msg: impl std::fmt::Display) -> Result<()> {
+	writeln!(out, "{} {msg}", "✓".green())?;
+	Ok(())
+}
+
+fn skip(out: &mut dyn Write, msg: impl std::fmt::Display) -> Result<()> {
+	writeln!(out, "{} {msg}", "–".dimmed())?;
+	Ok(())
+}
+
+fn warn(out: &mut dyn Write, msg: impl std::fmt::Display) -> Result<()> {
+	writeln!(out, "{} {msg}", "!".yellow().bold())?;
+	Ok(())
+}
+
+fn would(out: &mut dyn Write, msg: impl std::fmt::Display) -> Result<()> {
+	writeln!(out, "{} would {msg}", "→".cyan())?;
+	Ok(())
+}
+
+fn would_run(out: &mut dyn Write, program: &Path, args: &[&str]) -> Result<()> {
+	would(
+		out,
+		format_args!("run {} {}", program.display(), args.join(" ")),
+	)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use serde_json::json;
+	use std::fs;
+	use std::os::unix::fs::PermissionsExt;
+
+	// Recorded from Claude Code 2.1.290 against a directory marketplace in a scratch HOME.
+	const MARKETPLACE_LIST: &str = r#"[
+  {
+    "name": "ryanclark",
+    "source": "directory",
+    "path": "/tmp/mkt",
+    "installLocation": "/tmp/mkt"
+  }
+]
+"#;
+	const PLUGIN_LIST: &str = r#"[
+  {
+    "id": "statusline@ryanclark",
+    "version": "0.1.0",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "/tmp/home/.claude/plugins/cache/ryanclark/statusline/0.1.0",
+    "readFromFolder": "/tmp/mkt/plugin",
+    "folderVersion": "0.1.0",
+    "installedAt": "2026-10-06T13:25:21.661Z",
+    "lastUpdated": "2026-10-06T13:25:21.661Z",
+    "projectEnabled": false,
+    "hasUserConfig": true
+  }
+]
+"#;
+	const MARKETPLACE_ADD: &str = r#"{"command":"marketplace-add","outcome":"ok","marketplace":"ryanclark","message":"Successfully added marketplace: ryanclark (declared in user settings)"}"#;
+	const INSTALL: &str = r#"{"command":"install","outcome":"ok","plugin":"statusline@ryanclark","pluginId":"statusline@ryanclark","scope":"user","message":"Successfully installed plugin: statusline@ryanclark (scope: user)\n3 userConfig options not yet set — run /plugin configure statusline@ryanclark in Claude Code, or pass --config KEY=VALUE.","configApplied":true}"#;
+	const UNINSTALL: &str = r#"{"command":"uninstall","outcome":"ok","plugin":"statusline@ryanclark","pluginId":"statusline@ryanclark","scope":"user","keptData":false,"message":"Successfully uninstalled plugin: statusline (scope: user)"}"#;
+	const UNINSTALL_MISSING: &str = r#"{"command":"uninstall","outcome":"failed","plugin":"statusline@ryanclark","scope":"user","message":"Plugin \"statusline@ryanclark\" not found in installed plugins","failureCode":"not_installed"}"#;
+	const MARKETPLACE_REMOVE: &str = r#"{"command":"marketplace-remove","outcome":"ok","marketplace":"ryanclark","message":"Successfully removed marketplace: ryanclark (from user settings)"}"#;
+	const INSTALL_NOT_FOUND: &str = r#"{"command":"install","outcome":"failed","plugin":"statusline@ryanclark","scope":"user","message":"Plugin \"statusline\" not found in marketplace \"ryanclark\". Your local copy may be out of date — try `claude plugin marketplace update ryanclark`.","failureCode":"not_found"}"#;
+	/// What `claude plugin install --config binary=…` leaves in ~/.claude/settings.json.
+	const SETTINGS_AFTER_INSTALL: &str = r#"{
+  "enabledPlugins": {
+    "statusline@ryanclark": true
+  },
+  "extraKnownMarketplaces": {
+    "ryanclark": {
+      "source": {
+        "source": "github",
+        "repo": "ryanclark/statusline"
+      }
+    }
+  },
+  "pluginConfigs": {
+    "statusline@ryanclark": {
+      "options": {
+        "binary": "/opt/homebrew/bin/statusline"
+      }
+    }
+  }
+}"#;
+
+	#[test]
+	fn recorded_lists_are_matched_by_name_id_and_scope() {
+		let marketplaces: Vec<Value> = serde_json::from_str(MARKETPLACE_LIST).unwrap();
+		assert!(has_marketplace(&marketplaces));
+		assert!(!has_marketplace(&[]));
+
+		let plugins: Vec<Value> = serde_json::from_str(PLUGIN_LIST).unwrap();
+		assert_eq!(find_plugin(&plugins).unwrap()["version"], "0.1.0");
+
+		let project_only = json!([{"id": "statusline@ryanclark", "scope": "project"}]);
+		assert!(find_plugin(project_only.as_array().unwrap()).is_none());
+		let other = json!([{"id": "statusline@someone-else", "scope": "user"}]);
+		assert!(find_plugin(other.as_array().unwrap()).is_none());
+	}
+
+	#[test]
+	fn result_line_reads_the_last_json_line_and_its_failure_code() {
+		let r = result_line(&format!("noise\n{UNINSTALL_MISSING}\n\n")).unwrap();
+		assert_eq!(r["failureCode"], "not_installed");
+		assert_eq!(result_line(INSTALL).unwrap()["outcome"], "ok");
+		assert!(result_line("Configuration saved. Restart Claude Code to apply it.\n").is_none());
+	}
+
+	#[test]
+	fn version_is_the_leading_semver() {
+		assert_eq!(
+			parse_version("2.1.290 (Claude Code)\n"),
+			Some(semver::Version::new(2, 1, 290))
+		);
+		assert!(parse_version("2.1.286 (Claude Code)").unwrap() < MIN_CLAUDE);
+		assert_eq!(parse_version("Claude Code"), None);
+	}
+
+	#[test]
+	fn configured_binary_reads_the_plugin_options_the_cli_wrote() {
+		let settings: Value = serde_json::from_str(SETTINGS_AFTER_INSTALL).unwrap();
+		assert_eq!(
+			configured_binary(&settings),
+			Some("/opt/homebrew/bin/statusline")
+		);
+		assert_eq!(configured_binary(&json!({})), None);
+	}
+
+	fn temp_dir(name: &str) -> PathBuf {
+		let dir =
+			std::env::temp_dir().join(format!("statusline-plugin-{name}-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).unwrap();
+		dir.canonicalize().unwrap()
+	}
+
+	#[test]
+	fn locate_binary_keeps_the_path_symlink_that_is_this_executable() {
+		let dir = temp_dir("locate");
+		let cellar = dir.join("Cellar/statusline/1.1.0/bin");
+		let bin = dir.join("bin");
+		let other = dir.join("other");
+		for d in [&cellar, &bin, &other] {
+			fs::create_dir_all(d).unwrap();
+		}
+		let exe = cellar.join("statusline");
+		fs::write(&exe, "").unwrap();
+		std::os::unix::fs::symlink(&exe, bin.join("statusline")).unwrap();
+		fs::write(other.join("statusline"), "older build").unwrap();
+
+		let path = std::env::join_paths([&other, &bin]).unwrap();
+		assert_eq!(locate_binary(Some(&path), &exe), bin.join("statusline"));
+
+		// A dev build that is not on PATH is stored as itself rather than as the older build PATH would find.
+		let only_other = std::env::join_paths([&other]).unwrap();
+		assert_eq!(locate_binary(Some(&only_other), &exe), exe);
+		assert_eq!(locate_binary(None, &exe), exe);
+		fs::remove_dir_all(&dir).unwrap();
+	}
+
+	/// A stand-in for `claude` that answers with the recorded outputs, keeps installed state in marker files and
+	/// logs each call, so the flow runs against a real child process.
+	struct Fake {
+		root: PathBuf,
+		home: PathBuf,
+	}
+
+	impl Fake {
+		fn new(name: &str) -> Self {
+			let root = temp_dir(name);
+			let home = root.join("home");
+			fs::create_dir_all(home.join(".claude")).unwrap();
+			for (file, data) in [
+				("version", "2.1.290 (Claude Code)\n"),
+				("marketplaces.json", MARKETPLACE_LIST),
+				("plugins.json", PLUGIN_LIST),
+				("add.json", MARKETPLACE_ADD),
+				("install.json", INSTALL),
+				("uninstall.json", UNINSTALL),
+				("uninstall-missing.json", UNINSTALL_MISSING),
+				("remove.json", MARKETPLACE_REMOVE),
+				("settings-after-install.json", SETTINGS_AFTER_INSTALL),
+			] {
+				fs::write(root.join(file), data).unwrap();
+			}
+			let script = root.join("claude");
+			fs::write(
+				&script,
+				r#"#!/bin/sh
+d=$(dirname "$0")
+printf '%s\n' "$*" >> "$d/calls.log"
+case "$*" in
+--version) cat "$d/version" ;;
+"plugin marketplace list --json") if [ -f "$d/has-marketplace" ]; then cat "$d/marketplaces.json"; else echo '[]'; fi ;;
+"plugin marketplace add "*) touch "$d/has-marketplace"; cat "$d/add.json" ;;
+"plugin marketplace remove "*) rm "$d/has-marketplace"; cat "$d/remove.json" ;;
+"plugin list --json") if [ -f "$d/installed" ]; then cat "$d/plugins.json"; else echo '[]'; fi ;;
+"plugin install "*)
+  if [ -f "$d/install-fails" ]; then cat "$d/install-fails"; exit 1; fi
+  touch "$d/installed"; cp "$d/settings-after-install.json" .claude/settings.json; cat "$d/install.json" ;;
+"plugin configure "*) cat > "$d/configure.stdin"; echo 'Configuration saved. Restart Claude Code to apply it.' ;;
+"plugin uninstall "*)
+  if [ -f "$d/installed" ]; then rm "$d/installed"; cat "$d/uninstall.json"; else cat "$d/uninstall-missing.json"; exit 1; fi ;;
+*) echo "unexpected: $*" >&2; exit 64 ;;
+esac
+"#,
+			)
+			.unwrap();
+			fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+			Self { root, home }
+		}
+
+		fn ctx(&self, dry_run: bool) -> Context {
+			Context {
+				claude: self.root.join("claude"),
+				home: self.home.clone(),
+				interactive: false,
+				dry_run,
+			}
+		}
+
+		fn settings_path(&self) -> PathBuf {
+			self.home.join(".claude/settings.json")
+		}
+
+		fn settings(&self) -> Value {
+			serde_json::from_str(&fs::read_to_string(self.settings_path()).unwrap()).unwrap()
+		}
+
+		/// Takes the calls so far, so each step of a test sees only its own.
+		fn calls(&self) -> Vec<String> {
+			let log = self.root.join("calls.log");
+			let calls = fs::read_to_string(&log).unwrap_or_default();
+			let _ = fs::remove_file(&log);
+			calls.lines().map(str::to_owned).collect()
+		}
+
+		fn backups(&self) -> usize {
+			fs::read_dir(self.home.join(".statusline/backups")).map_or(0, Iterator::count)
+		}
+
+		fn plugin(&self, dry_run: bool, remove_native: bool) -> (Result<()>, String) {
+			let mut out = Vec::new();
+			let result = install_plugin(
+				&self.ctx(dry_run),
+				Path::new("/opt/homebrew/bin/statusline"),
+				&PluginOptions {
+					keep_native: !remove_native,
+					subagent: false,
+					five_hour_reset_threshold: None,
+					seven_day_reset_threshold: None,
+				},
+				&mut out,
+				&mut |q, _| panic!("a piped install must not ask: {q}"),
+			);
+			(result, String::from_utf8(out).unwrap())
+		}
+
+		fn native(&self, dry_run: bool, remove_marketplace: bool) -> (Result<()>, String) {
+			let mut out = Vec::new();
+			let result = install_native(
+				&self.ctx(dry_run),
+				remove_marketplace,
+				&mut out,
+				&mut |q, _| panic!("a piped install must not ask: {q}"),
+			);
+			(result, String::from_utf8(out).unwrap())
+		}
+	}
+
+	impl Drop for Fake {
+		fn drop(&mut self) {
+			let _ = fs::remove_dir_all(&self.root);
+		}
+	}
+
+	const BINARY_CONFIG: &str = "binary=/opt/homebrew/bin/statusline";
+
+	#[test]
+	fn plugin_install_adds_installs_keeps_the_native_line_and_reruns_as_a_no_op() {
+		let fake = Fake::new("fresh");
+		fs::write(
+			fake.settings_path(),
+			r#"{"model": "opus", "statusLine": {"type": "command", "command": "statusline"}}"#,
+		)
+		.unwrap();
+		// The fake install replaces the file the way the CLI rewrites it, so seed the copy it writes with the same
+		// statusLine to check the flow reads the file after the children ran.
+		let mut after: Value = serde_json::from_str(SETTINGS_AFTER_INSTALL).unwrap();
+		after["statusLine"] = json!({"type": "command", "command": "statusline"});
+		fs::write(
+			fake.root.join("settings-after-install.json"),
+			after.to_string(),
+		)
+		.unwrap();
+
+		let (result, out) = fake.plugin(false, false);
+		result.unwrap();
+		assert_eq!(
+			fake.calls(),
+			vec![
+				"--version".to_owned(),
+				"plugin marketplace list --json".to_owned(),
+				"plugin marketplace add ryanclark/statusline --scope user --sparse .claude-plugin plugin --json"
+					.to_owned(),
+				"plugin list --json".to_owned(),
+				format!("plugin install statusline@ryanclark -s user --config {BINARY_CONFIG} --json"),
+			]
+		);
+		assert!(out.contains("Added marketplace ryanclark"), "{out}");
+		assert!(
+			out.contains("Kept native statusLine as the fallback"),
+			"{out}"
+		);
+		assert_eq!(
+			fake.settings(),
+			after,
+			"settings.json is the CLI's own write"
+		);
+		assert_eq!(fake.backups(), 0);
+		assert!(fake.home.join(".statusline/settings.json").exists());
+		assert_eq!(
+			serde_json::from_str::<Value>(
+				&fs::read_to_string(fake.home.join(".statusline/native-statusline.json")).unwrap()
+			)
+			.unwrap(),
+			json!({"type": "command", "command": "statusline"})
+		);
+
+		let saved = fs::read_to_string(fake.settings_path()).unwrap();
+		let (result, out) = fake.plugin(false, false);
+		result.unwrap();
+		assert_eq!(
+			fake.calls(),
+			[
+				"--version",
+				"plugin marketplace list --json",
+				"plugin list --json"
+			]
+		);
+		assert!(out.contains("already installed with binary="), "{out}");
+		assert!(!out.contains("Saved the native"), "{out}");
+		assert_eq!(fs::read_to_string(fake.settings_path()).unwrap(), saved);
+		assert_eq!(fake.backups(), 0);
+	}
+
+	#[test]
+	fn remove_native_backs_up_saves_the_line_and_native_puts_it_back() {
+		let fake = Fake::new("remove");
+		fs::write(fake.root.join("installed"), "").unwrap();
+		fs::write(fake.root.join("has-marketplace"), "").unwrap();
+		let custom = json!({"type": "command", "command": "statusline", "padding": 0});
+		let original = json!({
+			"$schema": "https://json.schemastore.org/claude-code-settings.json",
+			"statusLine": {"type": "command", "command": "statusline"},
+			"enabledPlugins": {"statusline@ryanclark": true},
+			"pluginConfigs": {"statusline@ryanclark": {"options": {"binary": "/usr/local/bin/statusline"}}},
+			"subagentStatusLine": {"type": "command", "command": "statusline subagent"}
+		});
+		fs::write(fake.settings_path(), original.to_string()).unwrap();
+
+		let (result, out) = fake.plugin(false, true);
+		result.unwrap();
+		let calls = fake.calls();
+		assert_eq!(
+			calls.last().unwrap(),
+			"plugin configure statusline@ryanclark --values-stdin"
+		);
+		assert_eq!(
+			serde_json::from_str::<Value>(
+				&fs::read_to_string(fake.root.join("configure.stdin")).unwrap()
+			)
+			.unwrap(),
+			json!({"binary": "/opt/homebrew/bin/statusline"})
+		);
+		let settings = fake.settings();
+		assert!(settings.get("statusLine").is_none(), "{out}");
+		assert_eq!(
+			settings["subagentStatusLine"]["command"],
+			"statusline subagent"
+		);
+		assert!(out.contains("Removed native statusLine"), "{out}");
+		assert!(out.contains("Kept subagent status line"), "{out}");
+		assert_eq!(fake.backups(), 1);
+		let backup = fs::read_dir(fake.home.join(".statusline/backups"))
+			.unwrap()
+			.next()
+			.unwrap()
+			.unwrap()
+			.path();
+		assert_eq!(
+			serde_json::from_str::<Value>(&fs::read_to_string(backup).unwrap()).unwrap(),
+			original
+		);
+
+		// A rerun finds no statusLine and must keep the saved one for --native.
+		let (result, _) = fake.plugin(false, true);
+		result.unwrap();
+		fake.calls();
+		assert_eq!(fake.backups(), 1);
+
+		// --native restores the saved value, edited here so it differs from what was removed.
+		fs::write(
+			fake.home.join(".statusline/native-statusline.json"),
+			custom.to_string(),
+		)
+		.unwrap();
+		let (result, out) = fake.native(false, true);
+		result.unwrap();
+		assert_eq!(
+			fake.calls(),
+			[
+				"plugin list --json",
+				"plugin uninstall statusline@ryanclark -s user --json",
+				"plugin marketplace list --json",
+				"plugin marketplace remove ryanclark --scope user --json"
+			]
+		);
+		assert_eq!(fake.settings()["statusLine"], custom, "{out}");
+		assert!(out.contains("Restored native statusLine"), "{out}");
+		assert_eq!(fake.backups(), 2);
+
+		let (result, out) = fake.native(false, false);
+		result.unwrap();
+		assert_eq!(fake.calls(), ["plugin list --json"]);
+		assert!(out.contains("Native statusLine already set"), "{out}");
+		assert_eq!(fake.backups(), 2);
+	}
+
+	#[test]
+	fn the_settings_write_keeps_what_the_install_child_wrote() {
+		let fake = Fake::new("reread");
+		fs::write(
+			fake.settings_path(),
+			r#"{"statusLine": {"type": "command", "command": "statusline"}}"#,
+		)
+		.unwrap();
+		let mut after: Value = serde_json::from_str(SETTINGS_AFTER_INSTALL).unwrap();
+		after["statusLine"] = json!({"type": "command", "command": "statusline"});
+		fs::write(
+			fake.root.join("settings-after-install.json"),
+			after.to_string(),
+		)
+		.unwrap();
+
+		let (result, out) = fake.plugin(false, true);
+		result.unwrap();
+		let mut expected: Value = serde_json::from_str(SETTINGS_AFTER_INSTALL).unwrap();
+		expected.as_object_mut().unwrap().remove("statusLine");
+		assert_eq!(fake.settings(), expected, "{out}");
+	}
+
+	#[test]
+	fn a_foreign_status_line_survives_a_piped_remove_native() {
+		let fake = Fake::new("foreign");
+		fs::write(fake.root.join("installed"), "").unwrap();
+		fs::write(fake.root.join("has-marketplace"), "").unwrap();
+		let theirs = json!({"type": "command", "command": "~/bin/my-line.sh"});
+		fs::write(
+			fake.settings_path(),
+			json!({"statusLine": theirs, "subagentStatusLine": {"type": "command", "command": "x"}}).to_string(),
+		)
+		.unwrap();
+
+		let (result, out) = fake.plugin(false, true);
+		result.unwrap();
+		assert_eq!(fake.settings()["statusLine"], theirs);
+		assert!(out.contains("draws alongside the plugin"), "{out}");
+		assert_eq!(fake.backups(), 0);
+	}
+
+	#[test]
+	fn remove_native_keeps_the_line_while_the_plugin_is_disabled() {
+		let fake = Fake::new("disabled");
+		fs::write(fake.root.join("installed"), "").unwrap();
+		fs::write(fake.root.join("has-marketplace"), "").unwrap();
+		fs::write(
+			fake.root.join("plugins.json"),
+			PLUGIN_LIST.replace(r#""enabled": true"#, r#""enabled": false"#),
+		)
+		.unwrap();
+		let ours = json!({"type": "command", "command": "statusline"});
+		fs::write(
+			fake.settings_path(),
+			json!({"statusLine": ours, "subagentStatusLine": {"type": "command", "command": "statusline subagent"}})
+				.to_string(),
+		)
+		.unwrap();
+
+		let (result, out) = fake.plugin(false, true);
+		result.unwrap();
+		assert_eq!(fake.settings()["statusLine"], ours, "{out}");
+		assert!(out.contains("is installed but disabled"), "{out}");
+		assert!(out.contains("Kept the native statusLine"), "{out}");
+		assert_eq!(fake.backups(), 0);
+	}
+
+	#[test]
+	fn our_binary_at_any_path_counts_as_the_silent_fallback() {
+		let fake = Fake::new("ourpath");
+		fs::write(fake.root.join("installed"), "").unwrap();
+		fs::write(fake.root.join("has-marketplace"), "").unwrap();
+		let ours =
+			json!({"type": "command", "command": "/opt/homebrew/bin/statusline", "padding": 0});
+		fs::write(
+			fake.settings_path(),
+			json!({"statusLine": ours, "subagentStatusLine": {"type": "command", "command": "x"}})
+				.to_string(),
+		)
+		.unwrap();
+
+		let (result, out) = fake.plugin(false, false);
+		result.unwrap();
+		assert!(
+			out.contains("Kept native statusLine as the fallback"),
+			"{out}"
+		);
+		assert!(!out.contains("draws alongside"), "{out}");
+
+		let (result, out) = fake.plugin(false, true);
+		result.unwrap();
+		assert!(fake.settings().get("statusLine").is_none(), "{out}");
+		assert!(out.contains("Removed native statusLine"), "{out}");
+	}
+
+	#[test]
+	fn native_keeps_the_plugin_when_the_restore_fails() {
+		let fake = Fake::new("restorefails");
+		fs::write(fake.root.join("installed"), "").unwrap();
+		fs::write(fake.root.join("has-marketplace"), "").unwrap();
+		fs::write(fake.settings_path(), r#"{"model": "opus"}"#).unwrap();
+		fs::create_dir_all(fake.home.join(".statusline")).unwrap();
+		fs::write(
+			fake.home.join(".statusline/native-statusline.json"),
+			"{not json",
+		)
+		.unwrap();
+
+		let (result, out) = fake.native(false, true);
+		assert!(result.is_err(), "{out}");
+		let calls = fake.calls();
+		assert!(
+			!calls
+				.iter()
+				.any(|c| c.starts_with("plugin uninstall")
+					|| c.starts_with("plugin marketplace remove")),
+			"{calls:?}"
+		);
+		assert!(fake.root.join("installed").exists());
+		assert_eq!(fake.settings(), json!({"model": "opus"}));
+	}
+
+	/// Stands in for an open Claude Code session that rewrites settings.json while a prompt waits on the user.
+	fn rewrite_model(path: &Path) {
+		let mut settings: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+		settings["model"] = json!("sonnet");
+		fs::write(path, settings.to_string()).unwrap();
+	}
+
+	#[test]
+	fn plugin_writes_onto_what_claude_code_saved_during_a_prompt() {
+		let fake = Fake::new("promptrace");
+		fs::write(fake.root.join("installed"), "").unwrap();
+		fs::write(fake.root.join("has-marketplace"), "").unwrap();
+		fs::write(
+			fake.settings_path(),
+			json!({"model": "opus", "statusLine": {"type": "command", "command": "~/bin/my-line.sh"}}).to_string(),
+		)
+		.unwrap();
+
+		let path = fake.settings_path();
+		let mut out = Vec::new();
+		install_plugin(
+			&Context {
+				interactive: true,
+				..fake.ctx(false)
+			},
+			Path::new("/opt/homebrew/bin/statusline"),
+			&PluginOptions {
+				keep_native: false,
+				subagent: false,
+				five_hour_reset_threshold: None,
+				seven_day_reset_threshold: None,
+			},
+			&mut out,
+			&mut |q, _| {
+				rewrite_model(&path);
+				q.starts_with("Remove your own statusLine")
+			},
+		)
+		.unwrap();
+		let out = String::from_utf8(out).unwrap();
+		let settings = fake.settings();
+		assert_eq!(settings["model"], "sonnet", "{out}");
+		assert!(settings.get("statusLine").is_none(), "{out}");
+	}
+
+	#[test]
+	fn native_writes_onto_what_claude_code_saved_during_a_prompt() {
+		let fake = Fake::new("nativerace");
+		fs::write(
+			fake.settings_path(),
+			json!({"model": "opus", "statusLine": {"type": "command", "command": "other"}})
+				.to_string(),
+		)
+		.unwrap();
+
+		let path = fake.settings_path();
+		let mut out = Vec::new();
+		install_native(
+			&Context {
+				interactive: true,
+				..fake.ctx(false)
+			},
+			false,
+			&mut out,
+			&mut |_, _| {
+				rewrite_model(&path);
+				true
+			},
+		)
+		.unwrap();
+		let out = String::from_utf8(out).unwrap();
+		let settings = fake.settings();
+		assert_eq!(settings["model"], "sonnet", "{out}");
+		assert_eq!(
+			settings["statusLine"],
+			json!({"type": "command", "command": "statusline"}),
+			"{out}"
+		);
+	}
+
+	#[test]
+	fn a_failed_install_leaves_settings_untouched() {
+		let fake = Fake::new("fails");
+		fs::write(fake.root.join("install-fails"), INSTALL_NOT_FOUND).unwrap();
+		let before = r#"{"statusLine": {"type": "command", "command": "statusline"}}"#;
+		fs::write(fake.settings_path(), before).unwrap();
+
+		let (result, _) = fake.plugin(false, true);
+		let err = format!("{:#}", result.unwrap_err());
+		assert!(err.contains("not found in marketplace"), "{err}");
+		assert_eq!(fs::read_to_string(fake.settings_path()).unwrap(), before);
+		assert!(
+			!fake
+				.home
+				.join(".statusline/native-statusline.json")
+				.exists()
+		);
+	}
+
+	#[test]
+	fn an_old_claude_is_refused_before_anything_runs() {
+		let fake = Fake::new("old");
+		fs::write(fake.root.join("version"), "2.1.286 (Claude Code)\n").unwrap();
+		let (result, _) = fake.plugin(false, false);
+		assert!(format!("{:#}", result.unwrap_err()).contains("2.1.287"));
+		assert_eq!(fake.calls(), ["--version"]);
+		assert!(!fake.home.join(".statusline").exists());
+	}
+
+	#[test]
+	fn dry_run_only_queries_and_writes_nothing() {
+		let fake = Fake::new("dry");
+		fs::write(
+			fake.settings_path(),
+			r#"{"statusLine": {"type": "command", "command": "statusline"}}"#,
+		)
+		.unwrap();
+
+		let (result, out) = fake.plugin(true, true);
+		result.unwrap();
+		assert_eq!(
+			fake.calls(),
+			[
+				"--version",
+				"plugin marketplace list --json",
+				"plugin list --json"
+			]
+		);
+		assert!(out.contains("would run"), "{out}");
+		assert!(out.contains("would remove the native statusLine"), "{out}");
+		assert!(!fake.home.join(".statusline").exists());
+
+		let (result, out) = fake.native(true, false);
+		result.unwrap();
+		assert_eq!(fake.calls(), ["plugin list --json"]);
+		assert!(out.contains("not installed"), "{out}");
+		assert!(!fake.home.join(".statusline").exists());
+	}
+
+	#[test]
+	fn native_restores_the_default_and_tolerates_a_missing_claude() {
+		let fake = Fake::new("nativeonly");
+		let mut out = Vec::new();
+		let ctx = Context {
+			claude: fake.root.join("no-such-claude"),
+			..fake.ctx(false)
+		};
+		let result = install_native(&ctx, true, &mut out, &mut |_, _| panic!());
+		let out = String::from_utf8(out).unwrap();
+		assert!(
+			result.is_err(),
+			"a failed plugin step still fails the command"
+		);
+		assert!(out.contains("Skipped the plugin uninstall"), "{out}");
+		assert!(out.contains("Skipped the marketplace removal"), "{out}");
+		assert_eq!(
+			fake.settings()["statusLine"],
+			json!({"type": "command", "command": "statusline"})
+		);
+		assert_eq!(fake.backups(), 0, "there was no settings file to back up");
+	}
+}

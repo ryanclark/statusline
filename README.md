@@ -76,6 +76,68 @@ If you include `extra_usage`, `fable_usage`, or `credits`, statusline reads your
 
 If you don't use any of those segments, no Chrome access or API calls are needed.
 
+## Claude Code plugin
+
+The plugin draws the same segments inside Claude Code, under the prompt or in the band above it, and refreshes them
+between turns so countdowns and the [live activity](#live-activity) segments keep moving. It runs the `statusline`
+binary, so install that first.
+
+Needs Claude Code 2.1.287 or later and the next statusline release. With an older binary the plugin shows the command
+to upgrade it.
+
+### Installing the plugin
+
+```
+brew install ryanclark/tap/statusline
+statusline install --plugin
+```
+
+This creates `~/.statusline/settings.json` if it is missing, adds the `ryanclark` marketplace and installs the plugin at
+user scope, pointed at the binary you ran. Pass `--dry-run` to see what would change, and `--claude <PATH>` when
+`claude` is not on your `PATH`.
+
+While the plugin draws, a `statusLine` that runs `statusline` prints nothing, so the line never shows twice. Claude
+Code still keeps an empty row for it, so an existing `statusLine` in `~/.claude/settings.json` is saved to
+`~/.statusline/native-statusline.json` and removed. One that runs `statusline` is removed without asking, anything else
+only after you confirm. `~/.claude/settings.json` is backed up to `~/.statusline/backups/` before it changes.
+
+Pass `--keep-native` to keep the `statusLine` as a fallback for sessions where the plugin does not load, at the cost of
+the empty row. It comes back within 30 seconds of the plugin stopping, can show if refreshes stall with an `intervalMs`
+above 10 seconds, and shows between refreshes above 30 seconds.
+
+### From inside a session
+
+```
+/plugin install statusline --marketplace ryanclark/statusline
+```
+
+Answer `y` to add the marketplace and pick a scope. The options screen sets:
+
+| Option | Default | Description |
+|---|---|---|
+| `binary` | `statusline` | Path to the statusline binary, in full if it is not on `PATH` |
+| `placement` | `below` | `below` replaces the hint line under the prompt, `above` uses the band over it |
+| `intervalMs` | `1000` | How often countdowns and git state are re-rendered between turns |
+| `cacheTtl` | `1h` | Prompt cache TTL assumed until a model switch reports the real one (`1h` or `5m`) |
+
+Change them later with `/plugin`, or from a shell:
+
+```
+echo '{"binary": "/opt/homebrew/bin/statusline"}' | claude plugin configure statusline@ryanclark --values-stdin
+```
+
+Options you leave out keep their values. Installing this way keeps your native `statusLine` and the empty row it
+leaves. Remove it from `~/.claude/settings.json` or run `statusline install --plugin`.
+
+### Rolling back
+
+```
+statusline install --native
+```
+
+This uninstalls the plugin and restores the saved `statusLine`, or the default `statusline` command if none was saved.
+Add `--remove-marketplace` to also remove the `ryanclark` marketplace.
+
 ## What it shows
 
 By default:
@@ -146,8 +208,8 @@ needs 2.1.214.
 | `cache_hit_ratio` | Cache read as % of total input |
 | `cache_warm` | Prompt cache state with ♨ icon: `warm` with time until it goes cold, or `cold` |
 | `session_cache_hit_ratio` | Cache reads as % of all input tokens this session |
-| `cache_misses` | Prompt cache misses this session |
-| `cache_last_miss` | Cause of the last prompt cache miss (e.g. `tools_changed`, or `miss` when undiagnosed) and how long ago |
+| `cache_misses` | Prompt cache misses in the last 30 minutes (`2 misses in 30m`), hidden at zero. Without the plugin, the session total, shown even at zero |
+| `cache_last_miss` | Cause of the last prompt cache miss (e.g. `tools changed (+2 −1)`, `expired after 5m idle`) and how long ago, hidden after 30 minutes |
 | `exceeds200k` | Warning indicator when context exceeds 200k tokens |
 
 #### Rate limits
@@ -200,6 +262,21 @@ needs 2.1.214.
 | `fast_mode` | `fast` when fast mode is on |
 | `worktree` | Worktree name (a worktree session, or any linked git worktree) |
 | `account` | Current Claude account nickname (from `~/.statusline/accounts.json`, colored per entry) |
+
+#### Live activity
+
+These need the [plugin](#claude-code-plugin). With the plain `statusLine` command they render nothing.
+
+| Segment | Description |
+|---|---|
+| `current_tool` | Tool call in flight with ⚙ icon, its command or path, and how long it has run (e.g. `⚙ Bash cargo test 12s`), `+2` when more run in parallel |
+| `turn_elapsed` | Time the running turn has taken with ⏱ icon (`⏱ 1m42s`), or the last turn's length dimmed between turns (`last 2m10s`) |
+| `permission_pending` | Tool waiting on approval with ⏸ icon and how long, kept up while it runs (`⏸ Bash waiting or running 45s`) |
+| `last_api_error` | Why the last turn failed with ⚠ icon and how long ago (`⚠ overloaded 2m ago`, `rate limited`, `hit max tokens`, `interrupted`) |
+| `todo_progress` | Todo items done out of total with ☑ icon and the active item (`☑ 3/7 · Running tests`) |
+| `agents` | Background agents with ⁂ icon (`⁂ 3 running · 1 idle`) |
+| `compaction` | With ⟳ icon, `⟳ compacting 18s` while one runs, else how many, when, and the tokens before and after (`compacted ×2 · 14m ago · 182.0k→21.0k`) |
+| `autocompact_headroom` | Tokens left before autocompact triggers with ↧ icon (`compact in 38.0k`), or `autocompact off` |
 
 #### Layout
 
@@ -261,6 +338,17 @@ expiry. Each can also print the clock time it counts down to, in your local time
 | `show_countdown` | bool | `true` | Show the time left |
 | `show_time` | bool | `false` (`true` for `cache_warm`) | Show the clock time after the countdown, or alone when the countdown is off |
 | `time_format` | string | `24h` | `24h` for `16:00`, `12h` for `4:00pm` |
+
+#### Cache miss options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `within` | string or `null` | `"30m"` | How far back to look, e.g. `"90s"`, `"2h"` or `"1h30m"`, or `"session"`/`null` for no limit. A value that does not parse counts as `"30m"`. Without the plugin `cache_misses` shows the session total |
+| `details` | bool | `true` | `cache_last_miss` only: add the tool count and system prompt size changes, as in `tools changed (+2 −1)` |
+
+```json
+[{"type": "cache_misses", "within": "2h"}, {"type": "cache_last_miss", "within": "session", "details": false}]
+```
 
 #### account options
 
@@ -340,7 +428,7 @@ Set `skip_update_check` in `~/.statusline/settings.json` to suppress the once-a-
 
 ### Letting Claude see its own session
 
-Set `capture_snapshots` in `~/.statusline/settings.json` (or toggle it under `g` in `statusline configure`) to save the JSON Claude Code pipes in on every render to `~/.statusline/sessions/<session_id>.json`. Snapshots untouched for 7 days are deleted when a new session starts.
+Set `capture_snapshots` in `~/.statusline/settings.json` (or toggle it under `g` in `statusline configure`) to save the JSON Claude Code pipes in on every render to `~/.statusline/sessions/<session_id>.json`. Snapshots untouched for 7 days are deleted when a new session starts. With the plugin, snapshots come from the native `statusLine` when it runs, since its input is complete.
 
 ```json
 {
