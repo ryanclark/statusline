@@ -2,16 +2,18 @@
 //!
 //! Segments keep rendering ANSI and this module parses it back, so spans match what the terminal path prints.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Span {
 	pub text: String,
 	#[serde(flatten)]
 	pub style: Style,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Style {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub fg: Option<String>,
@@ -401,6 +403,33 @@ mod tests {
 	fn serializes_only_set_fields() {
 		let json = serde_json::to_string(&ansi_to_spans("\u{1b}[1;38;2;80;200;120mok")).unwrap();
 		assert_eq!(json, r##"[[{"text":"ok","fg":"#50c878","bold":true}]]"##);
+	}
+
+	#[test]
+	fn deserializes_what_it_serializes() {
+		let rows = vec![vec![
+			span(
+				"#1",
+				Style {
+					fg: Some("green".to_owned()),
+					bg: Some("#010203".to_owned()),
+					bold: true,
+					dim: true,
+					italic: true,
+					underline: true,
+					strikethrough: true,
+					inverse: true,
+					href: Some("https://x.y".to_owned()),
+				},
+			),
+			span(" tail", Style::default()),
+		]];
+		let json = serde_json::to_string(&rows).unwrap();
+		assert_eq!(serde_json::from_str::<Vec<Vec<Span>>>(&json).unwrap(), rows);
+		assert_eq!(
+			serde_json::from_str::<Span>(r#"{"text":"x"}"#).unwrap(),
+			span("x", Style::default())
+		);
 	}
 
 	#[test]

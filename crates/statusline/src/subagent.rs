@@ -3,7 +3,7 @@ use statusline_core::constants::DIVIDER;
 use statusline_core::subagent::{SubagentInput, default_subagent_segments, render_rows};
 use std::io::{IsTerminal, Write};
 
-pub(crate) fn run() {
+pub(crate) fn run(spans: bool) {
 	let stdin = std::io::stdin();
 	if stdin.is_terminal() {
 		eprintln!("statusline subagent reads Claude Code's subagentStatusLine JSON on stdin");
@@ -27,8 +27,19 @@ pub(crate) fn run() {
 	let nerd_font = settings.as_ref().is_some_and(|s| s.nerd_font);
 	let grid = settings.as_ref().is_none_or(|s| s.subagent_grid);
 
+	let rows = render_rows(&input, &segments, &divider, nerd_font, grid);
 	let mut out = std::io::stdout().lock();
-	for row in render_rows(&input, &segments, &divider, nerd_font, grid) {
+	if spans {
+		let spans: Vec<_> = rows
+			.iter()
+			.flat_map(|row| statusline_core::spans::ansi_to_spans(&row.content))
+			.collect();
+		if let Ok(json) = serde_json::to_string(&spans) {
+			let _ = write!(out, "{json}");
+		}
+		return;
+	}
+	for row in rows {
 		if let Ok(line) = serde_json::to_string(&row) {
 			let _ = writeln!(out, "{line}");
 		}

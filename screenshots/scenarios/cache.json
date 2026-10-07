@@ -1,0 +1,45 @@
+{
+  "segments": [
+    "context_percentage",
+    "divider",
+    "model",
+    "divider",
+    "cache_warm",
+    "divider",
+    "cache_last_miss",
+    "divider",
+    "cache_misses",
+    "divider",
+    "session_cache_hit_ratio"
+  ],
+  "transcript": [
+    "● Connected two MCP servers. The next request had to rebuild the cache."
+  ],
+  "input": {
+    "model": { "id": "claude-opus-5-5", "display_name": "Opus 5.5" },
+    "context_window": {
+      "context_window_size": 1000000,
+      "used_percentage": 18,
+      "remaining_percentage": 82,
+      "total_input_tokens": 181200
+    },
+    "prompt_cache": {
+      "warm": true,
+      "caching_observed": true,
+      "ttl": "1h",
+      "expires_at": "@+2760",
+      "requests": 58,
+      "misses": 2,
+      "hit_ratio": 0.94,
+      "cache_write_tokens": 96400,
+      "miss_times": ["@-1500", "@-200"],
+      "last_miss_at": "@-200",
+      "last_miss_cause": {
+        "causes": ["tools_changed"],
+        "tools_added": 2,
+        "tools_removed": 1
+      },
+      "miss_causes": { "ttl_expired": 1, "tools_changed": 1 }
+    }
+  }
+}

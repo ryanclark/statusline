@@ -54,6 +54,10 @@ dev *ARGS:
     cargo build --quiet
     {{target_bin}} {{ARGS}}
 
+# Render the README screenshots from screenshots/scenarios, or just the named ones
+screenshots *NAMES:
+    cargo run -q -p statusline-screenshots --release -- {{NAMES}}
+
 cert-request developer_name=`echo "${DEVELOPER_NAME:-}"`:
     @test -n "{{developer_name}}" || { echo "pass developer_name, or export DEVELOPER_NAME in justfile.local" >&2; exit 1; }
     openssl req -new -newkey rsa:2048 -nodes \

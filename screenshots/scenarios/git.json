@@ -1,0 +1,49 @@
+{
+  "segments": [
+    "context_percentage",
+    "total_input_tokens",
+    "output_tokens",
+    "divider",
+    "model",
+    "divider",
+    "cost",
+    "newline",
+    "cwd",
+    "divider",
+    { "type": "git_branch", "dirty": true },
+    "git_ahead_behind",
+    "git_stash",
+    "divider",
+    "pr"
+  ],
+  "plugin": false,
+  "git": {
+    "branch": "feat/plugin-segments",
+    "dirty": true,
+    "ahead": 2,
+    "stash": 1
+  },
+  "transcript": ["● Pushed two commits. The PR is approved and ready to merge."],
+  "input": {
+    "model": { "id": "claude-sonnet-5-5", "display_name": "Sonnet 5.5" },
+    "cost": { "total_cost_usd": 1.86 },
+    "context_window": {
+      "context_window_size": 1000000,
+      "used_percentage": 12,
+      "remaining_percentage": 88,
+      "total_input_tokens": 118300,
+      "total_output_tokens": 2400,
+      "current_usage": {
+        "input_tokens": 6,
+        "output_tokens": 2400,
+        "cache_creation_input_tokens": 1500,
+        "cache_read_input_tokens": 116794
+      }
+    },
+    "pr": {
+      "number": 42,
+      "url": "https://github.com/ryanclark/statusline/pull/42",
+      "review_state": "approved"
+    }
+  }
+}

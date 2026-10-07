@@ -1,0 +1,54 @@
+{
+  "segments": [
+    "context_percentage",
+    "total_input_tokens",
+    "output_tokens",
+    "divider",
+    "cwd",
+    "divider",
+    { "type": "git_branch", "dirty": true },
+    "divider",
+    "model",
+    "divider",
+    "five_hour",
+    "seven_day",
+    "divider",
+    "cost",
+    "divider",
+    "cache_warm"
+  ],
+  "settings": { "five_hour_reset_threshold": 70, "seven_day_reset_threshold": 90 },
+  "frames": 6,
+  "git": { "branch": "main", "dirty": true },
+  "transcript": ["● Tests pass and the plugin draws under the prompt."],
+  "input": {
+    "model": { "id": "claude-opus-5-5", "display_name": "Opus 5.5" },
+    "version": "2.1.290",
+    "cost": { "total_cost_usd": 4.12, "total_duration_ms": 1260000 },
+    "context_window": {
+      "context_window_size": 1000000,
+      "used_percentage": 23,
+      "remaining_percentage": 77,
+      "total_input_tokens": 231400,
+      "total_output_tokens": 1830,
+      "current_usage": {
+        "input_tokens": 12,
+        "output_tokens": 1830,
+        "cache_creation_input_tokens": 4200,
+        "cache_read_input_tokens": 227188
+      }
+    },
+    "rate_limits": {
+      "five_hour": { "used_percentage": 41, "resets_at": "@+7920" },
+      "seven_day": { "used_percentage": 18, "resets_at": "@+302400" }
+    },
+    "prompt_cache": {
+      "warm": true,
+      "caching_observed": true,
+      "ttl": "1h",
+      "expires_at": "@+3270",
+      "requests": 42,
+      "hit_ratio": 0.97
+    }
+  }
+}

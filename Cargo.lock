@@ -1054,6 +1054,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "statusline-screenshots"
+version = "0.1.0"
+dependencies = [
+ "eyre",
+ "serde",
+ "serde_json",
+ "statusline-core",
+]
+
+[[package]]
 name = "strip-ansi-escapes"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
