@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
 
+# Overlapping runs race on release-plz's force-push to its branch and the plugin version commit on top of it.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release-plz:
     uses: ryanclark/workflows/.github/workflows/rust-release-plz.yml@v1
