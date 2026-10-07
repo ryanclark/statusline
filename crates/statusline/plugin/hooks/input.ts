@@ -102,6 +102,7 @@ export function inputJson(src: Sources): string {
       last_error: l.lastError,
       todos: l.todos,
       agents: agentCounts(src.agents),
+      background_tasks: Object.values(l.background ?? {}),
       compaction: l.compaction,
       autocompact: src.autocompact,
       ...(src.accountUsage ? { usage: src.accountUsage } : {}),

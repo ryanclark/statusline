@@ -36,6 +36,10 @@ fn sample_mod_info() -> ModInfo {
 			"last_error": {{"kind": "overloaded", "detail": "529 Overloaded", "at_ms": {error}}},
 			"todos": {{"done": 3, "total": 7, "active": "Running tests"}},
 			"agents": {{"running": 3, "idle": 1}},
+			"background_tasks": [
+				{{"type": "shell", "description": "npm run dev"}},
+				{{"type": "monitor", "description": "CI on #42"}}
+			],
 			"compaction": {{"count": 2, "last_at_ms": {compacted}, "tokens_before": 182000,
 				"tokens_after": 21000, "running_since_ms": null}},
 			"autocompact": {{"enabled": true, "headroom_tokens": 38000}}

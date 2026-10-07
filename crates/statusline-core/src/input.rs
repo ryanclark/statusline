@@ -230,6 +230,9 @@ pub struct ModInfo {
 	pub todos: Option<TodoProgress>,
 	#[serde(default)]
 	pub agents: Option<AgentCounts>,
+	/// Background shells, monitors and workflows still running. Subagents are counted in `agents`.
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub background_tasks: Vec<BackgroundTask>,
 	#[serde(default)]
 	pub compaction: Option<CompactionInfo>,
 	#[serde(default)]
@@ -307,6 +310,16 @@ pub struct AgentCounts {
 	pub running: u64,
 	#[serde(default, deserialize_with = "null_as_default")]
 	pub idle: u64,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct BackgroundTask {
+	/// Claude Code's label for the kind of task: `shell`, `monitor` or `workflow`.
+	#[serde(rename = "type", default, deserialize_with = "null_as_default")]
+	pub kind: String,
+	/// The task's description, its command when it has none, or a workflow's name. Already truncated by the plugin.
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub description: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -527,14 +540,15 @@ mod tests {
 				.is_none()
 		);
 		let json = r#"{"mod": {"tools": null, "turn": null, "permission": null, "last_error": null,
-			"todos": null, "agents": null, "compaction": null, "autocompact": null, "usage": null}}"#;
+			"todos": null, "agents": null, "background_tasks": null, "compaction": null, "autocompact": null,
+			"usage": null}}"#;
 		let m = InputData::from_reader(json.as_bytes())
 			.unwrap()
 			.mod_info
 			.unwrap();
 		assert!(m.tools.is_empty());
 		assert!(m.turn.is_none() && m.permission.is_none() && m.last_error.is_none());
-		assert!(m.todos.is_none() && m.agents.is_none());
+		assert!(m.todos.is_none() && m.agents.is_none() && m.background_tasks.is_empty());
 		assert!(m.compaction.is_none() && m.autocompact.is_none() && m.usage.is_none());
 		let empty = InputData::from_reader(r#"{"mod": {}}"#.as_bytes())
 			.unwrap()
@@ -553,6 +567,8 @@ mod tests {
 			"last_error": {"kind": "overloaded", "detail": "529 Overloaded", "at_ms": 1791280000000},
 			"todos": {"done": 3, "total": 7, "active": "Running tests"},
 			"agents": {"running": 3, "idle": 1},
+			"background_tasks": [{"type": "shell", "description": "npm run dev"},
+				{"type": "monitor", "description": null}, {"type": null}],
 			"compaction": {"count": 2, "last_at_ms": 1791279000000, "tokens_before": 182000,
 				"tokens_after": 21000, "running_since_ms": null, "trigger": "auto"},
 			"autocompact": {"enabled": true, "headroom_tokens": 38000}
@@ -586,6 +602,15 @@ mod tests {
 		);
 		let agents = m.agents.unwrap();
 		assert_eq!((agents.running, agents.idle), (3, 1));
+		let background: Vec<_> = m
+			.background_tasks
+			.iter()
+			.map(|t| (t.kind.as_str(), t.description.as_str()))
+			.collect();
+		assert_eq!(
+			background,
+			[("shell", "npm run dev"), ("monitor", ""), ("", "")]
+		);
 		let compaction = m.compaction.unwrap();
 		assert_eq!(compaction.count, 2);
 		assert_eq!(compaction.tokens_before, Some(182_000.into()));

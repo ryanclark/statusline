@@ -13,6 +13,7 @@ describe('activity', () => {
       last_error: null,
       todos: null,
       agents: null,
+      background_tasks: [],
       compaction: null,
       autocompact: { enabled: true, headroom_tokens: 38000 },
     })
@@ -513,6 +514,7 @@ describe('activity', () => {
       last_error: { kind: 'overloaded', detail: '529 Overloaded', at_ms: T0 },
       todos: { done: 3, total: 7, active: 'Running tests' },
       agents: { running: 3, idle: 1 },
+      background_tasks: [],
       compaction: {
         count: 1,
         last_at_ms: T0,
