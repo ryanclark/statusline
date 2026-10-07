@@ -838,6 +838,16 @@ mod tests {
 			out.contains("\u{1b}[38;2;100;200;220mrunning"),
 			"running is cyan: {out:?}"
 		);
+		let mut task = sample_task();
+		task.status = "waiting".to_owned();
+		let input = task.to_input();
+		let mut ctx = default_ctx(&input);
+		ctx.task = Some(&task);
+		let out = render_segment(&SegmentConfig::Simple(SegmentType::TaskStatus), &ctx).unwrap();
+		assert!(
+			out.contains("\u{1b}[38;2;240;200;80mwaiting"),
+			"waiting is yellow: {out:?}"
+		);
 	}
 
 	#[test]
