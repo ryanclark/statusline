@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "statusline",
-      "source": "./plugin"
+      "source": "./crates/statusline/plugin"
     }
   ]
 }

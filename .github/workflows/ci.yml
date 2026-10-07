@@ -23,6 +23,6 @@ jobs:
       - uses: actions/checkout@v4
       # Pinned so a Claude Code release that changes the validator or the test kit fails a bump PR, not every PR.
       - run: npm install -g @anthropic-ai/claude-code@2.1.290
-      - run: claude plugin validate --strict plugin
+      - run: claude plugin validate --strict crates/statusline/plugin
       - run: claude plugin validate --strict .
-      - run: claude plugin test plugin
+      - run: claude plugin test crates/statusline/plugin

@@ -15,3 +15,44 @@ jobs:
       release-plz-sha256: "ab29700191d5277f415b176d73241a57456f9b2589dd456186138e99b6f083cb"
     secrets:
       APP_KEY: ${{ secrets.RELEASE_PLZ_APP_KEY }}
+
+  plugin-version:
+    needs: release-plz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: "3903999"
+          private-key: ${{ secrets.RELEASE_PLZ_APP_KEY }}
+
+      - id: pr
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          branch=$(gh pr list -R "$GITHUB_REPOSITORY" --state open --json headRefName \
+            --jq '[.[].headRefName | select(startswith("release-plz-"))][0] // empty')
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - if: steps.pr.outputs.branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.branch }}
+          token: ${{ steps.app-token.outputs.token }}
+
+      # release-plz force-pushes its branch each run and skips [bot] commits, so the version is re-synced as the app.
+      - if: steps.pr.outputs.branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          f=crates/statusline/plugin/.claude-plugin/plugin.json
+          v=$(python3 -c 'import sys, tomllib; print(tomllib.load(sys.stdin.buffer)["package"]["version"])' \
+            < crates/statusline/Cargo.toml)
+          jq --arg v "$v" '.version = $v' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+          git diff --quiet && exit 0
+          id=$(gh api "/users/${SLUG}%5Bbot%5D" --jq .id)
+          git config user.name "${SLUG}[bot]"
+          git config user.email "${id}+${SLUG}[bot]@users.noreply.github.com"
+          git commit -am "chore: sync plugin version to $v"
+          git push
