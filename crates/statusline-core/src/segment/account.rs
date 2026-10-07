@@ -61,6 +61,7 @@ mod tests {
 			input: &input,
 			usage: None,
 			credits: None,
+			usage_stale: false,
 			git: None,
 			five_threshold: 70.0.into(),
 			seven_threshold: 100.0.into(),

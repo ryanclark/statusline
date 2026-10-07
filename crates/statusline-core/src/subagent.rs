@@ -178,6 +178,7 @@ pub fn render_rows(
 				input: data,
 				usage: None,
 				credits: None,
+				usage_stale: false,
 				git: None,
 				five_threshold: Percentage::default(),
 				seven_threshold: Percentage::default(),

@@ -5,11 +5,17 @@
 /// under-counted by one.
 #[must_use]
 pub fn visible_width(s: &str) -> usize {
-	let mut width = 0;
+	plain(s).chars().count()
+}
+
+/// `s` with its SGR colour runs and OSC sequences taken out.
+#[must_use]
+pub fn plain(s: &str) -> String {
+	let mut out = String::with_capacity(s.len());
 	let mut chars = s.chars();
 	while let Some(c) = chars.next() {
 		if c != '\u{1b}' {
-			width += 1;
+			out.push(c);
 			continue;
 		}
 		match chars.next() {
@@ -35,7 +41,7 @@ pub fn visible_width(s: &str) -> usize {
 		}
 	}
 
-	width
+	out
 }
 
 /// Cuts `s` to at most `width` cells in place, ending it in an ellipsis when anything was

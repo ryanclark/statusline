@@ -3,6 +3,7 @@ import type { AgentInfo, SessionUsage } from 'claude-code'
 import type { Autocompact, CacheTtl, Live, Tracker } from '../types'
 import { agentCounts } from './activity'
 import { TTL_MS } from './cache'
+import type { UsageInput } from './usage'
 
 export type Sources = {
   now: number
@@ -17,6 +18,7 @@ export type Sources = {
   agents: readonly AgentInfo[]
   defaultTtl: CacheTtl
   autocompact: Autocompact | null
+  accountUsage: UsageInput | null
 }
 
 export function autocompactOf(b: SessionUsage['context']['breakdown']): Autocompact | null {
@@ -102,6 +104,7 @@ export function inputJson(src: Sources): string {
       agents: agentCounts(src.agents),
       compaction: l.compaction,
       autocompact: src.autocompact,
+      ...(src.accountUsage ? { usage: src.accountUsage } : {}),
     },
   })
 }
