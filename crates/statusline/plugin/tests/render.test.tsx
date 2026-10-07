@@ -21,6 +21,27 @@ for (const surface of ['terminal', 'desktop'] as const) {
       expect(await ui.find({ text: /esc to interrupt/ })).toBeDefined()
     })
 
+    test('below: the line leaves room for the mode label beside it', async ($, on) => {
+      const { clock } = await boot($, on)
+      const viewport = { columns: 100, rows: 40, isFullscreen: false }
+      const mode = (modes: string[]) =>
+        $.ui.mount({ plugin: 'statusline', surface, component: 'SessionMode', props: { modes } })
+      const line = await $.ui.mount({ plugin: 'statusline', surface, component: 'PromptHint', props: hint(), viewport })
+      // 100 less padding (4), "⏵⏵ bypass permissions on" (24), " · " (3) and slack (2).
+      expect(await line.find({ type: 'Box' })).toMatchObject({ props: { width: 67 } })
+
+      await mode(['auto mode on'])
+      await clock.advance(1000)
+      expect(await line.find({ type: 'Box' })).toMatchObject({ props: { width: 76 } })
+
+      await mode([])
+      await clock.advance(1000)
+      expect(await line.find({ type: 'Box' })).toMatchObject({ props: { width: 91 } })
+
+      const unsized = await $.ui.mount({ plugin: 'statusline', surface, component: 'PromptHint', props: hint() })
+      expect((await unsized.find({ type: 'Box' }))?.props.width).toBeUndefined()
+    })
+
     test('a failing binary shows its first stderr line without escapes', async ($, on) => {
       await boot($, on, {
         out: { exitCode: 1, stdout: '', stderr: '\u001b[1;31m! error:\u001b[0m reading settings\nmore' },

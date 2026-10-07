@@ -105,6 +105,6 @@ export type Live = {
 
 declare module 'claude-code' {
   interface PluginState {
-    statusline: { rendered: Rendered | null; tracker: Tracker; live: Live }
+    statusline: { rendered: Rendered | null; tracker: Tracker; live: Live; modes: string[] | null }
   }
 }

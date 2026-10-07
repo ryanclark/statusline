@@ -29,7 +29,7 @@ import {
 import { isSpanRows, MISSING, NOT_FOUND, REQUIRED_FLAGS, tooOldMessage, UNKNOWN_FLAG } from './binary'
 import type { Verdict } from './binary'
 import { EMPTY_TRACKER, observeStep, TTL_MS } from './cache'
-import { blank, draw } from './draw'
+import { blank, draw, hintWidth } from './draw'
 import { autocompactOf, inputJson } from './input'
 import {
   answered,
@@ -54,6 +54,7 @@ import type { Json } from './util'
 const rendered = atom({ plugin: 'statusline', key: 'rendered' } as const, null)
 const tracker = atom({ plugin: 'statusline', key: 'tracker' } as const, EMPTY_TRACKER)
 const live = atom({ plugin: 'statusline', key: 'live' } as const, EMPTY_LIVE)
+const modes = atom({ plugin: 'statusline', key: 'modes' } as const, null)
 
 type State = {
   binary: string
@@ -72,6 +73,8 @@ type State = {
   // A subagent request may have taken the main loop's compose or left its own.
   composeAmbiguous: boolean
   handshake: Promise<Verdict> | null
+  // The mode labels Claude Code last drew. A render hook may not write state, so the next refresh stores them.
+  seenModes: readonly string[] | null
   tooOld: string | null
   usage: UsageMemo
   // The agents map last written for the binary and when, so an unchanged map is not written every tick.
@@ -105,6 +108,7 @@ function fresh(options: PluginOptions): State {
     pendingCompose: null,
     composeAmbiguous: false,
     handshake: null,
+    seenModes: null,
     tooOld: null,
     usage: newUsageMemo(),
     agentsKey: NO_AGENTS,
@@ -366,6 +370,9 @@ async function run($: EngineInterface): Promise<Rendered> {
     : { rows: [], error: `statusline: ${binary} did not print span rows, it needs --format spans` }
 }
 
+const sameLabels = (a: readonly string[], b: readonly string[] | null) =>
+  b !== null && a.length === b.length && a.every((label, i) => label === b[i])
+
 async function refresh($: EngineInterface) {
   if (state.inFlight) {
     state.again = true
@@ -385,6 +392,10 @@ async function refresh($: EngineInterface) {
       await update($, rendered, () => next)
       state.last = key
     }
+    const seen = state.seenModes
+    if (seen !== null && !sameLabels(seen, await read($, modes))) {
+      await update($, modes, () => [...seen])
+    }
   } catch {
     // Left unmarked so the next refresh stores the line again.
   } finally {
@@ -400,9 +411,10 @@ async function drawLine(
   e: Parameters<EngineInterface['ui']['resolve']>[0],
   working: boolean,
   hint?: unknown,
+  width?: number,
 ) {
   const r = await read($, rendered)
-  return r && !blank(r) ? draw($.ui.resolve(e), r, working, hint) : null
+  return r && !blank(r) ? draw($.ui.resolve(e), r, working, hint, width) : null
 }
 
 async function noteTodos($: EngineInterface, tool: string, args: Json, result: Json, main: boolean) {
@@ -673,8 +685,15 @@ export const register: Register = (on, options) => {
     if (state.placement !== 'below') {
       return next(e)
     }
+    const width = hintWidth(e.viewport?.columns, await read($, modes))
     // The hint line is the only place the engine says how to interrupt, so it is carried over while a turn runs.
-    return (await drawLine($, e, e.props.isWorking, e.props.hint)) ?? next(e)
+    return (await drawLine($, e, e.props.isWorking, e.props.hint, width)) ?? next(e)
+  })
+
+  // Watched only for the labels' width, so Claude Code still draws them.
+  on('ui.render', { component: 'SessionMode' }, async (_$, e, next) => {
+    state.seenModes = e.props.modes
+    return next(e)
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
