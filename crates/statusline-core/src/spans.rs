@@ -17,9 +17,9 @@ pub struct Span {
 #[serde(default)]
 pub struct Style {
 	#[serde(skip_serializing_if = "Option::is_none")]
-	pub fg: Option<String>,
+	pub fg: Option<Color>,
 	#[serde(skip_serializing_if = "Option::is_none")]
-	pub bg: Option<String>,
+	pub bg: Option<Color>,
 	#[serde(skip_serializing_if = "std::ops::Not::not")]
 	pub bold: bool,
 	#[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -34,6 +34,67 @@ pub struct Style {
 	pub inverse: bool,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub href: Option<String>,
+}
+
+/// Written as an Ink colour name or `#rrggbb`, the two forms Ink's `color` prop takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Color {
+	/// One of the 16 terminal colours, so it follows the user's palette instead of a fixed RGB value.
+	Named(&'static str),
+	Rgb(u8, u8, u8),
+}
+
+impl Color {
+	fn ansi(n: u16) -> Self {
+		Self::Named(ANSI_NAMES[usize::from(n)])
+	}
+}
+
+impl std::fmt::Display for Color {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::Named(name) => f.write_str(name),
+			Self::Rgb(r, g, b) => write!(f, "#{r:02x}{g:02x}{b:02x}"),
+		}
+	}
+}
+
+impl std::str::FromStr for Color {
+	type Err = String;
+
+	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		if let Some(name) = ANSI_NAMES.iter().find(|name| **name == s) {
+			return Ok(Self::Named(name));
+		}
+		let channel = |i: usize| {
+			s.get(i..i + 2)
+				.and_then(|hex| u8::from_str_radix(hex, 16).ok())
+		};
+		match (
+			s.len(),
+			s.strip_prefix('#'),
+			channel(1),
+			channel(3),
+			channel(5),
+		) {
+			(7, Some(_), Some(r), Some(g), Some(b)) => Ok(Self::Rgb(r, g, b)),
+			_ => Err(format!("unknown colour {s:?}")),
+		}
+	}
+}
+
+impl Serialize for Color {
+	fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+		s.collect_str(self)
+	}
+}
+
+impl<'de> Deserialize<'de> for Color {
+	fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+		String::deserialize(d)?
+			.parse()
+			.map_err(serde::de::Error::custom)
+	}
 }
 
 /// Splits `s` into rows on `\n` and each row into runs of identically styled text. Unknown escape sequences and
@@ -129,20 +190,20 @@ fn apply_sgr(style: &mut Style, params: &str) {
 			24 => style.underline = false,
 			27 => style.inverse = false,
 			29 => style.strikethrough = false,
-			30..=37 => style.fg = Some(ANSI_NAMES[usize::from(code - 30)].to_owned()),
+			30..=37 => style.fg = Some(Color::ansi(code - 30)),
 			38 => style.fg = extended_color(&mut codes),
 			39 => style.fg = None,
-			40..=47 => style.bg = Some(ANSI_NAMES[usize::from(code - 40)].to_owned()),
+			40..=47 => style.bg = Some(Color::ansi(code - 40)),
 			48 => style.bg = extended_color(&mut codes),
 			49 => style.bg = None,
-			90..=97 => style.fg = Some(ANSI_NAMES[usize::from(code - 90) + 8].to_owned()),
-			100..=107 => style.bg = Some(ANSI_NAMES[usize::from(code - 100) + 8].to_owned()),
+			90..=97 => style.fg = Some(Color::ansi(code - 90 + 8)),
+			100..=107 => style.bg = Some(Color::ansi(code - 100 + 8)),
 			_ => {}
 		}
 	}
 }
 
-/// The 16 terminal colors by their Ink names, so they follow the user's terminal palette instead of a fixed RGB value.
+/// The 16 terminal colors by their Ink names.
 const ANSI_NAMES: [&str; 16] = [
 	"black",
 	"red",
@@ -163,27 +224,27 @@ const ANSI_NAMES: [&str; 16] = [
 ];
 
 /// Reads the tail of a 38 or 48 code, `5;n` for the 256-color table or `2;r;g;b` for truecolor.
-fn extended_color(codes: &mut impl Iterator<Item = u16>) -> Option<String> {
+fn extended_color(codes: &mut impl Iterator<Item = u16>) -> Option<Color> {
 	match codes.next()? {
 		5 => {
 			let n = u8::try_from(codes.next()?).ok()?;
 			Some(match n {
-				0..=15 => ANSI_NAMES[usize::from(n)].to_owned(),
+				0..=15 => Color::ansi(n.into()),
 				16..=231 => {
 					let level = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
 					let n = n - 16;
-					hex(level(n / 36), level(n / 6 % 6), level(n % 6))
+					Color::Rgb(level(n / 36), level(n / 6 % 6), level(n % 6))
 				}
 				232..=255 => {
 					let v = 8 + (n - 232) * 10;
-					hex(v, v, v)
+					Color::Rgb(v, v, v)
 				}
 			})
 		}
 		2 => {
 			// All three are consumed before validating, so a bad one cannot leave the others to be read as SGR codes.
 			let (r, g, b) = (codes.next()?, codes.next()?, codes.next()?);
-			Some(hex(
+			Some(Color::Rgb(
 				u8::try_from(r).ok()?,
 				u8::try_from(g).ok()?,
 				u8::try_from(b).ok()?,
@@ -191,10 +252,6 @@ fn extended_color(codes: &mut impl Iterator<Item = u16>) -> Option<String> {
 		}
 		_ => None,
 	}
-}
-
-fn hex(r: u8, g: u8, b: u8) -> String {
-	format!("#{r:02x}{g:02x}{b:02x}")
 }
 
 #[cfg(test)]
@@ -212,7 +269,7 @@ mod tests {
 
 	fn fg(color: &str) -> Style {
 		Style {
-			fg: Some(color.to_owned()),
+			fg: Some(color.parse().unwrap()),
 			..Style::default()
 		}
 	}
@@ -257,7 +314,7 @@ mod tests {
 		let rows = ansi_to_spans(&rendered);
 		assert_eq!(rows[0][0].text, "a");
 		assert!(rows[0][0].style.bold);
-		assert_eq!(rows[0][0].style.fg.as_deref(), Some("#50c878"));
+		assert_eq!(rows[0][0].style.fg, Some(Color::Rgb(0x50, 0xc8, 0x78)));
 		// owo's bold closes with a full reset, which also drops the outer color, as a terminal would draw it.
 		assert_eq!(rows[0][1], span("x", Style::default()));
 	}
@@ -328,7 +385,7 @@ mod tests {
 		assert_eq!(
 			rows[0][0].style,
 			Style {
-				bg: Some("#010203".to_owned()),
+				bg: Some(Color::Rgb(1, 2, 3)),
 				italic: true,
 				underline: true,
 				..Style::default()
@@ -365,8 +422,8 @@ mod tests {
 			span(
 				"#1",
 				Style {
-					fg: Some("green".to_owned()),
-					bg: Some("#010203".to_owned()),
+					fg: Some(Color::Named("green")),
+					bg: Some(Color::Rgb(1, 2, 3)),
 					bold: true,
 					dim: true,
 					italic: true,
@@ -384,6 +441,8 @@ mod tests {
 			serde_json::from_str::<Span>(r#"{"text":"x"}"#).unwrap(),
 			span("x", Style::default())
 		);
+		assert!(serde_json::from_str::<Span>(r#"{"text":"x","fg":"teal"}"#).is_err());
+		assert!(serde_json::from_str::<Span>(r##"{"text":"x","fg":"#12345g"}"##).is_err());
 	}
 
 	#[test]

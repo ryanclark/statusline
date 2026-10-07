@@ -206,11 +206,6 @@ pub fn format_duration_secs(total_secs: u64) -> String {
 	}
 }
 
-#[must_use]
-pub fn format_duration_ms(ms: u64) -> String {
-	format_duration_secs(ms / 1000)
-}
-
 /// Parses `"30m"`, `"2h"`, `"90s"`, `"1d"` or a mix like `"1h30m"`.
 #[must_use]
 pub fn parse_duration(s: &str) -> Option<Duration> {
