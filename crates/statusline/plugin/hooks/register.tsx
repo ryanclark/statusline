@@ -5,8 +5,11 @@ import type { Autocompact, CacheTtl, Compaction, ComposeShape, Rendered } from '
 import {
   agentStatuses,
   AGENTS_REWRITE_MS,
+  BACKGROUND_TOOLS,
+  backgroundSnapshot,
   detailOf,
   EMPTY_LIVE,
+  foldBackground,
   foldTodos,
   NO_COMPACTION,
   RUNNING,
@@ -438,6 +441,28 @@ async function noteTodos($: EngineInterface, tool: string, args: Json, result: J
   void refresh($)
 }
 
+async function noteBackground($: EngineInterface, tool: string, args: Json, result: Json) {
+  if (!BACKGROUND_TOOLS.has(tool)) {
+    return
+  }
+  await update($, live, l => foldBackground(l, tool, args, result) ?? l)
+  void refresh($)
+}
+
+// Stop and SubagentStop both list the whole session's work in flight, which settles the tasks that ended since.
+async function settleBackground<E extends { background_tasks?: unknown }, R>(
+  $: EngineInterface,
+  e: E,
+  next: (e: E) => Promise<R>,
+): Promise<R> {
+  const background = backgroundSnapshot(e.background_tasks)
+  if (background) {
+    await update($, live, l => ({ ...l, background }))
+    void refresh($)
+  }
+  return next(e)
+}
+
 async function clearPermission($: EngineInterface, tool: string, agent: string | undefined) {
   const who = agent ?? null
   if (!(await read($, live)).permissions.some(p => p.tool === tool && p.agent === who)) {
@@ -583,6 +608,7 @@ export const register: Register = (on, options) => {
       const out = obj(result.result)
       if (!result.deny && !result.isError && out) {
         await noteTodos($, e.tool, args, out, !e.agentId)
+        await noteBackground($, e.tool, args, out)
       }
       return result
     } finally {
@@ -601,6 +627,9 @@ export const register: Register = (on, options) => {
     return next(e)
   }).catch(passThrough)
   on('classic.PostToolUse', settlePermission).catch(passThrough)
+  // A task notification names no task id where a hook can read it, so a finished task waits for the turn's Stop.
+  on('classic.Stop', settleBackground).catch(passThrough)
+  on('classic.SubagentStop', settleBackground).catch(passThrough)
   on('classic.PostToolUseFailure', settlePermission).catch(passThrough)
   on('classic.PermissionDenied', settlePermission).catch(passThrough)
 

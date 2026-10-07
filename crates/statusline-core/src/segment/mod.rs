@@ -86,6 +86,7 @@ pub enum SegmentType {
 	LastApiError,
 	TodoProgress,
 	Agents,
+	BackgroundTasks,
 	Compaction,
 	AutocompactHeadroom,
 }
@@ -156,7 +157,8 @@ impl SegmentType {
 				PermissionPending => LastApiError,
 				LastApiError => TodoProgress,
 				TodoProgress => Agents,
-				Agents => Compaction,
+				Agents => BackgroundTasks,
+				BackgroundTasks => Compaction,
 				Compaction => AutocompactHeadroom,
 				AutocompactHeadroom => return None,
 			})

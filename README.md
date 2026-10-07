@@ -271,6 +271,7 @@ These need the [plugin](#claude-code-plugin). With the plain `statusLine` comman
 | `last_api_error` | Why the last turn failed with ⚠ icon and how long ago (`⚠ overloaded 2m ago`, `rate limited`, `hit max tokens`, `interrupted`) |
 | `todo_progress` | Todo items done out of total with ☑ icon and the active item (`☑ 3/7 · Running tests`) |
 | `agents` | Background agents with ⁂ icon (`⁂ 3 running · 1 idle`) |
+| `background_tasks` | Background shells, monitors and workflows still running with ⧗ icon: the task and its description when there is one (`⧗ shell · npm run dev`), else a count by kind (`⧗ 2 shells · 1 monitor`). Subagents are counted by `agents` |
 | `compaction` | With ⟳ icon, `⟳ compacting 18s` while one runs, else how many, when, and the tokens before and after (`compacted ×2 · 14m ago · 182.0k→21.0k`) |
 | `autocompact_headroom` | Tokens left before autocompact triggers with ↧ icon (`compact in 38.0k`), or `autocompact off` |
 

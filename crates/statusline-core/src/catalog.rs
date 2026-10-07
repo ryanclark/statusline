@@ -668,6 +668,14 @@ static CATALOG: &[SegmentMeta] = &[
 		options: ICON_TEXT,
 	},
 	SegmentMeta {
+		ty: SegmentType::BackgroundTasks,
+		id: "background_tasks",
+		label: "Background tasks",
+		category: Category::Activity,
+		description: "Background shells, monitors and workflows still running, counted by kind or the one task described",
+		options: ICON_TEXT,
+	},
+	SegmentMeta {
 		ty: SegmentType::Compaction,
 		id: "compaction",
 		label: "Compaction",
@@ -872,7 +880,7 @@ mod tests {
 			.iter()
 			.filter(|m| m.category == Category::Activity)
 			.collect();
-		assert_eq!(activity.len(), 8);
+		assert_eq!(activity.len(), 9);
 		for m in activity {
 			assert_eq!(m.options, ICON_TEXT, "{}", m.id);
 		}

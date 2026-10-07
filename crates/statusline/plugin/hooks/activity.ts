@@ -1,6 +1,6 @@
 import type { AgentInfo } from 'claude-code'
 
-import type { Compaction, LastError, Live, PendingPermission, TaskItem, TodoProgress } from '../types'
+import type { BackgroundTask, Compaction, LastError, Live, PendingPermission, TaskItem, TodoProgress } from '../types'
 import { cut, obj, plain, str } from './util'
 import type { Json } from './util'
 
@@ -27,6 +27,7 @@ export const EMPTY_LIVE: Live = {
   todos: null,
   tasks: {},
   compaction: null,
+  background: {},
 }
 
 export const TODO_TOOLS: ReadonlySet<string> = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'])
@@ -116,6 +117,69 @@ export function foldTodos(l: Live, tool: string, args: Json, result: Json, main:
     }
   }
   return tasks === undefined ? undefined : { ...l, tasks, todos: progress(Object.values(tasks)) }
+}
+
+export const BACKGROUND_TOOLS: ReadonlySet<string> = new Set(['Bash', 'Monitor', 'Workflow', 'TaskStop'])
+
+// The same rule for a tool's own result and a Stop snapshot, so the line does not change when the snapshot lands.
+function backgroundTask(type: string, description: unknown, command: unknown, name: unknown): BackgroundTask {
+  const label = (type === 'workflow' ? str(name) : null) || str(description) || str(command)
+  const text = label === null ? '' : plain(label)
+  return { type, description: text ? cut(text, DETAIL_MAX, '…') : null }
+}
+
+// Folds one tool result into the background tasks. Returns undefined when the result changes nothing.
+export function foldBackground(l: Live, tool: string, args: Json, result: Json): Live | undefined {
+  // A session that ran an older build of the plugin keeps its live value across the reload, without this field.
+  const background = l.background ?? {}
+  let id: string | null
+  let task: BackgroundTask
+  switch (tool) {
+    case 'Bash':
+      id = str(result.backgroundTaskId)
+      // A synchronous subagent's shell is killed with that agent's answer, so it is not work the session waits on.
+      if (result.backgroundEndsWithFinalResponse === true) {
+        return undefined
+      }
+      task = backgroundTask('shell', args.description, args.command, null)
+      break
+    case 'Monitor':
+      id = str(result.taskId)
+      task = backgroundTask('monitor', args.description, args.command, null)
+      break
+    case 'Workflow':
+      id = str(result.taskId)
+      task = backgroundTask('workflow', null, null, result.workflowName ?? args.name)
+      break
+    case 'TaskStop': {
+      const stopped = str(result.task_id)
+      if (stopped === null || !(stopped in background)) {
+        return undefined
+      }
+      const rest = { ...background }
+      delete rest[stopped]
+      return { ...l, background: rest }
+    }
+    default:
+      return undefined
+  }
+  return id === null ? undefined : { ...l, background: { ...background, [id]: task } }
+}
+
+// Stop's list of the session's work still in flight. Undefined when the event carries none, as an older engine's.
+export function backgroundSnapshot(list: unknown): Record<string, BackgroundTask> | undefined {
+  if (!Array.isArray(list)) {
+    return undefined
+  }
+  const background: Record<string, BackgroundTask> = {}
+  for (const t of list.map(obj)) {
+    const id = str(t?.id)
+    const type = str(t?.type)
+    if (t && id !== null && type !== null && type !== 'subagent') {
+      background[id] = backgroundTask(type, t.description, t.command, t.name)
+    }
+  }
+  return background
 }
 
 // PermissionRequest carries no tool_use_id, so a call's end settles the oldest wait on the same tool in the same loop.

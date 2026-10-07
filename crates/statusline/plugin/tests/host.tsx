@@ -200,6 +200,8 @@ function host(on: On, cfg: Host, seen: Seen = {}): MockClock {
   on('classic.PostToolUse', () => ({}))
   on('classic.PostToolUseFailure', () => ({}))
   on('classic.StopFailure', () => ({}))
+  on('classic.Stop', () => ({}))
+  on('classic.SubagentStop', () => ({}))
   on('fs.stat', (_$, e) => {
     const file = cfg.files?.get(e.path)
     if (file !== undefined) {

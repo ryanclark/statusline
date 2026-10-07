@@ -74,6 +74,7 @@ pub fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Optio
 		SegmentType::LastApiError => activity::last_api_error(segment, ctx),
 		SegmentType::TodoProgress => activity::todo_progress(segment, ctx),
 		SegmentType::Agents => activity::agents(segment, ctx),
+		SegmentType::BackgroundTasks => activity::background_tasks(segment, ctx),
 		SegmentType::Compaction => activity::compaction(segment, ctx),
 		SegmentType::AutocompactHeadroom => activity::autocompact_headroom(segment, ctx),
 	};
