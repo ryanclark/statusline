@@ -160,7 +160,8 @@ export const NO_COMPACTION: Compaction = {
 export const RUNNING: ReadonlySet<AgentInfo['status']> = new Set(['pending', 'running', 'waiting'])
 
 export function agentCounts(list: readonly AgentInfo[]): { running: number; idle: number } | null {
-  const running = list.filter(a => RUNNING.has(a.status)).length
-  const idle = list.filter(a => a.status === 'idle').length
+  // A waiting agent is held on its own background work or an approval, which Claude Code's panel shows as done.
+  const running = list.filter(a => a.status === 'pending' || a.status === 'running').length
+  const idle = list.filter(a => a.status === 'idle' || a.status === 'waiting').length
   return running + idle === 0 ? null : { running, idle }
 }
