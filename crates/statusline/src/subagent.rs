@@ -11,9 +11,12 @@ pub(crate) fn run(spans: bool) {
 	}
 
 	// Writing nothing keeps Claude Code's default rows, which beats a half-rendered panel.
-	let Ok(input) = SubagentInput::from_reader(stdin.lock()) else {
+	let Ok(mut input) = SubagentInput::from_reader(stdin.lock()) else {
 		return;
 	};
+	if let Some(agents) = crate::session::plugin_agents(&input.session_id) {
+		input.mark_waiting(&agents);
+	}
 
 	let settings = Settings::load().ok();
 	let segments = settings

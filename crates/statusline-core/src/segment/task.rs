@@ -1,4 +1,4 @@
-use crate::constants::{CYAN, GRAY, GREEN, RED, UP_ARROW};
+use crate::constants::{CYAN, GRAY, GREEN, RED, UP_ARROW, YELLOW};
 use crate::format::elapsed_since;
 use chrono::Utc;
 use owo_colors::{DynColors, OwoColorize};
@@ -31,6 +31,7 @@ const MILLIS_THRESHOLD: i64 = 100_000_000_000;
 fn status_color(status: &str) -> Option<DynColors> {
 	Some(match status {
 		"running" | "in_progress" => CYAN,
+		"waiting" => YELLOW,
 		"completed" | "done" => GREEN,
 		"failed" | "error" => RED,
 		"pending" | "queued" => GRAY,

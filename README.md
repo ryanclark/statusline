@@ -469,7 +469,7 @@ under `g` global in `statusline configure`, for one free-form line per task inst
 | Segment | Description |
 |---|---|
 | `task_name` | Subagent name with ⚙ icon |
-| `task_status` | Task status (`running`, `completed`, `failed`, `pending`), colored by state; `"icon": true` adds a ● in the same color (off by default, since the panel draws its own marker) |
+| `task_status` | Task status (`running`, `waiting`, `completed`, `failed`, `pending`), colored by state; `"icon": true` adds a ● in the same color (off by default, since the panel draws its own marker). Claude Code reports an agent paused on its own background work as `completed`; with the plugin installed it shows as `waiting` |
 | `task_description` | Task description, dimmed |
 | `task_elapsed` | Time since the task started with ⏱ icon |
 | `task_tokens` | Tokens the task has used with ↑ icon |

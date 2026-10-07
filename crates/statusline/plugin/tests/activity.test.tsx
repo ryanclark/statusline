@@ -347,6 +347,61 @@ describe('activity', () => {
     expect(modOf(seen).agents).toBeNull()
   })
 
+  const AGENTS_FILE = '/home/me/.statusline/sessions/abc.agents.json'
+  const agentWrites = (events: string[] | undefined) =>
+    (events ?? [])
+      .filter(e => e.startsWith(`write ${AGENTS_FILE} `))
+      .map(e => JSON.parse(e.slice(`write ${AGENTS_FILE} `.length)))
+
+  test("each agent's status is written for the agent panel, again only on a change or to stay fresh", async ($, on) => {
+    const agent = (id: string, status: AgentInfo['status']): AgentInfo => ({
+      id,
+      description: id,
+      type: 'Explore',
+      status,
+    })
+    const cfg = { agents: [agent('b91ef5c9d5ef1262b', 'running'), agent('a91ef5c9d5ef1262b', 'waiting')] }
+    const { seen, clock } = await boot($, on, cfg)
+    const first = { a91ef5c9d5ef1262b: 'waiting', b91ef5c9d5ef1262b: 'running' }
+    expect(agentWrites(seen.events)).toEqual([{ written_at_ms: T0, agents: first }])
+    // The same agents in another order are no change.
+    cfg.agents = [...cfg.agents].reverse()
+    await clock.advance(9000)
+    expect(agentWrites(seen.events)).toHaveLength(1)
+    await clock.advance(1000)
+    expect(agentWrites(seen.events)).toEqual([
+      { written_at_ms: T0, agents: first },
+      { written_at_ms: T0 + 10_000, agents: first },
+    ])
+    cfg.agents = [agent('a91ef5c9d5ef1262b', 'completed')]
+    await clock.advance(1000)
+    expect(agentWrites(seen.events).at(-1)).toEqual({
+      written_at_ms: T0 + 11_000,
+      agents: { a91ef5c9d5ef1262b: 'completed' },
+    })
+    // An emptied list is written once, so the binary stops seeing the last agents.
+    cfg.agents = []
+    await clock.advance(30_000)
+    expect(agentWrites(seen.events).slice(-1)).toEqual([{ written_at_ms: T0 + 12_000, agents: {} }])
+  })
+
+  test('a session without agents writes no agents file', async ($, on) => {
+    const { seen, clock } = await boot($, on)
+    await clock.advance(30_000)
+    expect(agentWrites(seen.events)).toEqual([])
+  })
+
+  test('a failed agents write is tried again on the next refresh', { options: quiet }, async ($, on) => {
+    const unwritable = new Set([AGENTS_FILE])
+    const agents: AgentInfo[] = [{ id: 'a', description: 'a', type: 'Explore', status: 'waiting' }]
+    const { seen, clock } = await boot($, on, { agents, unwritable })
+    expect(agentWrites(seen.events)).toEqual([])
+    unwritable.clear()
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    await clock.settle()
+    expect(agentWrites(seen.events)).toEqual([{ written_at_ms: T0, agents: { a: 'waiting' } }])
+  })
+
   test('a main-loop compaction shows while it runs, then its counts', { options: quiet }, async ($, on) => {
     const summarising = gate()
     const { seen, clock } = await boot($, on, { compact: { wait: summarising.wait } })

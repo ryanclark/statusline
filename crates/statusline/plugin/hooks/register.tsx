@@ -1,8 +1,10 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, PluginOptions, Register } from 'claude-code'
+import type { AgentInfo, EngineInterface, PluginOptions, Register } from 'claude-code'
 
 import type { Autocompact, CacheTtl, Compaction, ComposeShape, Rendered } from '../types'
 import {
+  agentStatuses,
+  AGENTS_REWRITE_MS,
   detailOf,
   EMPTY_LIVE,
   foldTodos,
@@ -59,7 +61,16 @@ type State = {
   handshake: Promise<Verdict> | null
   tooOld: string | null
   usage: UsageMemo
+  // The agents map last written for the binary and when, so an unchanged map is not written every tick.
+  agentsKey: string
+  agentsAt: number
 }
+
+// A session that never had an agent writes no file, which the binary reads the same as an empty map.
+const NO_AGENTS = '{}'
+
+// Session ids become file names, so only the plain tokens the binary itself accepts are written.
+const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/
 
 // Outlives three missed ticks. The cap bounds how long a plugin that stops silently leaves the session with no line.
 const HEARTBEAT_MAX_MS = 30_000
@@ -83,6 +94,8 @@ function fresh(options: PluginOptions): State {
     handshake: null,
     tooOld: null,
     usage: newUsageMemo(),
+    agentsKey: NO_AGENTS,
+    agentsAt: -Infinity,
   }
 }
 
@@ -111,6 +124,7 @@ async function buildInput($: EngineInterface): Promise<string> {
   if (due) {
     state.autocompact = autocompactOf(usage.context.breakdown)
   }
+  await writeAgents($, id, now, agents)
   return inputJson({
     now,
     id,
@@ -157,8 +171,7 @@ async function probe($: EngineInterface, binary: string): Promise<Verdict> {
 // The file the binary's own heartbeat writes (session.rs), holding the expiry in epoch ms. Best effort, since every
 // refresh writes it again through the binary.
 async function writeHeartbeat($: EngineInterface, sessionId: string, expiresMs: number) {
-  // The id becomes a file name, so only the plain tokens the binary itself accepts are written.
-  if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) {
+  if (!SESSION_ID.test(sessionId)) {
     return
   }
   try {
@@ -168,6 +181,26 @@ async function writeHeartbeat($: EngineInterface, sessionId: string, expiresMs: 
     }
   } catch {
     // A missed write leaves the native line drawing until the next refresh, as if the plugin were not installed.
+  }
+}
+
+async function writeAgents($: EngineInterface, sessionId: string, now: number, agents: readonly AgentInfo[]) {
+  const statuses = agentStatuses(agents)
+  const key = JSON.stringify(statuses)
+  const unchanged = key === state.agentsKey && (key === NO_AGENTS || now - state.agentsAt < AGENTS_REWRITE_MS)
+  if (unchanged || !SESSION_ID.test(sessionId)) {
+    return
+  }
+  try {
+    const home = await $.env.get('HOME')
+    if (home) {
+      const file = { written_at_ms: now, agents: statuses }
+      await $.fs.write(`${home}/.statusline/sessions/${sessionId}.agents.json`, JSON.stringify(file))
+      state.agentsKey = key
+      state.agentsAt = now
+    }
+  } catch {
+    // Left unmarked so the next refresh tries again. Until then the panel shows Claude Code's own status.
   }
 }
 

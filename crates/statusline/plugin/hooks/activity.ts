@@ -165,3 +165,16 @@ export function agentCounts(list: readonly AgentInfo[]): { running: number; idle
   const idle = list.filter(a => a.status === 'idle' || a.status === 'waiting').length
   return running + idle === 0 ? null : { running, idle }
 }
+
+// The agent panel's command is told an agent held on its own background work has completed, so the binary takes each
+// agent's status from this map instead (subagent.rs). Sorted so a reordered list is not a change.
+export function agentStatuses(list: readonly AgentInfo[]): Record<string, AgentInfo['status']> {
+  const out: Record<string, AgentInfo['status']> = {}
+  for (const a of [...list].sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))) {
+    out[a.id] = a.status
+  }
+  return out
+}
+
+// The binary trusts the map for 30s, so an unchanged one is written again well before then.
+export const AGENTS_REWRITE_MS = 10_000

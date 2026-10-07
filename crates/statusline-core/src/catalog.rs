@@ -584,7 +584,7 @@ static CATALOG: &[SegmentMeta] = &[
 		id: "task_status",
 		label: "Task status",
 		category: Category::Subagent,
-		description: "Task status (running, completed, failed, pending), colored",
+		description: "Task status (running, waiting, completed, failed, pending), colored",
 		options: ICON_TEXT,
 	},
 	SegmentMeta {

@@ -8,9 +8,12 @@ use crate::segment::{RenderContext, SegmentConfig, SegmentLine, SegmentType, ali
 use crate::text::truncate_visible;
 use crate::util::null_as_default;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Default, Deserialize)]
 pub struct SubagentInput {
+	#[serde(default, deserialize_with = "null_as_default")]
+	pub session_id: String,
 	/// Usable row width in the agent panel.
 	#[serde(default)]
 	pub columns: Option<usize>,
@@ -21,6 +24,38 @@ pub struct SubagentInput {
 impl SubagentInput {
 	pub fn from_reader(reader: impl std::io::Read) -> Result<Self, serde_json::Error> {
 		serde_json::from_reader(reader)
+	}
+
+	/// Claude Code reports an agent held on its own background work as completed, while the plugin's agent list
+	/// knows it is waiting. Only that word is taken from the plugin, and never over a task still running.
+	pub fn mark_waiting(&mut self, plugin: &PluginAgents) {
+		for task in &mut self.tasks {
+			let running = matches!(task.status.as_str(), "running" | "in_progress");
+			if !running && plugin.agents.get(&task.id).is_some_and(|s| s == WAITING) {
+				WAITING.clone_into(&mut task.status);
+			}
+		}
+	}
+}
+
+const WAITING: &str = "waiting";
+
+/// The plugin's `<session>.agents.json`: each agent's status from its own agent list, keyed by the task id.
+#[derive(Debug, Default, Deserialize)]
+pub struct PluginAgents {
+	pub written_at_ms: u64,
+	#[serde(default)]
+	pub agents: HashMap<String, String>,
+}
+
+impl PluginAgents {
+	/// The plugin rewrites the file at least every 10s while it runs, so an older one belongs to a plugin that
+	/// stopped. One dated ahead of the clock is no fresher, or a clock stepped back would trust it indefinitely.
+	pub const FRESH_MS: u64 = 30_000;
+
+	#[must_use]
+	pub fn fresh(&self, now_ms: u64) -> bool {
+		now_ms.abs_diff(self.written_at_ms) <= Self::FRESH_MS
 	}
 }
 
@@ -462,6 +497,50 @@ mod tests {
 		for row in &plain {
 			assert!(row.chars().count() <= 80, "{row}");
 		}
+	}
+
+	fn plugin(json: &str) -> PluginAgents {
+		serde_json::from_str(json).unwrap()
+	}
+
+	#[test]
+	fn a_task_the_plugin_sees_waiting_shows_waiting() {
+		let mut input = SubagentInput::from_reader(FIXTURE.as_bytes()).unwrap();
+		assert_eq!(input.session_id, "abc123");
+		input.mark_waiting(&plugin(
+			r#"{"written_at_ms": 1738425600000, "agents": {"task-2": "waiting", "task-3": "waiting"}}"#,
+		));
+		let statuses: Vec<&str> = input.tasks.iter().map(|t| t.status.as_str()).collect();
+		assert_eq!(statuses, ["running", "waiting", "waiting"]);
+
+		let rows = render_rows(
+			&input,
+			&default_subagent_segments(),
+			"\u{2022}",
+			false,
+			false,
+		);
+		assert!(strip_ansi(&rows[1].content).contains("waiting"));
+	}
+
+	#[test]
+	fn the_plugin_never_overrides_a_running_task_or_with_another_status() {
+		let mut input = SubagentInput::from_reader(FIXTURE.as_bytes()).unwrap();
+		input.mark_waiting(&plugin(
+			r#"{"written_at_ms": 1, "agents": {"task-1": "waiting", "task-2": "running", "task-3": "completed"}}"#,
+		));
+		let statuses: Vec<&str> = input.tasks.iter().map(|t| t.status.as_str()).collect();
+		assert_eq!(statuses, ["running", "completed", "pending"]);
+	}
+
+	#[test]
+	fn plugin_agents_are_fresh_for_30s_either_side_of_now() {
+		let file = plugin(r#"{"written_at_ms": 1738425600000, "agents": {}}"#);
+		let at = 1_738_425_600_000;
+		assert!(file.fresh(at));
+		assert!(file.fresh(at + 30_000));
+		assert!(!file.fresh(at + 30_001));
+		assert!(!file.fresh(at - 30_001));
 	}
 
 	#[test]

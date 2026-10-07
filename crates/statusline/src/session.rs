@@ -3,6 +3,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use statusline_core::format::countdown_to;
+use statusline_core::subagent::PluginAgents;
 use statusline_core::usage_bridge::UsageReply;
 use std::fs::{self, File};
 use std::io::BufReader;
@@ -135,6 +136,20 @@ fn drawn_by_plugin_in(dir: &Path, raw: &[u8], now: SystemTime) -> bool {
 		.and_then(|path| fs::read_to_string(path).ok())
 		.and_then(|text| text.trim().parse::<u64>().ok())
 		.is_some_and(|expires| epoch_ms(now) < expires)
+}
+
+/// The plugin's view of the session's agents, when it wrote one recently enough to trust. Missing, stale and
+/// unparsable files all read as none, which leaves the panel to Claude Code's own statuses.
+#[must_use]
+pub fn plugin_agents(session_id: &str) -> Option<PluginAgents> {
+	sessions_dir().and_then(|dir| plugin_agents_in(&dir, session_id, SystemTime::now()))
+}
+
+fn plugin_agents_in(dir: &Path, session_id: &str, now: SystemTime) -> Option<PluginAgents> {
+	let text = fs::read(session_file(dir, session_id, "agents.json")?).ok()?;
+	serde_json::from_slice::<PluginAgents>(&text)
+		.ok()
+		.filter(|agents| agents.fresh(epoch_ms(now)))
 }
 
 fn session_id(raw: &[u8]) -> Option<String> {
@@ -386,6 +401,7 @@ fn session_file(dir: &Path, session_id: &str, ext: &str) -> Option<PathBuf> {
 mod tests {
 	use super::*;
 	use statusline_core::input::InputData;
+	use statusline_core::subagent::SubagentInput;
 
 	const FIXTURE: &str = include_str!("../tests/fixtures/input.json");
 	const HOUR: Duration = Duration::from_secs(60 * 60);
@@ -519,8 +535,10 @@ mod tests {
 		let stale = now - SNAPSHOT_TTL - HOUR;
 		for (name, modified) in [
 			("gone.json", stale),
+			("gone.agents.json", stale),
 			(".gone.123.tmp", stale),
 			("recent.json", now - HOUR),
+			("recent.agents.json", now - HOUR),
 			("notes.txt", stale),
 		] {
 			File::create(dir.join(name))
@@ -538,8 +556,58 @@ mod tests {
 		capture_in(&dir, &piped("next"), now, Origin::Plugin);
 		assert_eq!(
 			names(&dir),
-			["live.json", "next.json", "notes.txt", "recent.json"]
+			[
+				"live.json",
+				"next.json",
+				"notes.txt",
+				"recent.agents.json",
+				"recent.json"
+			]
 		);
+
+		fs::remove_dir_all(&dir).unwrap();
+	}
+
+	#[test]
+	fn the_plugins_waiting_agents_show_waiting_while_its_file_is_fresh() {
+		const SUBAGENT: &str = include_str!("../../statusline-core/tests/fixtures/subagent.json");
+		let dir = temp_dir("plugin-agents");
+		fs::create_dir_all(&dir).unwrap();
+		let written = SystemTime::UNIX_EPOCH + Duration::from_millis(1_738_425_600_000);
+		let statuses = |now: SystemTime| {
+			let mut input = SubagentInput::from_reader(SUBAGENT.as_bytes()).unwrap();
+			if let Some(agents) = plugin_agents_in(&dir, &input.session_id, now) {
+				input.mark_waiting(&agents);
+			}
+			input
+				.tasks
+				.into_iter()
+				.map(|t| t.status)
+				.collect::<Vec<_>>()
+		};
+		let unchanged = ["running", "completed", "pending"];
+
+		assert_eq!(statuses(written), unchanged, "no file yet");
+
+		fs::write(
+			dir.join("abc123.agents.json"),
+			r#"{"written_at_ms": 1738425600000, "agents": {"task-1": "waiting", "task-2": "waiting", "task-3": "idle"}}"#,
+		)
+		.unwrap();
+		assert_eq!(
+			statuses(written + Duration::from_secs(30)),
+			["running", "waiting", "pending"]
+		);
+		assert_eq!(
+			statuses(written + Duration::from_millis(30_001)),
+			unchanged,
+			"a stopped plugin's file is stale"
+		);
+
+		fs::write(dir.join("abc123.agents.json"), r#"{"agents": {"task-2": "#).unwrap();
+		assert_eq!(statuses(written), unchanged, "a torn file is ignored");
+
+		assert!(plugin_agents_in(&dir, "../abc123", written).is_none());
 
 		fs::remove_dir_all(&dir).unwrap();
 	}
