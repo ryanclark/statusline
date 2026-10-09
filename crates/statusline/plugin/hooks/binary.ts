@@ -7,8 +7,12 @@ export const MISSING = /ENOENT|not found|No such file/i
 export const REQUIRED_FLAGS = [/--format\b/, /--heartbeat-ms\b/]
 // Optional, so a binary that predates it still draws, cut at a character instead of between segments.
 export const WIDTH_FLAG = /--width\b/
+export const PLUGIN_DATA_FLAG = /--plugin-data\b/
 // clap's wording for a flag a build predates. The probe sees it first, and a refresh catches a binary swapped later.
-export const UNKNOWN_FLAG = /unexpected argument '--(format|heartbeat-ms)'/
+export const UNKNOWN_FLAG = /unexpected argument '--(format|heartbeat-ms|plugin-data)'/
+
+export type Needs = { usage: boolean; autocompact: boolean }
+export const NO_NEEDS: Needs = { usage: false, autocompact: false }
 
 // A `final` error holds until reload. Others show for one refresh, then the binary is probed again.
 export type Verdict = { error: string; final: boolean } | null

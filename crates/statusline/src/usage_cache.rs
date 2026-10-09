@@ -33,6 +33,13 @@ pub fn resolve(
 	needs_credits: bool,
 	now: DateTime<Utc>,
 ) -> Resolved {
+	if !needs_usage && !needs_credits {
+		return Resolved {
+			usage: None,
+			credits: None,
+			stale: false,
+		};
+	}
 	let Some(plugin) = plugin else {
 		let (usage, credits) = results(cookie().as_ref(), needs_usage, needs_credits);
 		return Resolved {
@@ -99,7 +106,7 @@ fn parse_credits(reply: &UsageReply) -> CreditsResult {
 	})
 }
 
-pub fn maybe_spawn_refresh(org_id: &str, browser: Browser, profile: Option<&str>) {
+pub fn maybe_spawn_refresh(org_id: &str, browser: Option<Browser>, profile: Option<&str>) {
 	if recently_attempted() {
 		return;
 	}
@@ -114,11 +121,12 @@ pub fn maybe_spawn_refresh(org_id: &str, browser: Browser, profile: Option<&str>
 	cmd.arg("usage-refresh")
 		.arg("--org")
 		.arg(org_id)
-		.arg("--browser")
-		.arg(browser_arg(browser))
 		.stdin(std::process::Stdio::null())
 		.stdout(std::process::Stdio::null())
 		.stderr(std::process::Stdio::null());
+	if let Some(browser) = browser {
+		cmd.arg("--browser").arg(browser_arg(browser));
+	}
 
 	if let Some(p) = profile {
 		cmd.arg("--profile").arg(p);
@@ -134,7 +142,10 @@ pub fn maybe_spawn_refresh(org_id: &str, browser: Browser, profile: Option<&str>
 	let _ = cmd.spawn();
 }
 
-pub fn run_refresh(org_id: &str, browser: Browser, profile: Option<&str>) {
+pub fn run_refresh(org_id: &str, browser: Option<Browser>, profile: Option<&str>) {
+	// Browser detection can launch macOS `defaults`; it belongs in this worker along with cookie and network access.
+	let browser =
+		browser.unwrap_or_else(|| crate::browser::detect_or_cached().unwrap_or(Browser::Chrome));
 	let reply = fetch_reply(org_id, browser, profile);
 
 	write_cache(&reply);
@@ -268,6 +279,19 @@ fn browser_arg(browser: Browser) -> &'static str {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn unused_usage_segments_do_not_read_the_cookie_cache() {
+		let resolved = resolve(
+			None,
+			|| panic!("unused cache was read"),
+			false,
+			false,
+			Utc::now(),
+		);
+		assert!(resolved.usage.is_none());
+		assert!(resolved.credits.is_none());
+	}
 
 	fn usage_body() -> String {
 		r#"{"extra_usage":{"monthly_limit":5000,"used_credits":1200}}"#.to_owned()

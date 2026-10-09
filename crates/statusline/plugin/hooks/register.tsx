@@ -26,8 +26,8 @@ import {
   withoutBackground,
   withoutPermission,
 } from './activity'
-import { isSpanRows, MISSING, NOT_FOUND, REQUIRED_FLAGS, tooOldMessage, UNKNOWN_FLAG, WIDTH_FLAG } from './binary'
-import type { Verdict } from './binary'
+import { isSpanRows, MISSING, NO_NEEDS, NOT_FOUND, PLUGIN_DATA_FLAG, REQUIRED_FLAGS, tooOldMessage, UNKNOWN_FLAG, WIDTH_FLAG } from './binary'
+import type { Needs, Verdict } from './binary'
 import { EMPTY_TRACKER, observeStep, TTL_MS } from './cache'
 import { blank, draw, hintWidth } from './draw'
 import { autocompactOf, inputJson } from './input'
@@ -76,6 +76,8 @@ type State = {
   // Whether the binary can drop whole segments to fit, and the width the line last had. A render hook may not run the
   // binary, so the next refresh passes the width on.
   fits: boolean
+  reportsNeeds: boolean
+  needs: Needs
   fitWidth: number | undefined
   tooOld: string | null
   usage: UsageMemo
@@ -111,6 +113,8 @@ function fresh(options: PluginOptions): State {
     composeAmbiguous: false,
     handshake: null,
     fits: false,
+    reportsNeeds: false,
+    needs: { usage: true, autocompact: true }, // Older binaries cannot report their layout's requirements.
     fitWidth: undefined,
     tooOld: null,
     usage: newUsageMemo(),
@@ -125,11 +129,11 @@ const BREAKDOWN_EVERY_MS = 10_000
 
 async function buildInput($: EngineInterface): Promise<string> {
   const now = await $.clock.now()
-  const due = now - state.breakdownAt >= BREAKDOWN_EVERY_MS
+  const due = state.needs.autocompact && now - state.breakdownAt >= BREAKDOWN_EVERY_MS
   if (due) {
     state.breakdownAt = now
   }
-  const [id, cwd, root, model, version, usage, t, l, agents, shared] = await Promise.all([
+  const [id, cwd, root, model, version, usage, t, l, agents] = await Promise.all([
     $.session.id(),
     $.session.cwd(),
     $.session.root(),
@@ -139,7 +143,6 @@ async function buildInput($: EngineInterface): Promise<string> {
     read($, tracker),
     read($, live),
     $.agent.list(),
-    pollUsage($, now),
   ])
   if (due) {
     state.autocompact = autocompactOf(usage.context.breakdown)
@@ -158,7 +161,7 @@ async function buildInput($: EngineInterface): Promise<string> {
     agents,
     defaultTtl: state.defaultTtl,
     autocompact: state.autocompact,
-    accountUsage: shared,
+    accountUsage: state.reportsNeeds ? accountUsage(state.usage) : pollUsage($),
   })
 }
 
@@ -183,6 +186,10 @@ async function probe($: EngineInterface, binary: string): Promise<Verdict> {
   }
   const help = out.stdout
   state.fits = WIDTH_FLAG.test(help)
+  state.reportsNeeds = PLUGIN_DATA_FLAG.test(help)
+  if (state.reportsNeeds) {
+    state.needs = { ...NO_NEEDS }
+  }
   if (out.exitCode === 0 && !REQUIRED_FLAGS.every(flag => flag.test(help))) {
     return { error: await tooOld($, binary), final: true }
   }
@@ -255,10 +262,13 @@ async function authorizeUsage($: EngineInterface, memo: UsageMemo): Promise<stri
   try {
     auth = await $.session.authorize()
   } catch {
-    // Says nothing about the login, so the next refresh asks again.
+    // A failed call must allow the cookie fallback, without retrying authorization on every render.
     memo.handle = null
+    memo.authFailed = true
+    memo.nextAt = await $.clock.now() + FETCH_EVERY_MS
     return null
   }
+  memo.authFailed = false
   // An API key or a third-party provider has no claude.ai usage, and the binary keeps its cookie path for those.
   memo.handle = auth?.kind === 'bearer' ? auth.handle : null
   memo.off = memo.handle === null
@@ -267,12 +277,18 @@ async function authorizeUsage($: EngineInterface, memo: UsageMemo): Promise<stri
 
 async function fetchUsage($: EngineInterface, memo: UsageMemo, path: string, file: UsageFile): Promise<boolean> {
   let handle = memo.handle
-  if (handle === null) {
+  if (handle === null || !state.needs.usage) {
     return false
   }
   const start = await $.clock.now()
+  if (!state.needs.usage) {
+    return false
+  }
   memo.nextAt = start + FETCH_EVERY_MS
   await writeUsage($, path, claimed(file, start))
+  if (!state.needs.usage) {
+    return false
+  }
   let res
   try {
     res = await $.http.fetch(USAGE_URL, { auth: handle, headers: USAGE_HEADERS })
@@ -280,7 +296,7 @@ async function fetchUsage($: EngineInterface, memo: UsageMemo, path: string, fil
     // it is minted again. Once per fetch keeps that to a handle a minute.
     if (res.status === 401) {
       handle = await authorizeUsage($, memo)
-      if (handle === null) {
+      if (handle === null || !state.needs.usage) {
         return false
       }
       res = await $.http.fetch(USAGE_URL, { auth: handle, headers: USAGE_HEADERS })
@@ -299,40 +315,64 @@ async function fetchUsage($: EngineInterface, memo: UsageMemo, path: string, fil
     return false
   }
   memo.nextAt = Math.max(memo.nextAt, next.backoff_until_ms)
+  memo.last = shown(next)
   await writeUsage($, path, next)
   return res.ok
 }
 
-// The shared usage for this refresh, starting a fetch when it is due. The fetch is not awaited, since the engine gives
-// it up to 30s and the line should not wait on it.
-async function pollUsage($: EngineInterface, now: number): Promise<UsageInput | null> {
+// Authorization, cache reads and HTTP all run outside the render. The empty value reserves ownership while login
+// is pending, so the binary cannot start its cookie fallback at the same time.
+function accountUsage(memo: UsageMemo): UsageInput | null {
+  return memo.off || memo.authFailed ? null : memo.last
+}
+
+function pollUsage($: EngineInterface): UsageInput | null {
   const memo = state.usage
-  if (memo.off || (memo.handle === null && (await authorizeUsage($, memo)) === null)) {
+  if (memo.off) {
     return null
   }
-  const home = await $.env.get('HOME')
-  if (!home) {
-    return null
-  }
-  const path = usagePath(home)
-  const file = await readUsage($, path, now)
-  if (file && !memo.polling && !waiting(memo.nextAt, now) && fetchDue(file, now)) {
+  if (state.needs.usage && !memo.polling) {
+    const owned = accountUsage(memo) !== null
     memo.polling = true
-    void fetchUsage($, memo, path, file)
-      .then(fetched => {
-        if (fetched) {
-          void refresh($)
-        }
-      })
+    void refreshUsage($, memo)
       .catch(() => {})
       .finally(() => {
         memo.polling = false
+        if (owned !== (accountUsage(memo) !== null) && state.usage === memo) {
+          void refresh($)
+        }
       })
   }
-  if (file) {
-    memo.last = shown(file)
+  return accountUsage(memo)
+}
+
+async function refreshUsage($: EngineInterface, memo: UsageMemo) {
+  if (memo.handle === null && waiting(memo.nextAt, await $.clock.now())) {
+    return
   }
-  return memo.last
+  if (memo.handle === null && (await authorizeUsage($, memo)) === null) {
+    return
+  }
+  if (!state.needs.usage || state.usage !== memo) {
+    return
+  }
+  const home = await $.env.get('HOME')
+  if (!home) {
+    return
+  }
+  const path = usagePath(home)
+  const now = await $.clock.now()
+  const file = await readUsage($, path, now)
+  if (file) {
+    const changed = JSON.stringify(memo.last) !== JSON.stringify(shown(file))
+    memo.last = shown(file)
+    if (changed) {
+      void refresh($)
+    }
+    if (!waiting(memo.nextAt, now) && fetchDue(file, now) && await fetchUsage($, memo, path, file)) {
+      void refresh($)
+    }
+  }
 }
 
 async function run($: EngineInterface): Promise<Rendered> {
@@ -349,6 +389,9 @@ async function run($: EngineInterface): Promise<Rendered> {
   let out
   try {
     const argv = [binary, '--format', 'spans', '--heartbeat-ms', String(state.heartbeatMs)]
+    if (state.reportsNeeds) {
+      argv.push('--plugin-data')
+    }
     if (state.fits && state.fitWidth !== undefined) {
       argv.push('--width', String(state.fitWidth))
     }
@@ -357,6 +400,16 @@ async function run($: EngineInterface): Promise<Rendered> {
     return { rows: [], error: MISSING.test(String(err)) ? NOT_FOUND : `statusline: ${String(err)}` }
   }
   const stderr = plain(out.stderr)
+  if (out.exitCode === 2 && state.reportsNeeds && /unexpected argument '--plugin-data'/.test(stderr)) {
+    // A running chat can outlive a binary downgrade. Optional capabilities may be dropped without losing the line.
+    state.reportsNeeds = false
+    state.needs = { usage: true, autocompact: true }
+    return run($)
+  }
+  if (out.exitCode === 2 && state.fits && /unexpected argument '--width'/.test(stderr)) {
+    state.fits = false
+    return run($)
+  }
   if (out.exitCode === 2 && UNKNOWN_FLAG.test(stderr)) {
     state.tooOld ??= await tooOld($, binary)
     return { rows: [], error: state.tooOld }
@@ -369,6 +422,22 @@ async function run($: EngineInterface): Promise<Rendered> {
     rows = JSON.parse(out.stdout || 'null')
   } catch {
     // Plain text means an ANSI-only build or another binary, which a JSON parse error would not say.
+  }
+  if (state.reportsNeeds) {
+    const envelope = obj(rows)
+    const needs = obj(envelope?.needs)
+    if (!needs || typeof needs.usage !== 'boolean' || typeof needs.autocompact !== 'boolean') {
+      return { rows: [], error: 'statusline: invalid plugin data from binary' }
+    }
+    const nextNeeds = { usage: needs.usage, autocompact: needs.autocompact }
+    if (nextNeeds.autocompact && !state.needs.autocompact) {
+      state.again = true
+    }
+    state.needs = nextNeeds
+    // The binary has just resolved settings and account overrides. Checking after its reply also prevents an old
+    // layout from starting a due request on the very tick the user removes the usage segment.
+    pollUsage($)
+    rows = envelope?.rows
   }
   return isSpanRows(rows)
     ? { rows }

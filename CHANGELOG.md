@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   branch, dirty and requested counters into one status command when a scan is needed.
   Publish the branch before cold or slow scans, back off repeated timeouts, drain large output safely, and clear
   results for removed repositories. Keep stash counts compatible with older Git and warm screenshot fixtures before capture.
+- Fetch plugin usage only for enabled segments, with authorization and cache reads also in the background. Request
+  the context breakdown only when the compaction-headroom segment needs it.
+  Authorization errors retain the cookie fallback and retry at most once a minute.
 
 ## [2.3.0](https://github.com/ryanclark/statusline/compare/v2.2.1...v2.3.0) - 2026-10-07
 

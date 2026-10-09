@@ -183,6 +183,9 @@ describe('usage', () => {
     }
     const { seen, clock } = await boot($, on, { authorize, files, fetch: () => reply(200) })
     expect(seen.fetches ?? []).toHaveLength(0)
+    expect(modOf(seen).usage).toBeUndefined()
+    await clock.advance(MIN - 1000)
+    expect(seen.authorizes).toBe(1)
     await clock.advance(1000)
     expect(seen.authorizes).toBe(2)
     expect(seen.fetches).toHaveLength(1)

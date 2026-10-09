@@ -3,6 +3,7 @@ import type { MockClock, TestBody } from 'claude-code/testing'
 import type { AgentInfo, HttpInit, HttpResponse, On, SessionAuthorization, SessionUsage } from 'claude-code'
 
 import type { LastUsage, Span } from '../types'
+import type { Needs } from '../hooks/binary'
 
 const rows: Span[][] = [
   [
@@ -71,7 +72,7 @@ export function gate() {
 }
 
 type Host = {
-  out?: Out
+  out?: Out | ((argv: readonly string[]) => Out)
   // What `--help` answers, whose flags say what the build can do.
   help?: Out
   version?: Out
@@ -87,7 +88,8 @@ type Host = {
   compact?: { wait?: Promise<void>; result?: { skip: string } }
   system?: () => string
   // What `$.session.authorize()` answers each time it is asked, null (no claude.ai login) when not given.
-  authorize?: () => SessionAuthorization
+  authorize?: () => SessionAuthorization | Promise<SessionAuthorization>
+  needs?: () => Needs
   // The files beneath the plugin. A test holding the same map stands in for another chat reading and writing them.
   files?: Map<string, string>
   // The modification time `fs.stat` reports for any of `files`.
@@ -137,9 +139,9 @@ function host(on: On, cfg: Host, seen: Seen = {}): MockClock {
     }
     return { value: text }
   })
-  on('session.authorize', () => {
+  on('session.authorize', async () => {
     seen.authorizes = (seen.authorizes ?? 0) + 1
-    return { value: cfg.authorize?.() ?? null }
+    return { value: await cfg.authorize?.() ?? null }
   })
   on('http.fetch', async (_$, e) => {
     seen.fetches = [...(seen.fetches ?? []), { url: e.url, init: e.init }]
@@ -217,21 +219,27 @@ function host(on: On, cfg: Host, seen: Seen = {}): MockClock {
     }
     return { value: { kind: 'file' as const, size: 1, mtimeMs: 0, isLink: true, realPath: cfg.realPath } }
   })
-  on('process.run', (_$, e) => {
+  on('process.run', async (_$, e) => {
     seen.runs = [...(seen.runs ?? []), e.argv]
     seen.events = [...(seen.events ?? []), `run ${e.argv[1]}`]
     const rejected = cfg.reject?.(e.argv)
     if (rejected !== undefined) {
       return { deny: rejected }
     }
-    let out = cfg.out ?? ok
+    let out = typeof cfg.out === 'function' ? cfg.out(e.argv) : cfg.out ?? ok
     if (e.argv[1] === '--help') {
       out = cfg.help ?? capableHelp
+      if (cfg.needs) {
+        out = { ...out, stdout: out.stdout + '  --plugin-data  Include plugin metadata\n' }
+      }
     } else if (e.argv[1] === '--version') {
       out = cfg.version ?? { exitCode: 0, stdout: 'statusline 1.1.0\n', stderr: '' }
     } else {
       seen.stdin = e.init?.stdin
       seen.argv = e.argv
+      if (cfg.needs && e.argv.includes('--plugin-data') && out.exitCode === 0) {
+        out = { ...out, stdout: JSON.stringify({ rows: JSON.parse(out.stdout), needs: cfg.needs() }) }
+      }
     }
     return { value: { ...out, isStdoutTruncated: false, isStderrTruncated: false } }
   })

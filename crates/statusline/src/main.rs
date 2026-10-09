@@ -53,6 +53,10 @@ struct Cli {
 	/// The cells the line may take. Segments that do not fit are dropped whole and the row ends in an ellipsis.
 	#[arg(long, value_name = "COLUMNS")]
 	width: Option<usize>,
+
+	/// With --format spans, include which optional data the plugin's enabled segments need.
+	#[arg(long)]
+	plugin_data: bool,
 }
 
 fn parse_heartbeat(ms: &str) -> Result<Duration, std::num::ParseIntError> {
@@ -127,7 +131,7 @@ enum Commands {
 		org: String,
 
 		#[arg(long)]
-		browser: browser::Browser,
+		browser: Option<browser::Browser>,
 
 		#[arg(long)]
 		profile: Option<String>,
@@ -332,8 +336,15 @@ fn main() {
 
 			let needs_usage = segments
 				.iter()
+				.filter(|s| s.enabled())
 				.any(|s| s.is_extra_usage() || s.is_fable_usage());
-			let needs_credits = segments.iter().any(SegmentConfig::is_credits);
+			let needs_credits = segments
+				.iter()
+				.filter(|s| s.enabled())
+				.any(SegmentConfig::is_credits);
+			let needs_autocompact = segments.iter().any(|s| {
+				s.enabled() && *s.segment_type() == segment::SegmentType::AutocompactHeadroom
+			});
 
 			let plugin_usage = input.mod_info.as_ref().and_then(|m| m.usage.as_ref());
 			let from_cookies = plugin_usage.is_none() && (needs_usage || needs_credits);
@@ -341,12 +352,7 @@ fn main() {
 			let resolved = if from_cookies {
 				match &identity {
 					Some((_, org_uuid)) => {
-						let browser = account
-							.and_then(|a| a.browser)
-							.or(settings.browser)
-							.unwrap_or_else(|| {
-								browser::detect_or_cached().unwrap_or(browser::Browser::Chrome)
-							});
+						let browser = account.and_then(|a| a.browser).or(settings.browser);
 						let profile = account.and_then(|a| a.profile.as_deref());
 						Some((org_uuid.as_str(), browser, profile))
 					}
@@ -424,7 +430,15 @@ fn main() {
 				OutputFormat::Ansi => print!("{rendered}"),
 				OutputFormat::Spans => {
 					let rows = statusline_core::spans::ansi_to_spans(&rendered);
-					match serde_json::to_string(&rows) {
+					let output = if cli.plugin_data {
+						serde_json::json!({
+							"rows": rows,
+							"needs": { "usage": needs_usage || needs_credits, "autocompact": needs_autocompact },
+						})
+					} else {
+						serde_json::json!(rows)
+					};
+					match serde_json::to_string(&output) {
 						Ok(json) => print!("{json}"),
 						Err(e) => {
 							eprintln!("{} {e}", "failed to encode spans".red().bold());

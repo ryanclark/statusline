@@ -29,6 +29,7 @@ export type UsageInput = { fetched_at_ms: number | null; body: Json | null }
 export type UsageMemo = {
   handle: string | null
   off: boolean
+  authFailed: boolean
   polling: boolean
   nextAt: number
   last: UsageInput
@@ -37,6 +38,7 @@ export type UsageMemo = {
 export const newUsageMemo = (): UsageMemo => ({
   handle: null,
   off: false,
+  authFailed: false,
   polling: false,
   nextAt: 0,
   last: { fetched_at_ms: null, body: null },

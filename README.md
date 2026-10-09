@@ -37,8 +37,10 @@ adds the [live activity](#live-activity) segments. Needs Claude Code 2.1.287 or 
 Claude Code's background task pills, such as `1 shell`, show in the first row of the line, and light up when Claude Code
 selects them.
 
-The plugin also fetches your usage with the session's own claude.ai login, about once a minute shared across every open
-chat, so `extra_usage`, `fable_usage` and `credits` need no Chrome cookie or Keychain access. Sessions on an API key or
+When an enabled segment needs it, the plugin also fetches your usage with the session's own claude.ai login, about once
+a minute shared across every open chat. Authorization and fetching run in the background, so the line keeps drawing
+with cached values while they finish. `extra_usage`, `fable_usage` and `credits` need no Chrome cookie or Keychain access.
+The regular `five_hour` and `seven_day` segments use Claude Code's session data and need no separate fetch. Sessions on an API key or
 a third-party provider, and sessions where Claude Code refuses plugins network access, fall back to the cookie path
 below.
 

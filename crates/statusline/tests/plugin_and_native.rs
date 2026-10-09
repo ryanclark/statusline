@@ -96,6 +96,36 @@ fn a_silenced_native_run_still_captures_claude_codes_input() {
 }
 
 #[test]
+fn plugin_reports_only_enabled_optional_data_including_account_overrides() {
+	let scratch = scratch_home("plugin-needs");
+	let settings_path = scratch.join(".statusline/settings.json");
+	let mut settings: Value =
+		serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+	settings["segments"] = json!(["five_hour", "seven_day",
+		{"type": "extra_usage", "enabled": false}, {"type": "autocompact_headroom", "enabled": false}]);
+	fs::write(&settings_path, settings.to_string()).unwrap();
+	let args = ["--format", "spans", "--plugin-data"];
+	let input = br#"{"mod":{"usage":{"body":null}}}"#;
+	let output: Value = serde_json::from_slice(&run(&scratch, &args, input).stdout).unwrap();
+	assert_eq!(output["needs"], json!({"usage":false,"autocompact":false}));
+
+	settings["segments"] = json!(["credits", "autocompact_headroom"]);
+	fs::write(&settings_path, settings.to_string()).unwrap();
+	let output: Value = serde_json::from_slice(&run(&scratch, &args, input).stdout).unwrap();
+	assert_eq!(output["needs"], json!({"usage":true,"autocompact":true}));
+
+	fs::write(
+		scratch.join(".claude.json"),
+		r#"{"oauthAccount":{"emailAddress":"test@example.test","organizationUuid":"test-org"}}"#,
+	)
+	.unwrap();
+	fs::write(scratch.join(".statusline/accounts.json"), r#"{"accounts":[{"nickname":"test","email":"test@example.test","organization_uuid":"test-org","segments":["model"]}]}"#).unwrap();
+	let output: Value = serde_json::from_slice(&run(&scratch, &args, input).stdout).unwrap();
+	assert_eq!(output["needs"], json!({"usage":false,"autocompact":false}));
+	fs::remove_dir_all(scratch).unwrap();
+}
+
+#[test]
 fn git_cache_refreshes_in_the_background_and_clears_removed_directories() {
 	let scratch = scratch_home("background-git");
 	let repo = scratch.join("repo");
