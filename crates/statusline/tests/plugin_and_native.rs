@@ -126,6 +126,38 @@ fn plugin_reports_only_enabled_optional_data_including_account_overrides() {
 }
 
 #[test]
+fn directory_rules_apply_to_native_plugin_and_subagent_output() {
+	let scratch = scratch_home("directory-rules");
+	let settings_path = scratch.join(".statusline/settings.json");
+	let mut settings: Value =
+		serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+	settings["segments"] = json!(["cwd", "divider", "project_dir"]);
+	settings["subagent_segments"] = json!(["cwd"]);
+	settings["path_format"] = json!({
+		"trim_prefixes": ["~/work", "~/work/team"],
+		"max_width": 15
+	});
+	fs::write(&settings_path, settings.to_string()).unwrap();
+	let cwd = scratch.join("work/team/project/apps/client");
+	let input = serde_json::to_vec(&json!({
+		"cwd": cwd,
+		"workspace": {"project_dir": scratch.join("work/team/project")}
+	}))
+	.unwrap();
+	for args in [vec![], vec!["--format", "spans", "--plugin-data"]] {
+		let output = String::from_utf8(run(&scratch, &args, &input).stdout).unwrap();
+		assert!(output.contains("…/apps/client"), "{output}");
+		assert!(output.contains("…/project"), "{output}");
+		assert!(!output.contains("team"), "{output}");
+	}
+	let tasks = serde_json::to_vec(&json!({"tasks":[{"id":"task-1", "cwd": cwd}]})).unwrap();
+	let row: Value = serde_json::from_slice(&run(&scratch, &["subagent"], &tasks).stdout).unwrap();
+	assert_eq!(row["id"], "task-1");
+	assert_eq!(row["content"], "…/apps/client");
+	fs::remove_dir_all(scratch).unwrap();
+}
+
+#[test]
 fn plugin_update_notice_requires_an_empty_chat_and_enabled_checks() {
 	let scratch = scratch_home("plugin-updates");
 	let settings_path = scratch.join(".statusline/settings.json");

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Configurable directory prefix trimming with `…` and an optional display-width limit for `cwd` and `project_dir`.
+  Edit multiple prefixes and the width in `statusline configure`, with a live preview using the current directory.
+
 ### Fixed
 
 - Refresh Git segments in the background with a shared lock and a bounded runtime, keeping cached values available

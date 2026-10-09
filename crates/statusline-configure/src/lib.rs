@@ -37,7 +37,7 @@ pub enum Outcome {
 
 pub fn run(opts: Options) -> Result<Outcome, ConfigureError> {
 	let settings = load_or_default(&opts.settings_path)?;
-	let sample = opts.sample.unwrap_or_else(SampleData::representative);
+	let sample = opts.sample.unwrap_or_else(preview_sample);
 	match edit_with_sample(&settings, &sample, opts.claude_settings_path.as_deref())? {
 		Some(updated) => {
 			updated.save(&opts.settings_path)?;
@@ -48,8 +48,25 @@ pub fn run(opts: Options) -> Result<Outcome, ConfigureError> {
 }
 
 pub fn edit(settings: &Settings) -> Result<Option<Settings>, ConfigureError> {
-	let sample = SampleData::representative();
+	let sample = preview_sample();
 	edit_with_sample(settings, &sample, None)
+}
+
+// Directory rules should be previewed against the user's path. Other sample values stay illustrative.
+fn preview_sample() -> SampleData {
+	let mut sample = SampleData::representative();
+	if let Ok(cwd) = std::env::current_dir() {
+		let cwd = cwd.to_string_lossy();
+		for input in std::iter::once(&mut sample.input).chain(&mut sample.task_inputs) {
+			input.cwd = cwd.to_string();
+			input.workspace.current_dir = cwd.to_string();
+			input.workspace.project_dir = cwd.to_string();
+		}
+		for task in &mut sample.tasks {
+			task.cwd = cwd.to_string();
+		}
+	}
+	sample
 }
 
 /// The editor frame for `settings` after `keys`, as the ANSI text it paints on a `width` by `rows` terminal. It

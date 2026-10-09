@@ -301,6 +301,7 @@ impl SampleData {
 		seven_threshold: Percentage,
 	) -> Option<RenderContext<'a>> {
 		Some(RenderContext {
+			path_format: None,
 			input: self.task_inputs.get(index)?,
 			usage: None,
 			credits: None,
@@ -324,6 +325,7 @@ impl SampleData {
 		seven_threshold: Percentage,
 	) -> RenderContext<'a> {
 		RenderContext {
+			path_format: None,
 			input: &self.input,
 			usage: Some(self.usage.as_ref()),
 			credits: Some(self.credits.as_ref()),

@@ -1,5 +1,6 @@
 use crate::browser::Browser;
 use crate::format::Percentage;
+use crate::path_format::PathFormat;
 use crate::segment::SegmentConfig;
 use crate::util::app_data_dir;
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,8 @@ pub const DEFAULT_SEVEN_DAY_RESET: f64 = 100.0;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Settings {
+	#[serde(default, skip_serializing_if = "PathFormat::is_default")]
+	pub path_format: PathFormat,
 	pub five_hour_reset_threshold: Percentage,
 	pub seven_day_reset_threshold: Percentage,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -52,6 +55,7 @@ fn enabled() -> bool {
 impl Default for Settings {
 	fn default() -> Self {
 		Self {
+			path_format: PathFormat::default(),
 			five_hour_reset_threshold: DEFAULT_FIVE_HOUR_RESET.into(),
 			seven_day_reset_threshold: DEFAULT_SEVEN_DAY_RESET.into(),
 			segments: None,
@@ -160,6 +164,7 @@ mod tests {
 	#[test]
 	fn settings_roundtrip_serde() {
 		let settings = Settings {
+			path_format: PathFormat::default(),
 			five_hour_reset_threshold: 70.0.into(),
 			seven_day_reset_threshold: 100.0.into(),
 			segments: None,
@@ -258,6 +263,7 @@ mod tests {
 	#[test]
 	fn settings_segments_not_serialized_when_none() {
 		let settings = Settings {
+			path_format: PathFormat::default(),
 			five_hour_reset_threshold: 70.0.into(),
 			seven_day_reset_threshold: 100.0.into(),
 			segments: None,

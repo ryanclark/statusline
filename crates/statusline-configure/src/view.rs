@@ -50,6 +50,7 @@ const NEWLINE_MARK: &str = "\u{21b5}";
 /// One entry per rendered row: the status line splits on its line breaks, the subagent layout
 /// renders once per sample task.
 fn preview_rows(model: &EditorModel, sample: &SampleData, highlight: bool) -> Vec<String> {
+	let path_format = model.preview_path_format();
 	let divider = model
 		.divider
 		.as_deref()
@@ -74,9 +75,12 @@ fn preview_rows(model: &EditorModel, sample: &SampleData, highlight: bool) -> Ve
 	};
 	match model.mode {
 		Mode::StatusLine => {
+			let mut ctx =
+				sample.render_context_with(divider, model.nerd_font, model.five, model.seven);
+			ctx.path_format = Some(&path_format);
 			let line = SegmentLine {
 				segments: &segs,
-				ctx: sample.render_context_with(divider, model.nerd_font, model.five, model.seven),
+				ctx,
 			};
 			let rendered = if highlight {
 				highlighted_line(model, &line)
@@ -90,9 +94,12 @@ fn preview_rows(model: &EditorModel, sample: &SampleData, highlight: bool) -> Ve
 				.filter_map(|i| {
 					sample.task_context_with(i, divider, model.nerd_font, model.five, model.seven)
 				})
-				.map(|ctx| SegmentLine {
-					segments: &segs,
-					ctx,
+				.map(|mut ctx| {
+					ctx.path_format = Some(&path_format);
+					SegmentLine {
+						segments: &segs,
+						ctx,
+					}
 				})
 				.collect();
 			if model.subagent_grid {
@@ -214,6 +221,7 @@ fn pad_to(s: &str, width: usize) -> String {
 }
 
 fn segment_example(model: &EditorModel, sample: &SampleData, config: &SegmentConfig) -> String {
+	let path_format = model.preview_path_format();
 	if *config.segment_type() == SegmentType::Newline {
 		return NEWLINE_MARK.to_owned();
 	}
@@ -223,7 +231,7 @@ fn segment_example(model: &EditorModel, sample: &SampleData, config: &SegmentCon
 		.as_deref()
 		.unwrap_or(statusline_core::constants::DIVIDER);
 	// Examples come from the first sample task in subagent mode so task segments have something to show.
-	let ctx = match model.mode {
+	let mut ctx = match model.mode {
 		Mode::StatusLine => None,
 		Mode::Subagent => {
 			sample.task_context_with(0, divider, model.nerd_font, model.five, model.seven)
@@ -232,6 +240,7 @@ fn segment_example(model: &EditorModel, sample: &SampleData, config: &SegmentCon
 	.unwrap_or_else(|| {
 		sample.render_context_with(divider, model.nerd_font, model.five, model.seven)
 	});
+	ctx.path_format = Some(&path_format);
 
 	let mut config = config.clone();
 
@@ -581,14 +590,32 @@ fn picker_body(model: &EditorModel) -> Vec<Body> {
 fn global_body(model: &EditorModel) -> Vec<Body> {
 	let g = &model.global;
 	let on_off = |flag: bool| if flag { "on" } else { "off" }.to_owned();
-	let fields = [
+	let mut fields = vec![
 		("divider".to_owned(), format!("\"{}\"", g.divider.value())),
 		("nerd_font".to_owned(), on_off(g.nerd_font)),
 		("5h reset at".to_owned(), format!("{}%", g.five.value())),
 		("7d reset at".to_owned(), format!("{}%", g.seven.value())),
 		("subagent_grid".to_owned(), on_off(g.grid)),
 		("capture_snapshots".to_owned(), on_off(g.capture_snapshots)),
+		(
+			"directory width".to_owned(),
+			if g.path_width.value().is_empty() {
+				"unlimited".to_owned()
+			} else {
+				g.path_width.value().to_owned()
+			},
+		),
 	];
+	fields.extend(g.path_prefixes.iter().enumerate().map(|(i, prefix)| {
+		(
+			format!("trim prefix {}", i + 1),
+			if prefix.value().is_empty() {
+				"<add prefix>".to_owned()
+			} else {
+				prefix.value().to_owned()
+			},
+		)
+	}));
 	let mut out = Vec::with_capacity(fields.len() + 1);
 
 	out.push(Body::decoration("  global options"));
@@ -636,7 +663,10 @@ pub fn help_line(model: &EditorModel) -> String {
 		Focus::Picker => {
 			"type to filter \u{b7} \u{2191}\u{2193} select \u{b7} \u{21b5} add \u{b7} esc cancel".to_owned()
 		}
-		Focus::Global => "\u{2191}\u{2193} field \u{b7} \u{21b5} edit \u{b7} \u{2190} back".to_owned(),
+		Focus::Global if model.global.field >= 7 => "type prefix · ctrl+u remove · ↑↓ field/add · esc back".to_owned(),
+		Focus::Global if model.global.field == 6 => "type max columns · ctrl+u unlimited · ↑↓ field · esc back".to_owned(),
+		Focus::Global if matches!(model.global.field, 1 | 4 | 5) => "space/←→ toggle · ↑↓ field · esc back".to_owned(),
+		Focus::Global => "\u{2191}\u{2193} field \u{b7} type to edit \u{b7} esc back".to_owned(),
 	}
 }
 
@@ -1162,9 +1192,73 @@ mod tests {
 		assert!(texts.iter().any(|t| t.contains("capture_snapshots")));
 		assert!(texts.iter().any(|t| t.contains("divider")));
 		assert!(
+			texts
+				.iter()
+				.any(|t| t.contains("directory width") && t.contains("unlimited"))
+		);
+		assert!(
+			texts
+				.iter()
+				.any(|t| t.contains("trim prefix 1") && t.contains("<add prefix>"))
+		);
+		assert!(
 			texts.iter().any(|t| t.contains("global options")),
 			"global pane shows its title: {texts:?}"
 		);
+	}
+
+	#[test]
+	fn directory_drafts_update_both_previews_before_committing() {
+		let mut m = model(&[
+			SegmentType::Cwd,
+			SegmentType::Divider,
+			SegmentType::ProjectDir,
+		]);
+		let mut sample = SampleData::representative();
+		sample.input.cwd = "/work/team/project/apps/client".into();
+		sample.input.workspace.project_dir = "/work/team/project".into();
+		m.apply(Key::Global);
+		m.global.field = 7;
+		for c in "/work/team".chars() {
+			m.apply(Key::Char(c));
+		}
+		let text = strip_ansi(&preview_line(&m, &sample));
+		assert!(
+			text.contains("…/project/apps/client") && text.contains("…/project"),
+			"{text}"
+		);
+		assert!(!text.contains("/work"), "{text}");
+		assert!(m.path_format.is_default());
+		m.global.field = 6;
+		for c in "15".chars() {
+			m.apply(Key::Char(c));
+		}
+		let text = strip_ansi(&preview_line(&m, &sample));
+		assert!(
+			text.contains("…/apps/client") && !text.contains("project/apps"),
+			"{text}"
+		);
+		assert!(text.contains("…/project"), "{text}");
+		m.apply(Key::Back);
+		assert_eq!(strip_ansi(&preview_line(&m, &sample)), text);
+	}
+
+	#[test]
+	fn directory_prefix_rows_scroll_to_the_selected_entry_on_short_terminals() {
+		let mut m = model(&[SegmentType::Cwd]);
+		m.path_format.trim_prefixes = (0..20).map(|i| format!("/work/{i}")).collect();
+		m.apply(Key::Global);
+		for _ in 0..27 {
+			m.apply(Key::Down);
+		}
+		let rows = block(&m, &SampleData::representative(), 14);
+		assert!(
+			rows.iter()
+				.any(|r| r.kind == RowKind::Cursor && r.text.contains("<add prefix>")),
+			"{rows:?}"
+		);
+		assert!(rows.len() <= 14);
+		assert!(help_line(&m).contains("ctrl+u remove"));
 	}
 
 	#[test]

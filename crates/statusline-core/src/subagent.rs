@@ -261,6 +261,18 @@ pub fn render_rows(
 	nerd_font: bool,
 	grid: bool,
 ) -> Vec<Row> {
+	render_rows_with_paths(input, segments, divider, nerd_font, grid, None)
+}
+
+#[must_use]
+pub fn render_rows_with_paths(
+	input: &SubagentInput,
+	segments: &[SegmentConfig],
+	divider: &str,
+	nerd_font: bool,
+	grid: bool,
+	path_format: Option<&crate::path_format::PathFormat>,
+) -> Vec<Row> {
 	let inputs: Vec<InputData> = input.tasks.iter().map(Task::to_input).collect();
 	let lines: Vec<SegmentLine<'_>> = input
 		.tasks
@@ -269,6 +281,7 @@ pub fn render_rows(
 		.map(|(task, data)| SegmentLine {
 			segments,
 			ctx: RenderContext {
+				path_format,
 				input: data,
 				usage: None,
 				credits: None,

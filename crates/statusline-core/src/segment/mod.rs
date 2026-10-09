@@ -602,6 +602,7 @@ pub struct AccountDisplay {
 }
 
 pub struct RenderContext<'a> {
+	pub path_format: Option<&'a crate::path_format::PathFormat>,
 	pub input: &'a InputData,
 	pub usage: Option<Result<&'a UsageResponse, &'a UsageError>>,
 	pub credits: Option<Result<&'a PrepaidCredits, &'a UsageError>>,

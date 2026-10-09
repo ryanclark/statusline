@@ -404,6 +404,7 @@ fn main() {
 			let line = SegmentLine {
 				segments: &segments,
 				ctx: RenderContext {
+					path_format: Some(&settings.path_format),
 					input: &input,
 					usage: usage_result.as_ref().map(|r| r.as_ref()),
 					credits: credits_result.as_ref().map(|r| r.as_ref()),

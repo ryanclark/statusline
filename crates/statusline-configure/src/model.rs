@@ -4,6 +4,7 @@ use crate::options::{OptionKind, applicable_fields, next_style, next_within};
 use crate::picker::{self, PickerState};
 use statusline_core::catalog::meta;
 use statusline_core::format::Percentage;
+use statusline_core::path_format::PathFormat;
 use statusline_core::segment::{DirtyConfig, SegmentConfig, SegmentType, TimeFormat};
 use statusline_core::settings::Settings;
 use statusline_core::subagent::default_subagent_segments;
@@ -69,6 +70,7 @@ pub enum Key {
 	Quit,
 	Char(char),
 	Backspace,
+	Clear,
 	Enter,
 	Left,
 	Right,
@@ -108,11 +110,14 @@ pub struct GlobalState {
 	pub nerd_font: bool,
 	pub grid: bool,
 	pub capture_snapshots: bool,
+	pub path_width: LineEdit,
+	pub path_prefixes: Vec<LineEdit>,
 }
 
-const GLOBAL_FIELDS: usize = 6;
+const GLOBAL_FIELDS: usize = 7;
 
 pub struct EditorModel {
+	pub path_format: PathFormat,
 	pub mode: Mode,
 	pub rows: Vec<Row>,
 	pub cursor: usize,
@@ -171,6 +176,7 @@ impl EditorModel {
 		);
 
 		Self {
+			path_format: s.path_format.clone(),
 			mode: Mode::StatusLine,
 			rows,
 			cursor: 0,
@@ -217,6 +223,7 @@ impl EditorModel {
 		};
 
 		Settings {
+			path_format: self.path_format.clone(),
 			segments,
 			subagent_segments,
 			divider: self.divider.clone(),
@@ -748,6 +755,13 @@ impl EditorModel {
 	}
 
 	fn enter_global(&mut self) {
+		let mut prefixes: Vec<_> = self
+			.path_format
+			.trim_prefixes
+			.iter()
+			.map(|p| LineEdit::with(p))
+			.collect();
+		prefixes.push(LineEdit::default());
 		self.global = GlobalState {
 			field: 0,
 			divider: LineEdit::with(self.divider.as_deref().unwrap_or_default()),
@@ -756,6 +770,14 @@ impl EditorModel {
 			nerd_font: self.nerd_font,
 			grid: self.subagent_grid,
 			capture_snapshots: self.capture_snapshots,
+			path_width: LineEdit::with(
+				&self
+					.path_format
+					.max_width
+					.map(|w| w.to_string())
+					.unwrap_or_default(),
+			),
+			path_prefixes: prefixes,
 		};
 		self.focus = Focus::Global;
 	}
@@ -770,7 +792,7 @@ impl EditorModel {
 				Effect::Redraw
 			}
 			Key::Down => {
-				if self.global.field + 1 < GLOBAL_FIELDS {
+				if self.global.field + 1 < GLOBAL_FIELDS + self.global.path_prefixes.len() {
 					self.global.field += 1;
 				}
 
@@ -795,12 +817,27 @@ impl EditorModel {
 				if let Some(editor) = self.global_editor_mut() {
 					editor.insert(c);
 				}
+				if self
+					.global
+					.path_prefixes
+					.last()
+					.is_some_and(|p| !p.value().is_empty())
+				{
+					self.global.path_prefixes.push(LineEdit::default());
+				}
 
 				Effect::Redraw
 			}
 			Key::Backspace => {
 				if let Some(editor) = self.global_editor_mut() {
 					editor.backspace();
+				}
+
+				Effect::Redraw
+			}
+			Key::Clear => {
+				if let Some(editor) = self.global_editor_mut() {
+					*editor = LineEdit::default();
 				}
 
 				Effect::Redraw
@@ -835,11 +872,26 @@ impl EditorModel {
 			0 => Some(&mut self.global.divider),
 			2 => Some(&mut self.global.five),
 			3 => Some(&mut self.global.seven),
-			_ => None,
+			6 => Some(&mut self.global.path_width),
+			i => i
+				.checked_sub(GLOBAL_FIELDS)
+				.and_then(|i| self.global.path_prefixes.get_mut(i)),
 		}
 	}
 
 	fn commit_global(&mut self) {
+		let paths = self.preview_path_format();
+		if paths != self.path_format {
+			self.path_format = paths;
+			self.dirty = true;
+		}
+		if !self.global.path_width.value().is_empty()
+			&& self.global.path_width.value().parse::<usize>().is_err()
+		{
+			self.notice = Some(
+				"Directory width must be a number or blank; kept the previous width".to_owned(),
+			);
+		}
 		let divider = self.global.divider.value();
 		let new_divider = (!divider.is_empty()).then(|| divider.to_owned());
 
@@ -875,6 +927,34 @@ impl EditorModel {
 		{
 			self.seven = seven;
 			self.dirty = true;
+		}
+	}
+
+	/// Valid draft values feed the live preview before the global pane is closed.
+	#[must_use]
+	pub fn preview_path_format(&self) -> PathFormat {
+		if self.focus != Focus::Global {
+			return self.path_format.clone();
+		}
+		let width = self.global.path_width.value();
+		PathFormat {
+			trim_prefixes: self
+				.global
+				.path_prefixes
+				.iter()
+				.map(LineEdit::value)
+				.filter(|s| !s.is_empty())
+				.map(str::to_owned)
+				.collect(),
+			max_width: if width.is_empty() {
+				None
+			} else {
+				width
+					.parse()
+					.ok()
+					.or(self.path_format.max_width)
+					.filter(|&w| w != 0)
+			},
 		}
 	}
 }
@@ -1700,6 +1780,102 @@ mod tests {
 	}
 
 	#[test]
+	fn global_directory_rules_edit_save_and_reopen_multiple_prefixes() {
+		let mut base = Settings::default();
+		base.extra.insert("unrelated".into(), true.into());
+		let mut m = EditorModel::from_settings(&base);
+		m.apply(Key::Global);
+		for _ in 0..6 {
+			m.apply(Key::Down);
+		}
+		for c in "40".chars() {
+			m.apply(Key::Char(c));
+		}
+		for prefix in ["~/go/src/remote/ryanclark", "/work/Team, Inc"] {
+			m.apply(Key::Down);
+			for c in prefix.chars() {
+				m.apply(Key::Char(c));
+			}
+		}
+		assert_eq!(m.global.path_prefixes.len(), 3, "always leaves an add row");
+		assert_eq!(m.preview_path_format().max_width, Some(40));
+		assert!(m.path_format.is_default(), "draft is not committed yet");
+		m.apply(Key::Back);
+		assert!(m.dirty);
+		let saved = m.to_settings(&base);
+		assert_eq!(saved.extra["unrelated"], true);
+		let json = serde_json::to_string(&saved).unwrap();
+		let saved = serde_json::from_str(&json).unwrap();
+		let mut reopened = EditorModel::from_settings(&saved);
+		reopened.apply(Key::Global);
+		assert_eq!(reopened.global.path_width.value(), "40");
+		assert_eq!(
+			reopened.global.path_prefixes[0].value(),
+			"~/go/src/remote/ryanclark"
+		);
+		assert_eq!(reopened.global.path_prefixes[1].value(), "/work/Team, Inc");
+		assert_eq!(reopened.global.path_prefixes[2].value(), "");
+		reopened.apply(Key::Back);
+		assert!(!reopened.dirty, "opening without edits preserves settings");
+	}
+
+	#[test]
+	fn global_directory_rules_can_be_cleared_without_losing_other_prefixes() {
+		let base = Settings {
+			path_format: PathFormat {
+				max_width: Some(40),
+				trim_prefixes: vec!["~/code".into(), "/work".into()],
+			},
+			..Settings::default()
+		};
+		let mut m = EditorModel::from_settings(&base);
+		m.apply(Key::Global);
+		m.global.field = 6;
+		m.apply(Key::Clear);
+		m.apply(Key::Down);
+		m.apply(Key::Clear);
+		m.apply(Key::Enter);
+		assert_eq!(m.path_format.max_width, None);
+		assert_eq!(m.path_format.trim_prefixes, ["/work"]);
+		m.apply(Key::Global);
+		m.global.field = GLOBAL_FIELDS;
+		m.apply(Key::Clear);
+		m.apply(Key::Back);
+		let json = serde_json::to_value(m.to_settings(&base)).unwrap();
+		assert!(
+			json.get("path_format").is_none(),
+			"default rules stay absent"
+		);
+	}
+
+	#[test]
+	fn global_directory_width_rejects_invalid_input_and_zero_disables_it() {
+		let mut m = model(&[SegmentType::Cwd]);
+		m.path_format.max_width = Some(40);
+		m.apply(Key::Global);
+		m.global.field = 6;
+		m.apply(Key::Char('x'));
+		assert_eq!(m.preview_path_format().max_width, Some(40));
+		m.apply(Key::Back);
+		assert_eq!(m.path_format.max_width, Some(40));
+		assert!(
+			m.notice
+				.as_deref()
+				.unwrap()
+				.contains("kept the previous width")
+		);
+		assert!(!m.dirty);
+		m.apply(Key::Global);
+		m.global.field = 6;
+		m.apply(Key::Clear);
+		m.apply(Key::Char('0'));
+		m.apply(Key::Char('0'));
+		assert_eq!(m.preview_path_format().max_width, None);
+		m.apply(Key::Back);
+		assert_eq!(m.path_format.max_width, None);
+	}
+
+	#[test]
 	fn global_bad_threshold_keeps_old_value() {
 		let mut m = model(&[SegmentType::Model]);
 		m.apply(Key::Global);
@@ -1731,12 +1907,12 @@ mod tests {
 	fn global_capture_snapshots_toggle_saves_to_settings() {
 		let mut m = model(&[SegmentType::Model]);
 		m.apply(Key::Global);
-		for _ in 0..GLOBAL_FIELDS {
+		for _ in 0..5 {
 			m.apply(Key::Down);
 		}
 		assert_eq!(
 			m.global.field, 5,
-			"capture_snapshots is the last global field"
+			"capture_snapshots keeps its position before directory settings"
 		);
 		assert!(!m.global.capture_snapshots);
 		m.apply(Key::Char(' '));

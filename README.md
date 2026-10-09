@@ -187,6 +187,29 @@ This opens an interactive editor with a live preview to add, remove, reorder and
 
 Press `Tab` to switch between the status line and the subagent layout. The subagent tab shows one preview row per sample task, and offers `i` to wire up `subagentStatusLine` when Claude Code does not have it yet.
 
+### Directory paths
+
+Press `g` in `statusline configure` to set a **directory width** and one or more **trim prefixes**.
+The preview uses your current directory and updates as you type. Use ↓ to reach the empty prefix row to add another,
+Ctrl+U to clear a field, Esc to return, then `s` to save. A blank or zero width means unlimited; clearing a prefix removes it.
+
+The same options can be set in `~/.statusline/settings.json`:
+
+```json
+{
+  "path_format": {
+    "trim_prefixes": ["~/go/src/remote/ryanclark", "~/code"],
+    "max_width": 40
+  }
+}
+```
+
+These rules apply to `cwd` and `project_dir`, including subagent paths. Prefixes accept absolute paths or `~/`,
+match whole directory components, and the longest match wins. For example,
+`~/go/src/remote/ryanclark/statusline` becomes `…/statusline`. If the result still exceeds `max_width` terminal columns,
+statusline collapses directories to `…`, keeping as much of the trailing path as fits. The final directory is shortened
+in the middle only when necessary. Both settings are optional; without them, paths keep the usual `~` abbreviation.
+
 ### Available segments
 
 Some segments need a recent Claude Code, and stay empty on older versions: `spend_limit`,
@@ -257,8 +280,8 @@ minutes, while retaining the last result; a successful refresh restores the norm
 
 | Segment | Description |
 |---|---|
-| `cwd` | Current working directory (shortened with `~`) |
-| `project_dir` | Project directory |
+| `cwd` | Current working directory (supports `path_format`) |
+| `project_dir` | Project directory (supports `path_format`) |
 | `model` | Model display name |
 | `model_id` | Full model ID |
 | `version` | Claude Code version |

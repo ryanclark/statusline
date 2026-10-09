@@ -77,6 +77,7 @@ fn map_key(ev: KeyEvent, focus: Focus, editing: bool) -> Option<model::Key> {
 		KeyCode::Enter => Key::Enter,
 		KeyCode::Esc => Key::Back,
 		KeyCode::Backspace => Key::Backspace,
+		KeyCode::Char('u') if ctrl && focus == Focus::Global => Key::Clear,
 		KeyCode::Char('a') if letters_are_commands => Key::Add,
 		KeyCode::Char('r') if letters_are_commands => Key::Replace,
 		KeyCode::Char('d') if letters_are_commands => Key::AddDivider,
@@ -542,6 +543,22 @@ mod tests {
 				Some(model::Key::Backspace)
 			);
 		}
+	}
+
+	#[test]
+	fn control_u_clears_a_global_text_field() {
+		assert_eq!(
+			map_key(
+				ev_mod(KeyCode::Char('u'), KeyModifiers::CONTROL),
+				Focus::Global,
+				false
+			),
+			Some(model::Key::Clear)
+		);
+		assert_eq!(
+			map_key(ev(KeyCode::Char('u')), Focus::Global, false),
+			Some(model::Key::Char('u'))
+		);
 	}
 
 	#[test]

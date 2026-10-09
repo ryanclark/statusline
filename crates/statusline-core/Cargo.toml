@@ -13,6 +13,8 @@ serde_json.workspace = true
 owo-colors.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
+unicode-width = "0.2"
+unicode-segmentation = "1.13"
 dirs.workspace = true
 clap = { workspace = true, optional = true }
 

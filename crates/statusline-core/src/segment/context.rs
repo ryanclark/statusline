@@ -472,6 +472,7 @@ mod tests {
 		let input = InputData::from_reader(input_json.as_bytes()).unwrap();
 		let segment: SegmentConfig = serde_json::from_str(segment_json).unwrap();
 		let ctx = RenderContext {
+			path_format: None,
 			input: &input,
 			usage: None,
 			credits: None,

@@ -5,15 +5,11 @@ use crate::constants::{CYAN, GRAY, ORANGE, PURPLE, RED, YELLOW};
 
 use super::{RenderContext, SegmentConfig, apply_style, paint};
 
-fn shorten_path(path: &str) -> String {
-	let Ok(home) = crate::util::home_dir() else {
-		return path.to_owned();
-	};
-	let Some(rest) = home.to_str().and_then(|h| path.strip_prefix(h)) else {
-		return path.to_owned();
-	};
-
-	format!("~{rest}")
+fn shorten_path(path: &str, options: Option<&crate::path_format::PathFormat>) -> String {
+	let home = crate::util::home_dir().ok();
+	options
+		.unwrap_or(&crate::path_format::PathFormat::default())
+		.format(path, home.as_ref().and_then(|p| p.to_str()))
 }
 
 pub(super) fn divider(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
@@ -35,7 +31,7 @@ pub(super) fn cwd(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<St
 		return None;
 	}
 
-	let text = shorten_path(&ctx.input.cwd);
+	let text = shorten_path(&ctx.input.cwd, ctx.path_format);
 
 	Some(apply_style(&text, segment.style()))
 }
@@ -45,7 +41,7 @@ pub(super) fn project_dir(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> O
 		return None;
 	}
 
-	let text = shorten_path(&ctx.input.workspace.project_dir);
+	let text = shorten_path(&ctx.input.workspace.project_dir, ctx.path_format);
 
 	Some(apply_style(&text, segment.style()))
 }
@@ -216,7 +212,7 @@ mod tests {
 
 	#[test]
 	fn shorten_path_outside_home() {
-		assert_eq!(shorten_path("/tmp/test"), "/tmp/test");
+		assert_eq!(shorten_path("/tmp/test", None), "/tmp/test");
 	}
 
 	#[test]

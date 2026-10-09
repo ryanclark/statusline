@@ -1052,6 +1052,8 @@ dependencies = [
  "serde_json",
  "strip-ansi-escapes",
  "thiserror",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

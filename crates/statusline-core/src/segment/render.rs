@@ -110,6 +110,7 @@ mod tests {
 
 	fn default_ctx(input: &InputData) -> RenderContext<'_> {
 		RenderContext {
+			path_format: None,
 			input,
 			usage: None,
 			credits: None,
