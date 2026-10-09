@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0](https://github.com/ryanclark/statusline/compare/v2.3.0...v2.4.0) - 2026-10-09
+
+### Added
+
+- configure directory shortening
+
+### Fixed
+
+- show plugin updates before the first message
+- fetch usage only when needed
+- refresh git data in the background
+
 ### Added
 
 - Configurable directory prefix trimming with `…` and an optional display-width limit for `cwd` and `project_dir`.
