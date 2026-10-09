@@ -4,6 +4,13 @@ import type { AgentInfo, HttpInit, HttpResponse, On, SessionAuthorization, Sessi
 
 import type { LastUsage, Span } from '../types'
 import type { Needs } from '../hooks/binary'
+import { PROFILE_URL, usageAccount, usagePath } from '../hooks/usage'
+
+export const PROFILE = {
+  account: { uuid: '11111111-1111-4111-8111-111111111111' },
+  organization: { uuid: '22222222-2222-4222-8222-222222222222' },
+}
+export const USAGE_PATH = usagePath('/home/me', usageAccount(JSON.stringify(PROFILE))!)
 
 const rows: Span[][] = [
   [
@@ -93,6 +100,8 @@ type Host = {
   updateNotice?: string
   turns?: number
   runWait?: () => Promise<void>
+  rateLimits?: () => SessionUsage['rateLimits']
+  profile?: (auth: string | undefined) => HttpResponse | Promise<HttpResponse>
   // The files beneath the plugin. A test holding the same map stands in for another chat reading and writing them.
   files?: Map<string, string>
   // The modification time `fs.stat` reports for any of `files`.
@@ -118,6 +127,7 @@ type Seen = {
   // Heartbeat writes and binary runs, in the order the plugin made them.
   events?: string[]
   fetches?: { url: string; init: HttpInit | undefined }[]
+  profiles?: { url: string; init: HttpInit | undefined }[]
   authorizes?: number
 }
 
@@ -147,6 +157,12 @@ function host(on: On, cfg: Host, seen: Seen = {}): MockClock {
     return { value: await cfg.authorize?.() ?? null }
   })
   on('http.fetch', async (_$, e) => {
+    if (e.url === PROFILE_URL) {
+      seen.profiles = [...(seen.profiles ?? []), { url: e.url, init: e.init }]
+      return { value: await cfg.profile?.(e.init?.auth) ?? {
+        status: 200, ok: true, headers: {}, text: JSON.stringify(PROFILE),
+      } }
+    }
     seen.fetches = [...(seen.fetches ?? []), { url: e.url, init: e.init }]
     if (!cfg.fetch) {
       throw new Error(`no network in tests: ${e.url}`)
@@ -164,15 +180,16 @@ function host(on: On, cfg: Host, seen: Seen = {}): MockClock {
   on('session.root', () => ({ value: '/repo-root' }))
   on('session.model', () => (cfg.modelError ? { deny: cfg.modelError } : { value: opus }))
   on('session.usage', (_$, e) => {
+    const currentUsage = { ...liveUsage, rateLimits: cfg.rateLimits?.() ?? liveUsage.rateLimits }
     if (!e?.breakdown) {
-      return { value: liveUsage }
+      return { value: currentUsage }
     }
     seen.breakdowns = (seen.breakdowns ?? 0) + 1
     const breakdown =
       cfg.breakdown === null
         ? undefined
         : (cfg.breakdown ?? { autoCompactThreshold: 167000, isAutoCompactEnabled: true, totalTokens: 129000 })
-    return { value: { ...liveUsage, context: { ...liveUsage.context, breakdown } } as unknown as SessionUsage }
+    return { value: { ...currentUsage, context: { ...currentUsage.context, breakdown } } as unknown as SessionUsage }
   })
   on('session.version', () => ({ value: { version: '2.1.290', base: '2.1.290' } }))
   on('agent.list', () => ({ value: cfg.agents ?? [] }))

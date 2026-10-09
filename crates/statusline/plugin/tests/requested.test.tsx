@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { boot, gate, modOf, mountHint, T0, unknownFlag } from './host'
+import { boot, gate, modOf, mountHint, T0, unknownFlag, USAGE_PATH } from './host'
 
 const noNeeds = () => ({ usage: false, autocompact: false })
 const notice = 'v9.0.0 available • brew upgrade ryanclark/tap/statusline'
@@ -48,6 +48,7 @@ describe('requested data', () => {
     const { seen, clock } = await boot($, on, { needs: noNeeds, authorize: bearer, fetch: reply })
     await clock.advance(61_000)
     expect(seen.authorizes ?? 0).toBe(0)
+    expect(seen.profiles ?? []).toHaveLength(0)
     expect(seen.fetches ?? []).toHaveLength(0)
     expect(seen.breakdowns ?? 0).toBe(0)
     expect(seen.argv).toContain('--plugin-data')
@@ -110,7 +111,7 @@ describe('requested data', () => {
 
   test('cached usage is displayed while its background HTTP request is stalled', async ($, on) => {
     const held = gate()
-    const files = new Map([['/home/me/.statusline/cache/plugin-usage.json', JSON.stringify({
+    const files = new Map([[USAGE_PATH, JSON.stringify({
       fetched_at_ms: T0 - 120_000, body, backoff_until_ms: 0, backoff_ms: 0,
     })]])
     const { seen, clock } = await boot($, on, {

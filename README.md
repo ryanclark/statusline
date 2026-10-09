@@ -38,11 +38,18 @@ Claude Code's background task pills, such as `1 shell`, show in the first row of
 selects them.
 
 When an enabled segment needs it, the plugin also fetches your usage with the session's own claude.ai login, about once
-a minute shared across every open chat. Authorization and fetching run in the background, so the line keeps drawing
-with cached values while they finish. `extra_usage`, `fable_usage` and `credits` need no Chrome cookie or Keychain access.
-The regular `five_hour` and `seven_day` segments use Claude Code's session data and need no separate fetch. Sessions on an API key or
-a third-party provider, and sessions where Claude Code refuses plugins network access, fall back to the cookie path
-below.
+a minute shared across chats on the same account. Authorization, account identification and fetching run in the
+background, so the line keeps drawing while they finish. The account lookup runs when authorizing, and the login is
+rechecked every 15 minutes so a still-valid old token cannot hold a switched account indefinitely. If identification
+fails, that chat keeps usage privately, refreshes it at most once every five minutes, and backs off lookup retries.
+
+`five_hour` and `seven_day` prefer the shared account result so idle chats update too. Claude Code's per-chat values
+remain the fallback until a result arrives, or if it is more than five minutes old. Expired windows are omitted, and
+an older cached window never replaces a newer session window. These segments share the same request as `extra_usage`,
+`fable_usage` and `credits`; a layout with none of them makes no usage request. Rate-limit responses back off retries.
+No Chrome cookie or Keychain access is needed for the plugin's account request. Sessions on an API key or a third-party
+provider, and sessions where Claude Code refuses plugins network access, use per-chat limits and the cookie path
+below for extra usage and credits.
 
 This creates `~/.statusline/settings.json` if it is missing, adds the `ryanclark` marketplace and installs the plugin at
 user scope, pointed at the binary you ran. Pass `--dry-run` to see what would change, and `--claude <PATH>` when

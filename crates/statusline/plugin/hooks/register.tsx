@@ -33,17 +33,22 @@ import { blank, draw, hintWidth } from './draw'
 import { autocompactOf, inputJson } from './input'
 import {
   answered,
+  backedOff,
   claimed,
   fetchDue,
   EMPTY_USAGE,
   FETCH_EVERY_MS,
   newUsageMemo,
   parseUsageFile,
+  PROFILE_URL,
+  PRIVATE_FETCH_EVERY_MS,
+  REAUTHORIZE_EVERY_MS,
   REFUSED,
   shown,
   UNKNOWN_HANDLE,
   USAGE_HEADERS,
   USAGE_URL,
+  usageAccount,
   usagePath,
   waiting,
 } from './usage'
@@ -264,6 +269,10 @@ async function writeUsage($: EngineInterface, path: string, file: UsageFile) {
 }
 
 async function authorizeUsage($: EngineInterface, memo: UsageMemo): Promise<string | null> {
+  // A reauthorized handle may belong to another account. Nothing from the old login survives until verified.
+  memo.account = null
+  memo.last = { fetched_at_ms: null, body: null }
+  memo.profileNextAt = 0
   let auth
   try {
     auth = await $.session.authorize()
@@ -275,13 +284,55 @@ async function authorizeUsage($: EngineInterface, memo: UsageMemo): Promise<stri
     return null
   }
   memo.authFailed = false
+  memo.reauthorizeAt = await $.clock.now() + REAUTHORIZE_EVERY_MS
   // An API key or a third-party provider has no claude.ai usage, and the binary keeps its cookie path for those.
   memo.handle = auth?.kind === 'bearer' ? auth.handle : null
   memo.off = memo.handle === null
   return memo.handle
 }
 
-async function fetchUsage($: EngineInterface, memo: UsageMemo, path: string, file: UsageFile): Promise<boolean> {
+async function identifyUsage($: EngineInterface, memo: UsageMemo) {
+  if (memo.account !== null || memo.handle === null || !state.needs.usage) {
+    return
+  }
+  const now = await $.clock.now()
+  if (!state.needs.usage || state.usage !== memo || waiting(memo.profileNextAt, now)) {
+    return
+  }
+  memo.profileNextAt = now + FETCH_EVERY_MS
+  const backoff = async (retryAfter?: string) => {
+    const next = backedOff({ ...EMPTY_USAGE, backoff_ms: memo.profileBackoffMs }, await $.clock.now(), retryAfter)
+    memo.profileNextAt = next.backoff_until_ms
+    memo.profileBackoffMs = next.backoff_ms
+  }
+  try {
+    const res = await $.http.fetch(PROFILE_URL, { auth: memo.handle, headers: USAGE_HEADERS })
+    if (res.ok) {
+      memo.account = usageAccount(res.text)
+      if (memo.account) {
+        memo.profileBackoffMs = 0
+      } else {
+        await backoff()
+      }
+    } else if (res.status === 401) {
+      memo.handle = null
+      memo.nextAt = memo.profileNextAt
+    } else {
+      await backoff(res.headers['retry-after'])
+    }
+  } catch (err) {
+    if (REFUSED.test(String(err))) {
+      memo.off = true
+    } else if (UNKNOWN_HANDLE.test(String(err))) {
+      memo.handle = null
+      memo.nextAt = memo.profileNextAt
+    } else {
+      await backoff()
+    }
+  }
+}
+
+async function fetchUsage($: EngineInterface, memo: UsageMemo, path: string | null, file: UsageFile, retryAuth: boolean): Promise<boolean> {
   let handle = memo.handle
   if (handle === null || !state.needs.usage) {
     return false
@@ -290,8 +341,10 @@ async function fetchUsage($: EngineInterface, memo: UsageMemo, path: string, fil
   if (!state.needs.usage) {
     return false
   }
-  memo.nextAt = start + FETCH_EVERY_MS
-  await writeUsage($, path, claimed(file, start))
+  memo.nextAt = start + (path ? FETCH_EVERY_MS : PRIVATE_FETCH_EVERY_MS)
+  if (path) {
+    await writeUsage($, path, claimed(file, start))
+  }
   if (!state.needs.usage) {
     return false
   }
@@ -300,10 +353,25 @@ async function fetchUsage($: EngineInterface, memo: UsageMemo, path: string, fil
     res = await $.http.fetch(USAGE_URL, { auth: handle, headers: USAGE_HEADERS })
     // A handle keeps the token it was minted with, so one minted before the session refreshed its login fails until
     // it is minted again. Once per fetch keeps that to a handle a minute.
-    if (res.status === 401) {
+    if (res.status === 401 && retryAuth) {
+      const account = memo.account
       handle = await authorizeUsage($, memo)
       if (handle === null || !state.needs.usage) {
         return false
+      }
+      await identifyUsage($, memo)
+      if (memo.handle === null || memo.off || !state.needs.usage) {
+        return false
+      }
+      if (account !== memo.account) {
+        // The old account keeps its claim, but the new login reads and writes only its own cache.
+        memo.nextAt = 0
+        memo.backoffMs = 0
+        await refreshUsage($, memo, false)
+        return false
+      }
+      if (account === null) {
+        file = EMPTY_USAGE
       }
       res = await $.http.fetch(USAGE_URL, { auth: handle, headers: USAGE_HEADERS })
     }
@@ -321,8 +389,11 @@ async function fetchUsage($: EngineInterface, memo: UsageMemo, path: string, fil
     return false
   }
   memo.nextAt = Math.max(memo.nextAt, next.backoff_until_ms)
+  memo.backoffMs = next.backoff_ms
   memo.last = shown(next)
-  await writeUsage($, path, next)
+  if (path) {
+    await writeUsage($, path, next)
+  }
   return res.ok
 }
 
@@ -352,30 +423,48 @@ function pollUsage($: EngineInterface): UsageInput | null {
   return accountUsage(memo)
 }
 
-async function refreshUsage($: EngineInterface, memo: UsageMemo) {
-  if (memo.handle === null && waiting(memo.nextAt, await $.clock.now())) {
+async function refreshUsage($: EngineInterface, memo: UsageMemo, retryAuth = true) {
+  const started = await $.clock.now()
+  if (!state.needs.usage || state.usage !== memo) {
     return
   }
-  if (memo.handle === null && (await authorizeUsage($, memo)) === null) {
+  const reauthorize = memo.handle !== null && !waiting(memo.reauthorizeAt, started) &&
+    (memo.account !== null || !waiting(memo.profileNextAt, started))
+  const previousAccount = memo.account
+  if (memo.handle === null && waiting(memo.nextAt, started)) {
+    return
+  }
+  if ((memo.handle === null || reauthorize) && (await authorizeUsage($, memo)) === null) {
     return
   }
   if (!state.needs.usage || state.usage !== memo) {
     return
   }
-  const home = await $.env.get('HOME')
-  if (!home) {
+  await identifyUsage($, memo)
+  if (memo.handle === null || memo.off || !state.needs.usage || state.usage !== memo) {
     return
   }
-  const path = usagePath(home)
+  if (reauthorize && memo.account !== null && memo.account !== previousAccount) {
+    memo.nextAt = 0
+    memo.backoffMs = 0
+  }
+  const home = memo.account === null ? null : await $.env.get('HOME')
+  const path = home && memo.account ? usagePath(home, memo.account) : null
   const now = await $.clock.now()
-  const file = await readUsage($, path, now)
+  // A missing profile or HOME leaves this chat using only its own result, with the same retry limits.
+  const file = path ? await readUsage($, path, now) : {
+    ...EMPTY_USAGE, ...memo.last, backoff_until_ms: memo.nextAt, backoff_ms: memo.backoffMs,
+  }
   if (file) {
-    const changed = JSON.stringify(memo.last) !== JSON.stringify(shown(file))
-    memo.last = shown(file)
-    if (changed) {
-      void refresh($)
+    if ((file.fetched_at_ms ?? -Infinity) >= (memo.last.fetched_at_ms ?? -Infinity) &&
+        (file.fetched_at_ms === null || file.fetched_at_ms - now <= FETCH_EVERY_MS)) {
+      const changed = JSON.stringify(memo.last) !== JSON.stringify(shown(file))
+      memo.last = shown(file)
+      if (changed) {
+        void refresh($)
+      }
     }
-    if (!waiting(memo.nextAt, now) && fetchDue(file, now) && await fetchUsage($, memo, path, file)) {
+    if (!waiting(memo.nextAt, now) && fetchDue(file, now) && await fetchUsage($, memo, path, file, retryAuth)) {
       void refresh($)
     }
   }

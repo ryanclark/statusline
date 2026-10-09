@@ -3,9 +3,9 @@ import type { HttpResponse, SessionAuthorization } from 'claude-code'
 
 import { fetchDue, parseUsageFile, USAGE_URL } from '../hooks/usage'
 import type { UsageFile } from '../hooks/usage'
-import { boot, gate, modOf, T0 } from './host'
+import { boot, gate, modOf, T0, USAGE_PATH } from './host'
 
-const PATH = '/home/me/.statusline/cache/plugin-usage.json'
+const PATH = USAGE_PATH
 const FETCH = 'statusline: $.http.fetch'
 const MIN = 60_000
 
@@ -76,6 +76,7 @@ describe('usage', () => {
     expect(seen.fetches).toHaveLength(2)
     // One handle, minted once and reused.
     expect(seen.authorizes).toBe(1)
+    expect(seen.profiles).toHaveLength(1)
     expect(seen.fetches?.every(f => f.init?.auth === 'h1')).toBe(true)
   })
 

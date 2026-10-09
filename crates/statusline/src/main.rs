@@ -349,6 +349,14 @@ fn main() {
 				.iter()
 				.filter(|s| s.enabled())
 				.any(SegmentConfig::is_credits);
+			// The plugin refreshes account limits even while this chat is idle. Native renders keep Claude's input.
+			let needs_rate_limits = segments.iter().any(|s| {
+				s.enabled()
+					&& matches!(
+						s.segment_type(),
+						segment::SegmentType::FiveHour | segment::SegmentType::SevenDay
+					)
+			});
 			let needs_autocompact = segments.iter().any(|s| {
 				s.enabled() && *s.segment_type() == segment::SegmentType::AutocompactHeadroom
 			});
@@ -443,7 +451,7 @@ fn main() {
 					let output = if cli.plugin_data {
 						serde_json::json!({
 							"rows": rows,
-							"needs": { "usage": needs_usage || needs_credits, "autocompact": needs_autocompact },
+							"needs": { "usage": needs_usage || needs_credits || needs_rate_limits, "autocompact": needs_autocompact },
 							"update": update.map(|u| format!("v{} available • brew upgrade ryanclark/tap/statusline", u.version))
 						})
 					} else {

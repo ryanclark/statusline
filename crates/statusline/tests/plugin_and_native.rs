@@ -101,13 +101,21 @@ fn plugin_reports_only_enabled_optional_data_including_account_overrides() {
 	let settings_path = scratch.join(".statusline/settings.json");
 	let mut settings: Value =
 		serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
-	settings["segments"] = json!(["five_hour", "seven_day",
+	settings["segments"] = json!([{"type": "five_hour", "enabled": false},
+		{"type": "seven_day", "enabled": false},
 		{"type": "extra_usage", "enabled": false}, {"type": "autocompact_headroom", "enabled": false}]);
 	fs::write(&settings_path, settings.to_string()).unwrap();
 	let args = ["--format", "spans", "--plugin-data"];
 	let input = br#"{"mod":{"usage":{"body":null}}}"#;
 	let output: Value = serde_json::from_slice(&run(&scratch, &args, input).stdout).unwrap();
 	assert_eq!(output["needs"], json!({"usage":false,"autocompact":false}));
+
+	for segment in ["five_hour", "seven_day"] {
+		settings["segments"] = json!([segment]);
+		fs::write(&settings_path, settings.to_string()).unwrap();
+		let output: Value = serde_json::from_slice(&run(&scratch, &args, input).stdout).unwrap();
+		assert_eq!(output["needs"], json!({"usage":true,"autocompact":false}));
+	}
 
 	settings["segments"] = json!(["credits", "autocompact_headroom"]);
 	fs::write(&settings_path, settings.to_string()).unwrap();

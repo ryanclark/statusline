@@ -3,6 +3,7 @@ import type { AgentInfo, SessionUsage } from 'claude-code'
 import type { Autocompact, CacheTtl, Live, Tracker } from '../types'
 import { agentCounts } from './activity'
 import { TTL_MS } from './cache'
+import { rateLimits } from './limits'
 import type { UsageInput } from './usage'
 
 export type Sources = {
@@ -39,14 +40,6 @@ export function autocompactOf(b: SessionUsage['context']['breakdown']): Autocomp
 // fast_mode, thinking, PR) are left out, and the binary saves the result as the session's snapshot.
 export function inputJson(src: Sources): string {
   const { now, usage, tracker: t, live: l } = src
-  const rateLimits: Record<string, { used_percentage: number; resets_at: number }> = {}
-  for (const limit of usage.rateLimits) {
-    const resetsAt = limit.resetsAt ? Date.parse(limit.resetsAt) : NaN
-    // resets_at is required by the binary's parser, so a window without one would fail the whole input.
-    if (Number.isFinite(resetsAt)) {
-      rateLimits[limit.kind] = { used_percentage: limit.percentUsed, resets_at: Math.floor(resetsAt / 1000) }
-    }
-  }
 
   const tokens = usage.context.tokens ?? 0
   const ttl = t.cacheTtl ?? src.defaultTtl
@@ -72,7 +65,7 @@ export function inputJson(src: Sources): string {
         : { used_percentage: usage.context.percent, remaining_percentage: 100 - usage.context.percent }),
     },
     exceeds_200k_tokens: tokens > 200_000,
-    rate_limits: rateLimits,
+    rate_limits: rateLimits(usage.rateLimits, src.accountUsage, now),
     ...(t.effort ? { effort: { level: t.effort } } : {}),
     ...(t.cacheObserved
       ? {

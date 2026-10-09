@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Refresh the plugin's five-hour and weekly limits from the shared account usage result, including in idle chats.
+  Fetch only for enabled usage segments, keep rendering while requests run, and fall back to Claude's per-chat limits
+  when shared data is unavailable or stale. Discard expired windows and preserve newer session windows.
+- Keep plugin usage caches separate by authenticated account and organization. Resolve the identity in the background
+  with periodic login revalidation, and keep results private to a chat if its identity cannot be verified.
+
 ## [2.4.0](https://github.com/ryanclark/statusline/compare/v2.3.0...v2.4.0) - 2026-10-09
 
 ### Added
