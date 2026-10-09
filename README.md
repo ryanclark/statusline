@@ -243,6 +243,14 @@ needs 2.1.214.
 | `pr` | Open pull request number (`!` for GitLab merge requests) with ⎇ icon, colored by review state, clickable link to the PR (link needs `colors`) |
 | `repo` | Repository `owner/name` from the origin remote, clickable link to its web page (link needs `colors`) |
 
+Git segments read a shared cache, refreshed in the background at most once every five seconds per directory and
+requested set of fields. The first render can leave them empty until the refresh finishes; later renders keep the
+last result while refreshing. Only enabled segments trigger Git work, and the working tree is scanned only when
+`git_branch` has a nonempty dirty indicator. A cold or previously timed-out scan publishes a quick branch lookup first.
+Refreshes have a ten-second budget and cannot overlap for the same cache. Timeouts back off from 30 seconds to five
+minutes, while retaining the last result; a successful refresh restores the normal interval. Scans respect Git's
+`status.showUntrackedFiles` setting.
+
 #### Environment
 
 | Segment | Description |

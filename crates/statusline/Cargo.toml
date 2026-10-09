@@ -25,6 +25,9 @@ ureq = "3.3.0"
 statusline-core = { workspace = true, features = ["clap"] }
 statusline-configure = { path = "../statusline-configure", version = "1.1.0" }
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", features = ["process"] }
+
 [features]
 codesigned = []
 

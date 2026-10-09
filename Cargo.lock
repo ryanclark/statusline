@@ -1017,6 +1017,7 @@ dependencies = [
  "owo-colors",
  "pbkdf2",
  "rusqlite",
+ "rustix",
  "security-framework",
  "semver",
  "serde",

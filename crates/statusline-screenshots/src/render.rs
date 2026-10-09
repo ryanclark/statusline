@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use eyre::{Result, WrapErr, bail, eyre};
 use serde_json::{Map, Value, json};
 use statusline_configure::Key;
+use statusline_core::segment::{DirtyConfig, SegmentConfig, SegmentType, default_segments};
 use statusline_core::settings::Settings;
 use statusline_core::spans::{Span, ansi_to_spans};
 
@@ -38,6 +39,9 @@ pub fn frame(binary: &Path, scenario: &Scenario, home: &Path, now: Clock) -> Res
 	let cwd = home.join(&scenario.cwd);
 	repo::make(&cwd, &scenario.git)?;
 	let cwd_str = cwd.to_string_lossy().into_owned();
+	// A screenshot captures just one frame from a fresh HOME. Populate its Git cache before drawing that frame,
+	// rather than capturing the intentionally empty first render of the live, asynchronous status line.
+	warm_git(binary, scenario, home, &cwd_str)?;
 
 	let mut input = scenario.input.clone();
 	for value in input.values_mut() {
@@ -62,6 +66,58 @@ pub fn frame(binary: &Path, scenario: &Scenario, home: &Path, now: Clock) -> Res
 		None => Vec::new(),
 	};
 	Ok(Frame { line, panel, input })
+}
+
+fn warm_git(binary: &Path, scenario: &Scenario, home: &Path, cwd: &str) -> Result<()> {
+	let segments: Option<Vec<SegmentConfig>> = serde_json::from_value(scenario.segments.clone())?;
+	let mut branch = false;
+	let mut dirty = false;
+	let mut ahead = false;
+	let mut stash = false;
+	for segment in segments
+		.unwrap_or_else(default_segments)
+		.iter()
+		.filter(|s| s.enabled())
+	{
+		match segment.segment_type() {
+			SegmentType::GitBranch => {
+				branch = true;
+				if let SegmentConfig::Advanced(options) = segment {
+					dirty |= match &options.dirty {
+						DirtyConfig::Off => false,
+						DirtyConfig::On => true,
+						DirtyConfig::Custom(text) => !text.is_empty(),
+					};
+				}
+			}
+			SegmentType::GitAheadBehind => ahead = true,
+			SegmentType::GitStash => stash = true,
+			_ => {}
+		}
+	}
+	let flags: Vec<_> = [
+		(branch, "--branch"),
+		(dirty, "--dirty"),
+		(ahead, "--ahead-behind"),
+		(stash, "--stash"),
+	]
+	.into_iter()
+	.filter_map(|(needed, flag)| needed.then_some(flag))
+	.collect();
+	if !flags.is_empty() {
+		let cache = home.join(".statusline/cache");
+		fs::create_dir_all(&cache)?;
+		let mut args = vec!["git-refresh", "--cwd", cwd];
+		args.extend(flags);
+		spans(binary, home, &args, &json!({}))?;
+		let ready = fs::read_dir(cache)?.filter_map(Result::ok).any(|e| {
+			e.file_name().to_string_lossy().starts_with("git-") && e.path().extension().is_none()
+		});
+		if !ready {
+			bail!("Git refresh did not populate the screenshot's cache");
+		}
+	}
+	Ok(())
 }
 
 /// What `statusline configure` paints for `scenario`, drawn in process since the editor needs no session or repo.

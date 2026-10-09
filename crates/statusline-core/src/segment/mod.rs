@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::Duration;
 
-pub use git::{GitCache, load_git_cache};
+pub use git::GitCache;
 pub use render::render_segment;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]

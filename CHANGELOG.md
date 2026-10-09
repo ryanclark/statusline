@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Refresh Git segments in the background with a shared lock and a bounded runtime, keeping cached values available
+  while Git runs. Query only enabled Git fields, skip working-tree scans without a dirty indicator, and combine
+  branch, dirty and requested counters into one status command when a scan is needed.
+  Publish the branch before cold or slow scans, back off repeated timeouts, drain large output safely, and clear
+  results for removed repositories. Keep stash counts compatible with older Git and warm screenshot fixtures before capture.
+
 ## [2.3.0](https://github.com/ryanclark/statusline/compare/v2.2.1...v2.3.0) - 2026-10-07
 
 ### Added

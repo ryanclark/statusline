@@ -1,5 +1,7 @@
 mod accounts;
+mod background;
 mod browser;
+mod git_cache;
 mod install;
 mod plugin_install;
 mod profiles;
@@ -17,7 +19,7 @@ pub(crate) use statusline_core::{
 use crate::constants::{DIVIDER, GRAY, GREEN, RED};
 use crate::input::InputData;
 use crate::install::install;
-use crate::segment::{RenderContext, SegmentConfig, SegmentLine, default_segments, load_git_cache};
+use crate::segment::{RenderContext, SegmentConfig, SegmentLine, default_segments};
 use crate::settings::Settings;
 use clap::{Parser, Subcommand};
 use format::Percentage;
@@ -112,6 +114,13 @@ enum Commands {
 	Configure,
 	/// Render the agent panel rows for Claude Code's subagentStatusLine (reads JSON on stdin).
 	Subagent,
+	#[command(hide = true)]
+	GitRefresh {
+		#[arg(long)]
+		cwd: String,
+		#[command(flatten)]
+		fields: git_cache::Fields,
+	},
 	#[command(hide = true)]
 	UsageRefresh {
 		#[arg(long)]
@@ -219,6 +228,7 @@ fn main() {
 				}
 			}
 		}
+		Some(Commands::GitRefresh { cwd, fields }) => git_cache::refresh(&cwd, fields),
 		Some(Commands::UsageRefresh {
 			org,
 			browser,
@@ -371,7 +381,7 @@ fn main() {
 			}
 
 			let divider = settings.divider.as_deref().unwrap_or(DIVIDER);
-			let git_cache = load_git_cache(&input.cwd);
+			let git_cache = git_cache::load(&input.cwd, &segments);
 
 			let account_display = account.map(|a| segment::AccountDisplay {
 				nickname: a.nickname.clone(),
