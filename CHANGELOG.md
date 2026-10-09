@@ -11,10 +11,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- refresh plugin limits across chats
-
-### Fixed
-
 - Refresh the plugin's five-hour and weekly limits from the shared account usage result, including in idle chats.
   Fetch only for enabled usage segments, keep rendering while requests run, and fall back to Claude's per-chat limits
   when shared data is unavailable or stale. Discard expired windows and preserve newer session windows.
