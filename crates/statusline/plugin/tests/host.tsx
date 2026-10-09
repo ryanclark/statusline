@@ -90,6 +90,9 @@ type Host = {
   // What `$.session.authorize()` answers each time it is asked, null (no claude.ai login) when not given.
   authorize?: () => SessionAuthorization | Promise<SessionAuthorization>
   needs?: () => Needs
+  updateNotice?: string
+  turns?: number
+  runWait?: () => Promise<void>
   // The files beneath the plugin. A test holding the same map stands in for another chat reading and writing them.
   files?: Map<string, string>
   // The modification time `fs.stat` reports for any of `files`.
@@ -156,6 +159,7 @@ function host(on: On, cfg: Host, seen: Seen = {}): MockClock {
     return <Text>engine</Text>
   })
   on('session.id', () => ({ value: 'abc' }))
+  on('session.turns', () => ({ value: cfg.turns ?? 0 }))
   on('session.cwd', () => ({ value: '/work' }))
   on('session.root', () => ({ value: '/repo-root' }))
   on('session.model', () => (cfg.modelError ? { deny: cfg.modelError } : { value: opus }))
@@ -237,8 +241,9 @@ function host(on: On, cfg: Host, seen: Seen = {}): MockClock {
     } else {
       seen.stdin = e.init?.stdin
       seen.argv = e.argv
+      await cfg.runWait?.()
       if (cfg.needs && e.argv.includes('--plugin-data') && out.exitCode === 0) {
-        out = { ...out, stdout: JSON.stringify({ rows: JSON.parse(out.stdout), needs: cfg.needs() }) }
+        out = { ...out, stdout: JSON.stringify({ rows: JSON.parse(out.stdout), needs: cfg.needs(), update: cfg.updateNotice ?? null }) }
       }
     }
     return { value: { ...out, isStdoutTruncated: false, isStderrTruncated: false } }

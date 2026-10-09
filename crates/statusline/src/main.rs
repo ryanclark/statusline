@@ -126,6 +126,8 @@ enum Commands {
 		fields: git_cache::Fields,
 	},
 	#[command(hide = true)]
+	UpdateRefresh,
+	#[command(hide = true)]
 	UsageRefresh {
 		#[arg(long)]
 		org: String,
@@ -233,6 +235,7 @@ fn main() {
 			}
 		}
 		Some(Commands::GitRefresh { cwd, fields }) => git_cache::refresh(&cwd, fields),
+		Some(Commands::UpdateRefresh) => update::refresh(),
 		Some(Commands::UsageRefresh {
 			org,
 			browser,
@@ -315,8 +318,12 @@ fn main() {
 				session::capture(&raw, origin);
 			}
 			let is_fresh = input.context_window.used_percentage == 0.0.into();
-			// A spans host polls every second, and a fresh session would otherwise run the network check on each poll.
-			let update = if is_fresh && !spans && !settings.skip_update_check {
+			let show_update = if spans {
+				input.mod_info.as_ref().is_some_and(|m| m.show_update)
+			} else {
+				is_fresh
+			};
+			let update = if show_update && !settings.skip_update_check {
 				update::check()
 			} else {
 				None
@@ -412,7 +419,9 @@ fn main() {
 			};
 
 			let mut rendered = line.fitted(cli.width);
-			if let Some(update) = update {
+			if let Some(update) = &update
+				&& !cli.plugin_data
+			{
 				let update_msg = format!(
 					"{} {} {}",
 					format_args!("v{} available", update.version).color(GREEN),
@@ -434,6 +443,7 @@ fn main() {
 						serde_json::json!({
 							"rows": rows,
 							"needs": { "usage": needs_usage || needs_credits, "autocompact": needs_autocompact },
+							"update": update.map(|u| format!("v{} available • brew upgrade ryanclark/tap/statusline", u.version))
 						})
 					} else {
 						serde_json::json!(rows)

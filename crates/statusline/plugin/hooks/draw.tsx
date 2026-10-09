@@ -42,7 +42,7 @@ export function hintWidth(columns: number | undefined, mode: string | null): num
 }
 
 // A line with no text and no error leaves the slot to Claude Code.
-export const blank = (r: Rendered): boolean => !r.error && r.rows.every(row => row.length === 0)
+export const blank = (r: Rendered): boolean => !r.error && !r.update && r.rows.every(row => row.length === 0)
 
 export function draw(ui: Ui, r: Rendered, working: boolean, hint?: unknown, width?: number) {
   const { Box, Text, Link } = ui
@@ -57,6 +57,7 @@ export function draw(ui: Ui, r: Rendered, working: boolean, hint?: unknown, widt
   const { pills, selected } = parsePills(hint)
   return (
     <Box flexDirection="column" width={width}>
+      {r.update ? <Text color="success" wrap="truncate-end">{r.update}</Text> : null}
       {r.rows.map((row, i) => (
         // One Text per row so an overflowing row is cut once at its end rather than every span shrinking on its own.
         <Text key={`row${i}`} wrap="truncate-end">

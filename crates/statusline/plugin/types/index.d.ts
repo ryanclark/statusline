@@ -11,7 +11,7 @@ export type Span = {
   href?: string
 }
 
-export type Rendered = { rows: Span[][]; error?: string }
+export type Rendered = { rows: Span[][]; error?: string; update?: string }
 
 export type LastUsage = {
   input_tokens: number

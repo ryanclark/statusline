@@ -7,6 +7,7 @@ describe('activity', () => {
   test('is empty but for the autocompact headroom while nothing happens', async ($, on) => {
     const { seen } = await boot($, on)
     expect(modOf(seen)).toEqual({
+      show_update: true,
       tools: [],
       turn: null,
       permission: null,
@@ -508,6 +509,7 @@ describe('activity', () => {
       recache_tokens_if_cold: 52000,
     })
     expect(input.mod).toEqual({
+      show_update: false,
       tools: [{ tool: 'Bash', detail: 'cargo test -p core', started_at_ms: T1 }],
       turn: { started_at_ms: T1, last_duration_ms: 130_000, ended_at_ms: T0 },
       permission: { tool: 'Bash', since_ms: T1 },

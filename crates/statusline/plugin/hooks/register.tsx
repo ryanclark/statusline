@@ -78,6 +78,7 @@ type State = {
   fits: boolean
   reportsNeeds: boolean
   needs: Needs
+  userTurns: number | null
   fitWidth: number | undefined
   tooOld: string | null
   usage: UsageMemo
@@ -115,6 +116,7 @@ function fresh(options: PluginOptions): State {
     fits: false,
     reportsNeeds: false,
     needs: { usage: true, autocompact: true }, // Older binaries cannot report their layout's requirements.
+    userTurns: null,
     fitWidth: undefined,
     tooOld: null,
     usage: newUsageMemo(),
@@ -133,7 +135,7 @@ async function buildInput($: EngineInterface): Promise<string> {
   if (due) {
     state.breakdownAt = now
   }
-  const [id, cwd, root, model, version, usage, t, l, agents] = await Promise.all([
+  const [id, cwd, root, model, version, usage, t, l, agents, turns] = await Promise.all([
     $.session.id(),
     $.session.cwd(),
     $.session.root(),
@@ -143,7 +145,10 @@ async function buildInput($: EngineInterface): Promise<string> {
     read($, tracker),
     read($, live),
     $.agent.list(),
+    state.userTurns === null ? Promise.resolve().then(() => $.session.turns()).catch(() => 1) : state.userTurns,
   ])
+  // A prompt submitted while the first reading was pending must never be undone by that reading.
+  state.userTurns = Math.max(state.userTurns ?? 0, turns)
   if (due) {
     state.autocompact = autocompactOf(usage.context.breakdown)
   }
@@ -162,6 +167,7 @@ async function buildInput($: EngineInterface): Promise<string> {
     defaultTtl: state.defaultTtl,
     autocompact: state.autocompact,
     accountUsage: state.reportsNeeds ? accountUsage(state.usage) : pollUsage($),
+    showUpdate: state.userTurns === 0,
   })
 }
 
@@ -423,6 +429,7 @@ async function run($: EngineInterface): Promise<Rendered> {
   } catch {
     // Plain text means an ANSI-only build or another binary, which a JSON parse error would not say.
   }
+  let updateNotice: string | undefined
   if (state.reportsNeeds) {
     const envelope = obj(rows)
     const needs = obj(envelope?.needs)
@@ -437,10 +444,11 @@ async function run($: EngineInterface): Promise<Rendered> {
     // The binary has just resolved settings and account overrides. Checking after its reply also prevents an old
     // layout from starting a due request on the very tick the user removes the usage segment.
     pollUsage($)
+    updateNotice = typeof envelope?.update === 'string' && state.userTurns === 0 ? envelope.update : undefined
     rows = envelope?.rows
   }
   return isSpanRows(rows)
-    ? { rows }
+    ? { rows, ...(updateNotice ? { update: updateNotice } : {}) }
     : { rows: [], error: `statusline: ${binary} did not print span rows, it needs --format spans` }
 }
 
@@ -481,7 +489,8 @@ async function drawLine(
   width?: number,
 ) {
   const r = await read($, rendered)
-  return r && !blank(r) ? draw($.ui.resolve(e), r, working, hint, width) : null
+  const visible = r && state.userTurns !== 0 ? { ...r, update: undefined } : r
+  return visible && !blank(visible) ? draw($.ui.resolve(e), visible, working, hint, width) : null
 }
 
 async function noteTodos($: EngineInterface, tool: string, args: Json, result: Json, main: boolean) {
@@ -506,6 +515,11 @@ async function noteTaskEnd(
   e: PromptSubmitInput,
   next: (e: PromptSubmitInput) => Promise<PromptSubmitResult>,
 ): Promise<PromptSubmitResult> {
+  if (e.origin.kind !== 'task-notification') {
+    state.userTurns = Math.max(1, state.userTurns ?? 0)
+    await update($, rendered, r => r?.update ? { ...r, update: undefined } : r)
+    void refresh($)
+  }
   const ended = e.origin.kind === 'task-notification' ? endedTasks(e.text) : []
   if (ended.length > 0) {
     await update($, live, l => withoutBackground(l, ended) ?? l)
@@ -568,6 +582,7 @@ export const register: Register = (on, options) => {
   state = fresh(options)
 
   on('session.start', async ($, e, next) => {
+    state.userTurns = null
     // The first render waits on the probe and a run of the binary, and the native line would draw beside it until then.
     const [id, now] = await Promise.all([$.session.id(), $.clock.now()])
     await writeHeartbeat($, id, now + state.heartbeatMs)
@@ -588,6 +603,7 @@ export const register: Register = (on, options) => {
     return result
   })
   on('turn.start', async ($, e, next) => {
+    state.userTurns = Math.max(1, state.userTurns ?? 0)
     const now = await $.clock.now()
     // A turn that ends before its first response would otherwise report the previous turn's stop reason.
     await update($, tracker, t => ({ ...t, lastStopReason: null }))

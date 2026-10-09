@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { boot, gate, modOf, mountHint, T0, unknownFlag } from './host'
 
 const noNeeds = () => ({ usage: false, autocompact: false })
+const notice = 'v9.0.0 available • brew upgrade ryanclark/tap/statusline'
 const bearer = () => ({ handle: 'h1', kind: 'bearer' as const })
 const body = { extra_usage: { monthly_limit: 10000, used_credits: 2500 } }
 const reply = () => ({ status: 200, ok: true, headers: {}, text: JSON.stringify(body) })
@@ -121,5 +122,43 @@ describe('requested data', () => {
     expect(await (await mountHint($)).find({ text: /12%/ })).toBeDefined()
     held.open()
     await clock.settle()
+  })
+})
+
+describe('update notice', () => {
+  test('an empty chat shows the notice and the first prompt removes it', async ($, on) => {
+    const { seen, clock } = await boot($, on, { needs: noNeeds, updateNotice: notice })
+    const ui = await mountHint($)
+    expect(modOf(seen).show_update).toBe(true)
+    expect(await ui.find({ text: notice })).toBeDefined()
+    await $.prompt.submit({ text: 'hello', origin: { kind: 'composer' } })
+    await clock.settle()
+    expect(modOf(seen).show_update).toBe(false)
+    expect(await ui.find({ text: notice })).toBeUndefined()
+    await clock.advance(60_000)
+    expect(await ui.find({ text: notice })).toBeUndefined()
+  })
+
+  test('a resumed chat never shows the update notice', async ($, on) => {
+    const { seen } = await boot($, on, { needs: noNeeds, updateNotice: notice, turns: 3 })
+    expect(modOf(seen).show_update).toBe(false)
+    expect(await (await mountHint($)).find({ text: notice })).toBeUndefined()
+  })
+
+  test('a render started before the first prompt cannot bring its notice back', async ($, on) => {
+    const held = gate()
+    let hold = false
+    const { clock } = await boot($, on, {
+      needs: noNeeds, updateNotice: notice,
+      runWait: async () => { if (hold) await held.wait },
+    })
+    const ui = await mountHint($)
+    hold = true
+    await clock.advance(1000)
+    await $.prompt.submit({ text: 'hello', origin: { kind: 'bridge' } })
+    expect(await ui.find({ text: notice })).toBeUndefined()
+    held.open()
+    await clock.settle()
+    expect(await ui.find({ text: notice })).toBeUndefined()
   })
 })

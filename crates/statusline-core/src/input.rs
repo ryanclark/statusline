@@ -267,6 +267,9 @@ pub enum MissCauseCode {
 /// Session activity from the plugin, whose times and lengths arrive in milliseconds.
 #[derive(Debug, Default, Deserialize)]
 pub struct ModInfo {
+	/// The plugin has confirmed that no user prompt has been sent in this chat.
+	#[serde(default)]
+	pub show_update: bool,
 	#[serde(default, deserialize_with = "null_as_default")]
 	pub tools: Vec<ToolCall>,
 	#[serde(default)]

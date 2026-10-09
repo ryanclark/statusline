@@ -428,6 +428,10 @@ statusline profiles --browser chrome
 
 ### Disabling the update check
 
+Update checks run in the background, shared across chats. A successful check is cached for 24 hours; a failed attempt
+waits an hour before trying again. In plugin mode the check and notice are limited to chats with no user messages.
+The notice disappears as soon as the first message is submitted, and resumed chats with messages never show it.
+
 Set `skip_update_check` in `~/.statusline/settings.json` to suppress the once-a-day update check and the update banner:
 
 ```json

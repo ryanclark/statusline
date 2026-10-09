@@ -19,6 +19,7 @@ export type Sources = {
   defaultTtl: CacheTtl
   autocompact: Autocompact | null
   accountUsage: UsageInput | null
+  showUpdate?: boolean
 }
 
 export function autocompactOf(b: SessionUsage['context']['breakdown']): Autocompact | null {
@@ -96,6 +97,7 @@ export function inputJson(src: Sources): string {
         }
       : {}),
     mod: {
+      show_update: src.showUpdate === true,
       tools: l.tools.map(({ tool, detail, started_at_ms }) => ({ tool, detail, started_at_ms })),
       turn: l.turn,
       permission: waiting ? { tool: waiting.tool, since_ms: waiting.since_ms } : null,

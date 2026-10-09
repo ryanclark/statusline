@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fetch plugin usage only for enabled segments, with authorization and cache reads also in the background. Request
   the context breakdown only when the compaction-headroom segment needs it.
   Authorization errors retain the cookie fallback and retry at most once a minute.
+- Check for updates in the background in plugin mode, sharing daily results and failure backoff across chats. Show
+  notices only before the first user message, including when a render finishes after that message was submitted.
 
 ## [2.3.0](https://github.com/ryanclark/statusline/compare/v2.2.1...v2.3.0) - 2026-10-07
 

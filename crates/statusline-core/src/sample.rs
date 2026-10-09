@@ -31,6 +31,7 @@ fn sample_mod_info() -> ModInfo {
 	let now = Utc::now();
 	let ago = |secs| Some(now - TimeDelta::seconds(secs));
 	ModInfo {
+		show_update: false,
 		tools: vec![
 			ToolCall {
 				tool: "Bash".to_owned(),

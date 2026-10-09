@@ -126,6 +126,53 @@ fn plugin_reports_only_enabled_optional_data_including_account_overrides() {
 }
 
 #[test]
+fn plugin_update_notice_requires_an_empty_chat_and_enabled_checks() {
+	let scratch = scratch_home("plugin-updates");
+	let settings_path = scratch.join(".statusline/settings.json");
+	let mut settings: Value =
+		serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+	settings["skip_update_check"] = false.into();
+	fs::write(&settings_path, settings.to_string()).unwrap();
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.unwrap()
+		.as_secs();
+	fs::write(
+		scratch.join(".statusline/latest_version"),
+		format!("99.0.0\n{now}"),
+	)
+	.unwrap();
+	let args = ["--format", "spans", "--plugin-data"];
+	let empty = br#"{"mod":{"show_update":true}}"#;
+	let output: Value = serde_json::from_slice(&run(&scratch, &args, empty).stdout).unwrap();
+	assert!(
+		output["update"]
+			.as_str()
+			.unwrap()
+			.contains("v99.0.0 available")
+	);
+	assert!(output["rows"].is_array());
+
+	// Zero context usage is not evidence that no user message has been sent.
+	let output: Value = serde_json::from_slice(
+		&run(
+			&scratch,
+			&args,
+			br#"{"context_window":{"used_percentage":0},"mod":{"show_update":false}}"#,
+		)
+		.stdout,
+	)
+	.unwrap();
+	assert!(output["update"].is_null());
+
+	settings["skip_update_check"] = true.into();
+	fs::write(&settings_path, settings.to_string()).unwrap();
+	let output: Value = serde_json::from_slice(&run(&scratch, &args, empty).stdout).unwrap();
+	assert!(output["update"].is_null());
+	fs::remove_dir_all(scratch).unwrap();
+}
+
+#[test]
 fn git_cache_refreshes_in_the_background_and_clears_removed_directories() {
 	let scratch = scratch_home("background-git");
 	let repo = scratch.join("repo");
