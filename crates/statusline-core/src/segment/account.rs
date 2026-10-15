@@ -58,6 +58,7 @@ mod tests {
 	fn render_account_capitalized() {
 		let input = InputData::default();
 		let ctx = RenderContext {
+			environment: None,
 			path_format: None,
 			input: &input,
 			usage: None,

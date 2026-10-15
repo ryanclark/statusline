@@ -60,6 +60,7 @@ pub fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Optio
 		SegmentType::FastMode => env::fast_mode(segment, ctx),
 
 		SegmentType::Account => account::account(segment, ctx),
+		SegmentType::Env => super::environment::render(segment, ctx),
 
 		SegmentType::TaskName => task::task_name(segment, ctx),
 		SegmentType::TaskStatus => task::task_status(segment, ctx),
@@ -110,6 +111,7 @@ mod tests {
 
 	fn default_ctx(input: &InputData) -> RenderContext<'_> {
 		RenderContext {
+			environment: None,
 			path_format: None,
 			input,
 			usage: None,

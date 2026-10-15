@@ -1,7 +1,9 @@
 use crate::OutputFormat;
 use crate::settings::Settings;
 use statusline_core::constants::DIVIDER;
-use statusline_core::subagent::{SubagentInput, default_subagent_segments, render_rows_with_paths};
+use statusline_core::subagent::{
+	SubagentInput, default_subagent_segments, render_rows_with_environment,
+};
 use std::io::{IsTerminal, Write};
 
 pub(crate) fn run(format: OutputFormat) {
@@ -31,13 +33,17 @@ pub(crate) fn run(format: OutputFormat) {
 	let nerd_font = settings.as_ref().is_some_and(|s| s.nerd_font);
 	let grid = settings.as_ref().is_none_or(|s| s.subagent_grid);
 
-	let rows = render_rows_with_paths(
+	let environment = statusline_core::segment::EnvironmentValues::resolve(&segments, |name| {
+		std::env::var(name).ok()
+	});
+	let rows = render_rows_with_environment(
 		&input,
 		&segments,
 		&divider,
 		nerd_font,
 		grid,
 		settings.as_ref().map(|s| &s.path_format),
+		Some(&environment),
 	);
 	let mut out = std::io::stdout().lock();
 	match format {

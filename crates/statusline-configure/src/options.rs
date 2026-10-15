@@ -8,6 +8,8 @@ pub enum OptionKind {
 	Icon,
 	IconColor,
 	Label,
+	Var,
+	ColorEnv,
 	Style,
 	Dirty,
 	DirtyColor,
@@ -59,6 +61,10 @@ pub fn applicable_fields(set: OptionSet) -> Vec<OptionKind> {
 	}
 	if set.details {
 		fields.push(OptionKind::Details);
+	}
+	if set.environment {
+		fields.push(OptionKind::Var);
+		fields.push(OptionKind::ColorEnv);
 	}
 
 	fields

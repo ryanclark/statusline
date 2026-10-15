@@ -273,6 +273,20 @@ pub fn render_rows_with_paths(
 	grid: bool,
 	path_format: Option<&crate::path_format::PathFormat>,
 ) -> Vec<Row> {
+	render_rows_with_environment(input, segments, divider, nerd_font, grid, path_format, None)
+}
+
+/// Render task rows using values resolved by the caller, without reading process environment.
+#[must_use]
+pub fn render_rows_with_environment(
+	input: &SubagentInput,
+	segments: &[SegmentConfig],
+	divider: &str,
+	nerd_font: bool,
+	grid: bool,
+	path_format: Option<&crate::path_format::PathFormat>,
+	environment: Option<&crate::segment::EnvironmentValues>,
+) -> Vec<Row> {
 	let inputs: Vec<InputData> = input.tasks.iter().map(Task::to_input).collect();
 	let lines: Vec<SegmentLine<'_>> = input
 		.tasks
@@ -281,6 +295,7 @@ pub fn render_rows_with_paths(
 		.map(|(task, data)| SegmentLine {
 			segments,
 			ctx: RenderContext {
+				environment,
 				path_format,
 				input: data,
 				usage: None,

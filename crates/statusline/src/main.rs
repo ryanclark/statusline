@@ -409,9 +409,12 @@ fn main() {
 				color: a.color.clone(),
 			});
 
+			let environment =
+				segment::EnvironmentValues::resolve(&segments, |name| std::env::var(name).ok());
 			let line = SegmentLine {
 				segments: &segments,
 				ctx: RenderContext {
+					environment: Some(&environment),
 					path_format: Some(&settings.path_format),
 					input: &input,
 					usage: usage_result.as_ref().map(|r| r.as_ref()),

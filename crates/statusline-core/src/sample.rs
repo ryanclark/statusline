@@ -92,6 +92,16 @@ fn sample_mod_info() -> ModInfo {
 }
 
 impl SampleData {
+	/// Representative values for explicitly configured environment segments.
+	#[must_use]
+	pub fn environment(
+		segments: &[crate::segment::SegmentConfig],
+	) -> crate::segment::EnvironmentValues {
+		crate::segment::EnvironmentValues::resolve(segments, |name| {
+			let color = segments.iter().any(|segment| matches!(segment, crate::segment::SegmentConfig::Advanced(options) if options.color_env.as_deref() == Some(name)));
+			Some(if color { "#64c8dc" } else { "Example" }.to_owned())
+		})
+	}
 	#[must_use]
 	pub fn representative() -> Self {
 		let five_reset = Utc::now().timestamp() + 7200; // +2h
@@ -301,6 +311,7 @@ impl SampleData {
 		seven_threshold: Percentage,
 	) -> Option<RenderContext<'a>> {
 		Some(RenderContext {
+			environment: None,
 			path_format: None,
 			input: self.task_inputs.get(index)?,
 			usage: None,
@@ -325,6 +336,7 @@ impl SampleData {
 		seven_threshold: Percentage,
 	) -> RenderContext<'a> {
 		RenderContext {
+			environment: None,
 			path_format: None,
 			input: &self.input,
 			usage: Some(self.usage.as_ref()),
@@ -350,10 +362,14 @@ mod tests {
 	#[test]
 	fn sample_renders_every_segment() {
 		let data = SampleData::representative();
-		let ctx = data.render_context();
-
 		for m in catalog() {
-			let seg = SegmentConfig::Simple(m.ty.clone());
+			let mut seg = SegmentConfig::Simple(m.ty.clone());
+			if m.ty == SegmentType::Env {
+				seg.options_mut().var = Some("EXAMPLE".into());
+			}
+			let environment = SampleData::environment(std::slice::from_ref(&seg));
+			let mut ctx = data.render_context();
+			ctx.environment = Some(&environment);
 			let out = render_segment(&seg, &ctx);
 			assert!(
 				out.as_deref().is_some_and(|s| !s.is_empty()),
