@@ -362,6 +362,7 @@ mod tests {
 	fn render_with(segment: &SegmentConfig, input_json: &str, nerd_font: bool) -> Option<String> {
 		let input = InputData::from_reader(input_json.as_bytes()).unwrap();
 		let ctx = RenderContext {
+			external_usage: None,
 			environment: None,
 			path_format: None,
 			input: &input,

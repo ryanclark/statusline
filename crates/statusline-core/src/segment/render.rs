@@ -7,7 +7,13 @@ use owo_colors::OwoColorize;
 
 #[must_use]
 pub fn render_segment(segment: &SegmentConfig, ctx: &RenderContext<'_>) -> Option<String> {
+	if let Some(external) = ctx.external_usage
+		&& super::external::owns(segment.segment_type())
+	{
+		return super::external::render(segment, ctx, external);
+	}
 	let result = match segment.segment_type() {
+		SegmentType::UsageLimit => None,
 		SegmentType::ContextPercentage => context::context_percentage(segment, ctx),
 		SegmentType::TotalInputTokens => context::total_input_tokens(segment, ctx),
 		SegmentType::InputTokens => context::input_tokens(segment, ctx),
@@ -111,6 +117,7 @@ mod tests {
 
 	fn default_ctx(input: &InputData) -> RenderContext<'_> {
 		RenderContext {
+			external_usage: None,
 			environment: None,
 			path_format: None,
 			input,

@@ -295,6 +295,7 @@ pub fn render_rows_with_environment(
 		.map(|(task, data)| SegmentLine {
 			segments,
 			ctx: RenderContext {
+				external_usage: None,
 				environment,
 				path_format,
 				input: data,

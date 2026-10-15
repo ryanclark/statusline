@@ -14,6 +14,7 @@ use chrono::{TimeDelta, Utc};
 use std::time::Duration;
 
 pub struct SampleData {
+	pub external: crate::external_usage::UsageSnapshot,
 	pub input: InputData,
 	pub tasks: Vec<Task>,
 	/// Each task viewed as a status line input, borrowed by [`Self::task_context`].
@@ -272,6 +273,24 @@ impl SampleData {
 		let task_inputs = tasks.iter().map(Task::to_input).collect();
 
 		Self {
+			external: crate::external_usage::UsageSnapshot {
+				version: 1,
+				key: "example".into(),
+				observed_at: Utc::now(),
+				account: crate::external_usage::ExternalAccount {
+					id: "example".into(),
+					label: "Work".into(),
+					color: Some("#64c8dc".into()),
+				},
+				limits: vec![crate::external_usage::ExternalLimit {
+					id: "example".into(),
+					label: Some("Burst".into()),
+					used_percent: Some(42.0),
+					window_seconds: Some(3600),
+					resets_at: Some(Utc::now() + TimeDelta::hours(1)),
+				}],
+				spend: None,
+			},
 			input,
 			tasks,
 			task_inputs,
@@ -311,6 +330,7 @@ impl SampleData {
 		seven_threshold: Percentage,
 	) -> Option<RenderContext<'a>> {
 		Some(RenderContext {
+			external_usage: None,
 			environment: None,
 			path_format: None,
 			input: self.task_inputs.get(index)?,
@@ -336,6 +356,7 @@ impl SampleData {
 		seven_threshold: Percentage,
 	) -> RenderContext<'a> {
 		RenderContext {
+			external_usage: None,
 			environment: None,
 			path_format: None,
 			input: &self.input,
@@ -370,6 +391,14 @@ mod tests {
 			let environment = SampleData::environment(std::slice::from_ref(&seg));
 			let mut ctx = data.render_context();
 			ctx.environment = Some(&environment);
+			if m.ty == SegmentType::UsageLimit {
+				seg.options_mut().limit_id = Some("example".into());
+				ctx.external_usage = Some(crate::external_usage::ExternalUsage {
+					snapshot: Some(&data.external),
+					state: crate::external_usage::SnapshotState::Fresh,
+					now: Utc::now(),
+				});
+			}
 			let out = render_segment(&seg, &ctx);
 			assert!(
 				out.as_deref().is_some_and(|s| !s.is_empty()),

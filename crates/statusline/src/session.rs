@@ -275,16 +275,40 @@ pub fn print_report(session_id: &str) {
 	let snapshot = sessions_dir()
 		.and_then(|dir| session_file(&dir, session_id, SessionFile::Snapshot))
 		.and_then(|path| Snapshot::load(&path));
-	// usage.json is rewritten in place, so stat it first: a refresh landing in between then overstates the age
-	// rather than passing old limits off as fresh.
-	let updated_at = usage_cache::cache_path().and_then(|p| modified(&p));
-	let usage = usage_cache::read().zip(updated_at);
-	let report = build_report(
+	let settings = crate::settings::Settings::load().unwrap_or_default();
+	let source = crate::external_usage::resolve_source(&settings, |name| std::env::var(name).ok());
+	let external = !matches!(source, Ok(None));
+	// Stat first so a native cache refresh cannot make old data appear newer.
+	let usage = (!external)
+		.then(|| {
+			let updated_at = usage_cache::cache_path().and_then(|p| modified(&p));
+			usage_cache::read().zip(updated_at)
+		})
+		.flatten();
+	let mut report = build_report(
 		session_id,
 		snapshot.as_ref(),
 		usage.as_ref().map(|(reply, at)| (reply, *at)),
 		Utc::now(),
 	);
+	if external {
+		let mut input = snapshot
+			.as_ref()
+			.and_then(|s| serde_json::to_vec(&s.json).ok())
+			.and_then(|bytes| crate::input::InputData::from_reader(bytes.as_slice()).ok())
+			.unwrap_or_default();
+		input.session_id = session_id.to_owned();
+		report
+			.as_object_mut()
+			.expect("report object")
+			.remove("rate_limits");
+		report["usage_source"] = json!("external");
+		report["account_usage"] = source
+			.and_then(|source| {
+				crate::external_usage::report(source.as_ref().expect("explicit source"), &input)
+			})
+			.unwrap_or_else(|error| json!({"error":error.to_string()}));
+	}
 
 	println!("{report:#}");
 }

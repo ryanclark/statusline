@@ -541,7 +541,9 @@ impl EditorModel {
 
 				opts.cold_color = pick.to_opt();
 			}
-			OptionKind::Label | OptionKind::Var | OptionKind::ColorEnv => return,
+			OptionKind::Label | OptionKind::Var | OptionKind::ColorEnv | OptionKind::LimitId => {
+				return;
+			}
 		}
 		self.dirty = true;
 	}
@@ -552,9 +554,10 @@ impl EditorModel {
 		};
 
 		match kind {
-			OptionKind::Label | OptionKind::Var | OptionKind::ColorEnv => {
+			OptionKind::Label | OptionKind::Var | OptionKind::ColorEnv | OptionKind::LimitId => {
 				let options = row.config.options_mut();
 				let current = match kind {
+					OptionKind::LimitId => &options.limit_id,
 					OptionKind::Var => &options.var,
 					OptionKind::ColorEnv => &options.color_env,
 					_ => &options.label,
@@ -617,6 +620,7 @@ impl EditorModel {
 			let opts = row.config.options_mut();
 
 			let target = match field {
+				Some(OptionKind::LimitId) => &mut opts.limit_id,
 				Some(OptionKind::Var) => &mut opts.var,
 				Some(OptionKind::ColorEnv) => &mut opts.color_env,
 				_ => &mut opts.label,

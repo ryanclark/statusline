@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "key": "work",
+  "observed_at": "2026-10-15T12:00:00Z",
+  "account": {"id": "provider:organization:user", "label": "Work", "color": "#64c8dc"},
+  "limits": [
+    {"id": "five_hour", "label": "Session", "used_percent": 12.5, "window_seconds": 18000, "resets_at": "2026-10-15T14:30:00Z"},
+    {"id": "burst", "label": "Burst", "used_percent": 42, "window_seconds": 3600, "resets_at": "2026-10-15T13:00:00Z"}
+  ],
+  "spend": {"currency": "EUR", "exponent": 2, "used_minor": 1234, "limit_minor": 5000, "balance_minor": 8000}
+}

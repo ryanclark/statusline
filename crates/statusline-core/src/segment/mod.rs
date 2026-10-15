@@ -5,6 +5,7 @@ mod cost;
 mod credits;
 mod env;
 mod environment;
+mod external;
 pub use environment::EnvironmentValues;
 mod git;
 mod grid;
@@ -34,6 +35,7 @@ pub enum SegmentType {
 	TotalInputTokens,
 	InputTokens,
 	OutputTokens,
+	UsageLimit,
 	FiveHour,
 	SevenDay,
 	SpendLimit,
@@ -106,7 +108,8 @@ impl SegmentType {
 				ContextPercentage => TotalInputTokens,
 				TotalInputTokens => InputTokens,
 				InputTokens => OutputTokens,
-				OutputTokens => FiveHour,
+				OutputTokens => UsageLimit,
+				UsageLimit => FiveHour,
 				FiveHour => SevenDay,
 				SevenDay => SpendLimit,
 				SpendLimit => FableUsage,
@@ -220,6 +223,8 @@ pub struct SegmentOptions {
 	/// Name of a variable containing a colour in the standard colour syntax.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub color_env: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub limit_id: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub capitalize: Option<bool>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -546,6 +551,7 @@ impl SegmentConfig {
 				cold_color: None,
 				var: None,
 				color_env: None,
+				limit_id: None,
 				capitalize: None,
 				show_time: None,
 				time_format: None,
@@ -577,6 +583,7 @@ impl SegmentConfig {
 				&& opts.cold_color.is_none()
 				&& opts.var.is_none()
 				&& opts.color_env.is_none()
+				&& opts.limit_id.is_none()
 				&& opts.capitalize.unwrap_or(true)
 				&& opts.show_time.is_none()
 				&& opts.time_format.is_none()
@@ -616,6 +623,7 @@ pub struct AccountDisplay {
 }
 
 pub struct RenderContext<'a> {
+	pub external_usage: Option<crate::external_usage::ExternalUsage<'a>>,
 	pub environment: Option<&'a EnvironmentValues>,
 	pub path_format: Option<&'a crate::path_format::PathFormat>,
 	pub input: &'a InputData,

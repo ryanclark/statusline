@@ -52,7 +52,12 @@ fn value(segment: &SegmentConfig, values: &EnvironmentValues) -> Option<String> 
 		Some(color) => display.color(color).to_string(),
 		None => display,
 	};
-	Some(apply_style(&text, segment.style()))
+	let styled = apply_style(&text, segment.style());
+	Some(if segment.colors() {
+		styled
+	} else {
+		plain(&styled)
+	})
 }
 
 #[cfg(test)]
@@ -65,6 +70,17 @@ mod tests {
 	fn segment() -> SegmentConfig {
 		serde_json::from_value(json!({"type":"env","var":"ACCOUNT","color_env":"ACCOUNT_COLOR"}))
 			.unwrap()
+	}
+
+	#[test]
+	fn environment_plain_output_remains_plain_with_a_style() {
+		let mut segment = segment();
+		segment.options_mut().colors = false;
+		segment.options_mut().style = Some("bold".into());
+		let values = EnvironmentValues::resolve(std::slice::from_ref(&segment), |name| {
+			(name == "ACCOUNT").then(|| "Work ☕".into())
+		});
+		assert_eq!(value(&segment, &values).unwrap(), "Work ☕");
 	}
 
 	#[test]

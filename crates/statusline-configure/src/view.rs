@@ -255,6 +255,20 @@ fn segment_example(model: &EditorModel, sample: &SampleData, config: &SegmentCon
 			.get_or_insert_with(|| "EXAMPLE".to_owned());
 	}
 
+	let mut external = sample.external.clone();
+	if *config.segment_type() == SegmentType::UsageLimit {
+		let id = config
+			.options_mut()
+			.limit_id
+			.get_or_insert_with(|| "example".to_owned())
+			.clone();
+		external.limits[0].id = id;
+		ctx.external_usage = Some(statusline_core::external_usage::ExternalUsage {
+			snapshot: Some(&external),
+			state: statusline_core::external_usage::SnapshotState::Fresh,
+			now: external.observed_at,
+		});
+	}
 	let segs = [config];
 	let environment = SampleData::environment(&segs);
 	ctx.environment = Some(&environment);
@@ -459,6 +473,7 @@ fn option_label(kind: OptionKind) -> &'static str {
 		OptionKind::Icon => "icon",
 		OptionKind::IconColor => "icon color",
 		OptionKind::Label => "label",
+		OptionKind::LimitId => "limit ID",
 		OptionKind::Var => "variable",
 		OptionKind::ColorEnv => "colour variable",
 		OptionKind::Style => "style",
@@ -479,11 +494,8 @@ fn option_value(model: &EditorModel, config: &SegmentConfig, kind: OptionKind) -
 	if let Some(le) = &model.options.editing_text
 		&& matches!(
 			kind,
-			OptionKind::Label | OptionKind::Var | OptionKind::ColorEnv
-		) && applicable_fields(
-		meta(config.segment_type()).options,
-	)
-	.get(model.options.field)
+			OptionKind::Label | OptionKind::Var | OptionKind::ColorEnv | OptionKind::LimitId
+		) && applicable_fields(meta(config.segment_type()).options).get(model.options.field)
 		== Some(&kind)
 	{
 		return format!("\"{}\u{2502}\"", le.value());
@@ -508,6 +520,9 @@ fn option_value(model: &EditorModel, config: &SegmentConfig, kind: OptionKind) -
 
 	match kind {
 		OptionKind::Colors => on_off(opts.is_none_or(|o| o.colors)).to_owned(),
+		OptionKind::LimitId => opts
+			.and_then(|o| o.limit_id.clone())
+			.unwrap_or_else(|| "(none)".to_owned()),
 		OptionKind::Var => opts
 			.and_then(|o| o.var.clone())
 			.unwrap_or_else(|| "(none)".to_owned()),
