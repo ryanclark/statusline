@@ -151,6 +151,10 @@ By default:
 - **7-day rate limit** — same as above
 - **Extra usage** — spend against monthly limit (fetched by the plugin, or with Chrome cookie auth)
 
+## External usage and environment text
+
+Use a command to supply account limits from another collector, with asynchronous refresh and a cache isolated by account. The generic `usage_limit` segment supports arbitrary quotas; `env` displays text and a colour from environment variables. Both are opt-in. See the [external usage protocol and examples](docs/external-usage.md).
+
 ## Customising segments
 
 Add a `segments` array to `~/.statusline/settings.json` to control what's shown and in what order:
@@ -250,6 +254,7 @@ needs 2.1.214.
 | `five_hour` | 5-hour rate limit % with optional reset countdown |
 | `seven_day` | 7-day rate limit % with optional reset countdown |
 | `spend_limit` | Spend limit % with reset countdown (only present behind a Claude apps gateway) |
+| `usage_limit` | A named quota from an external usage command (`limit_id` selects it) |
 | `fable_usage` | Fable weekly rate limit % with reset countdown (calls the API) |
 | `extra_usage` | Extra usage $used/$limit (calls the API) |
 
@@ -284,6 +289,8 @@ minutes, while retaining the last result; a successful refresh restores the norm
 `status.showUntrackedFiles` setting.
 
 #### Environment
+
+`env` displays an arbitrary value from `var`, coloured by `color_env`; see [environment text](docs/external-usage.md#arbitrary-environment-text).
 
 | Segment | Description |
 |---|---|
@@ -489,7 +496,7 @@ Most segments read from the JSON that Claude Code pipes via stdin — no externa
 - `extra_usage`, `fable_usage`, `credits` — the plugin fetches them with the session's login. The native `statusLine` calls the claude.ai API with your Chrome session cookie
 - `git_branch`, `git_ahead_behind`, `git_stash` — run git commands in the project directory
 
-If you don't include `extra_usage`, `fable_usage`, or `credits` in your segments, the native `statusLine` skips the API call and Chrome cookie auth entirely. The plugin fetches usage either way.
+If you don't include `extra_usage`, `fable_usage`, or `credits` in your segments, the native `statusLine` skips the API call and Chrome cookie auth entirely. The plugin only fetches usage when an enabled segment needs it. An external usage source replaces account-wide usage polling in both modes.
 
 ## Subagent status line
 

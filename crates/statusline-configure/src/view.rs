@@ -73,11 +73,13 @@ fn preview_rows(model: &EditorModel, sample: &SampleData, highlight: bool) -> Ve
 			.map(|r| r.config.clone())
 			.collect()
 	};
+	let environment = SampleData::environment(&segs);
 	match model.mode {
 		Mode::StatusLine => {
 			let mut ctx =
 				sample.render_context_with(divider, model.nerd_font, model.five, model.seven);
 			ctx.path_format = Some(&path_format);
+			ctx.environment = Some(&environment);
 			let line = SegmentLine {
 				segments: &segs,
 				ctx,
@@ -96,6 +98,7 @@ fn preview_rows(model: &EditorModel, sample: &SampleData, highlight: bool) -> Ve
 				})
 				.map(|mut ctx| {
 					ctx.path_format = Some(&path_format);
+					ctx.environment = Some(&environment);
 					SegmentLine {
 						segments: &segs,
 						ctx,
@@ -245,8 +248,30 @@ fn segment_example(model: &EditorModel, sample: &SampleData, config: &SegmentCon
 	let mut config = config.clone();
 
 	config.options_mut().enabled = true;
+	if *config.segment_type() == SegmentType::Env {
+		config
+			.options_mut()
+			.var
+			.get_or_insert_with(|| "EXAMPLE".to_owned());
+	}
 
+	let mut external = sample.external.clone();
+	if *config.segment_type() == SegmentType::UsageLimit {
+		let id = config
+			.options_mut()
+			.limit_id
+			.get_or_insert_with(|| "example".to_owned())
+			.clone();
+		external.limits[0].id = id;
+		ctx.external_usage = Some(statusline_core::external_usage::ExternalUsage {
+			snapshot: Some(&external),
+			state: statusline_core::external_usage::SnapshotState::Fresh,
+			now: external.observed_at,
+		});
+	}
 	let segs = [config];
+	let environment = SampleData::environment(&segs);
+	ctx.environment = Some(&environment);
 
 	let line = SegmentLine {
 		segments: &segs,
@@ -448,6 +473,9 @@ fn option_label(kind: OptionKind) -> &'static str {
 		OptionKind::Icon => "icon",
 		OptionKind::IconColor => "icon color",
 		OptionKind::Label => "label",
+		OptionKind::LimitId => "limit ID",
+		OptionKind::Var => "variable",
+		OptionKind::ColorEnv => "colour variable",
 		OptionKind::Style => "style",
 		OptionKind::Dirty => "dirty mark",
 		OptionKind::DirtyColor => "dirty color",
@@ -463,8 +491,12 @@ fn option_label(kind: OptionKind) -> &'static str {
 }
 
 fn option_value(model: &EditorModel, config: &SegmentConfig, kind: OptionKind) -> String {
-	if let Some(le) = &model.options.editing_label
-		&& kind == OptionKind::Label
+	if let Some(le) = &model.options.editing_text
+		&& matches!(
+			kind,
+			OptionKind::Label | OptionKind::Var | OptionKind::ColorEnv | OptionKind::LimitId
+		) && applicable_fields(meta(config.segment_type()).options).get(model.options.field)
+		== Some(&kind)
 	{
 		return format!("\"{}\u{2502}\"", le.value());
 	}
@@ -488,6 +520,15 @@ fn option_value(model: &EditorModel, config: &SegmentConfig, kind: OptionKind) -
 
 	match kind {
 		OptionKind::Colors => on_off(opts.is_none_or(|o| o.colors)).to_owned(),
+		OptionKind::LimitId => opts
+			.and_then(|o| o.limit_id.clone())
+			.unwrap_or_else(|| "(none)".to_owned()),
+		OptionKind::Var => opts
+			.and_then(|o| o.var.clone())
+			.unwrap_or_else(|| "(none)".to_owned()),
+		OptionKind::ColorEnv => opts
+			.and_then(|o| o.color_env.clone())
+			.unwrap_or_else(|| "(none)".to_owned()),
 		OptionKind::Icon => on_off(config.icon()).to_owned(),
 		OptionKind::Capitalize => {
 			on_off(opts.and_then(|o| o.capitalize).unwrap_or(true)).to_owned()

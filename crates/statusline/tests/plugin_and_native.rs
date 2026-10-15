@@ -274,3 +274,46 @@ fn git_cache_refreshes_in_the_background_and_clears_removed_directories() {
 	);
 	fs::remove_dir_all(scratch).unwrap();
 }
+
+#[test]
+fn environment_segment_matches_native_spans_and_subagent_output() {
+	let scratch = scratch_home("environment");
+	let segment = json!({"type":"env", "var":"TEST_ACCOUNT", "color_env":"TEST_COLOR"});
+	fs::write(
+		scratch.join(".statusline/settings.json"),
+		json!({
+			"five_hour_reset_threshold":70, "seven_day_reset_threshold":100,
+			"segments":[segment], "subagent_segments":[segment], "skip_update_check":true
+		})
+		.to_string(),
+	)
+	.unwrap();
+	for args in [vec![], vec!["--format", "spans"], vec!["subagent"]] {
+		let mut child = Command::new(env!("CARGO_BIN_EXE_statusline"))
+			.args(&args)
+			.env("HOME", &scratch)
+			.env("TEST_ACCOUNT", "Work ☕\n")
+			.env("TEST_COLOR", "#64c8dc")
+			.env_remove("CLAUDECODE")
+			.stdin(Stdio::piped())
+			.stdout(Stdio::piped())
+			.spawn()
+			.unwrap();
+		child
+			.stdin
+			.take()
+			.unwrap()
+			.write_all(br#"{"tasks":[{"id":"task-1"}]}"#)
+			.unwrap();
+		let output = child.wait_with_output().unwrap();
+		assert!(output.status.success());
+		let text = String::from_utf8(output.stdout).unwrap();
+		assert!(text.contains("Work ☕"), "{text}");
+		if args.is_empty() {
+			assert!(text.contains("38;2;100;200;220"));
+		} else if args[0] == "--format" {
+			assert!(text.contains("#64c8dc"), "{text}");
+		}
+	}
+	fs::remove_dir_all(scratch).unwrap();
+}

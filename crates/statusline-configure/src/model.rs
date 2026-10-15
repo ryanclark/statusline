@@ -96,7 +96,7 @@ enum Dir {
 #[derive(Debug, Default, Clone)]
 pub struct OptionsState {
 	pub field: usize,
-	pub editing_label: Option<LineEdit>,
+	pub editing_text: Option<LineEdit>,
 	pub editing_color: Option<ColorPick>,
 	pub remembered_dirty: Option<String>,
 }
@@ -405,8 +405,8 @@ impl EditorModel {
 	}
 
 	fn apply_options(&mut self, key: Key) -> Effect {
-		if self.options.editing_label.is_some() {
-			return self.apply_options_label_edit(key);
+		if self.options.editing_text.is_some() {
+			return self.apply_options_text_edit(key);
 		}
 
 		if self.options.editing_color.is_some() {
@@ -541,7 +541,9 @@ impl EditorModel {
 
 				opts.cold_color = pick.to_opt();
 			}
-			OptionKind::Label => return,
+			OptionKind::Label | OptionKind::Var | OptionKind::ColorEnv | OptionKind::LimitId => {
+				return;
+			}
 		}
 		self.dirty = true;
 	}
@@ -552,10 +554,18 @@ impl EditorModel {
 		};
 
 		match kind {
-			OptionKind::Label => {
-				let current = row.config.options_mut().label.clone().unwrap_or_default();
+			OptionKind::Label | OptionKind::Var | OptionKind::ColorEnv | OptionKind::LimitId => {
+				let options = row.config.options_mut();
+				let current = match kind {
+					OptionKind::LimitId => &options.limit_id,
+					OptionKind::Var => &options.var,
+					OptionKind::ColorEnv => &options.color_env,
+					_ => &options.label,
+				}
+				.clone()
+				.unwrap_or_default();
 
-				self.options.editing_label = Some(LineEdit::with(&current));
+				self.options.editing_text = Some(LineEdit::with(&current));
 			}
 			OptionKind::IconColor => {
 				let current = row.config.options_mut().icon_color.clone();
@@ -581,8 +591,8 @@ impl EditorModel {
 		}
 	}
 
-	fn apply_options_label_edit(&mut self, key: Key) -> Effect {
-		let Some(editor) = self.options.editing_label.as_mut() else {
+	fn apply_options_text_edit(&mut self, key: Key) -> Effect {
+		let Some(editor) = self.options.editing_text.as_mut() else {
 			return Effect::None;
 		};
 
@@ -591,15 +601,16 @@ impl EditorModel {
 			Key::Backspace => editor.backspace(),
 			Key::Left => editor.left(),
 			Key::Right => editor.right(),
-			Key::Enter | Key::Back => return self.commit_label_edit(),
+			Key::Enter | Key::Back => return self.commit_text_edit(),
 			Key::Quit => return self.quit_effect(),
 			_ => {}
 		}
 		Effect::Redraw
 	}
 
-	fn commit_label_edit(&mut self) -> Effect {
-		let Some(editor) = self.options.editing_label.take() else {
+	fn commit_text_edit(&mut self) -> Effect {
+		let field = self.current_fields().get(self.options.field).copied();
+		let Some(editor) = self.options.editing_text.take() else {
 			return Effect::None;
 		};
 
@@ -608,8 +619,14 @@ impl EditorModel {
 			let new = (!value.is_empty()).then_some(value);
 			let opts = row.config.options_mut();
 
-			if opts.label != new {
-				opts.label = new;
+			let target = match field {
+				Some(OptionKind::LimitId) => &mut opts.limit_id,
+				Some(OptionKind::Var) => &mut opts.var,
+				Some(OptionKind::ColorEnv) => &mut opts.color_env,
+				_ => &mut opts.label,
+			};
+			if *target != new {
+				*target = new;
 				self.dirty = true;
 			}
 		}
@@ -1321,7 +1338,7 @@ mod tests {
 
 		let mut m = model(&[SegmentType::FiveHour]);
 		m.apply(Key::Enter);
-		m.options.editing_label = Some(LineEdit::with("partial"));
+		m.options.editing_text = Some(LineEdit::with("partial"));
 		assert_eq!(m.apply(Key::Quit), Effect::Quit);
 	}
 
@@ -1495,7 +1512,7 @@ mod tests {
 		m.apply(Key::Enter);
 		m.options.field = 3;
 		m.apply(Key::Enter);
-		assert!(m.options.editing_label.is_some());
+		assert!(m.options.editing_text.is_some());
 		for c in "in:".chars() {
 			m.apply(Key::Char(c));
 		}
@@ -1517,6 +1534,25 @@ mod tests {
 			m.rows[0].config,
 			SegmentConfig::Simple(SegmentType::TotalInputTokens)
 		));
+	}
+
+	#[test]
+	fn environment_variables_are_editable_and_survive_normalization() {
+		let mut m = model(&[SegmentType::Env]);
+		m.cursor = 0;
+		m.apply(Key::Enter);
+		for (field, text) in [(2, "ACCOUNT"), (3, "ACCOUNT_COLOR")] {
+			m.options.field = field;
+			m.apply(Key::Enter);
+			for c in text.chars() {
+				m.apply(Key::Char(c));
+			}
+			m.apply(Key::Enter);
+		}
+		m.apply(Key::Back);
+		let options = m.rows[0].config.options_mut();
+		assert_eq!(options.var.as_deref(), Some("ACCOUNT"));
+		assert_eq!(options.color_env.as_deref(), Some("ACCOUNT_COLOR"));
 	}
 
 	#[test]

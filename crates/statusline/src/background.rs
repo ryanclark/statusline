@@ -1,7 +1,7 @@
 //! Coordination and deadlines for disposable background refresh processes.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant, SystemTime};
@@ -34,8 +34,26 @@ pub(crate) fn claim(path: &Path, interval: Duration) -> Option<File> {
 }
 
 pub(crate) fn bounded_output(command: &mut Command, deadline: Instant) -> Option<Output> {
+	bounded_output_with_input(command, deadline, &[], 8 * 1024 * 1024).ok()
+}
+
+#[derive(Debug)]
+pub(crate) enum OutputError {
+	Timeout,
+	Process,
+}
+
+pub(crate) fn bounded_output_with_input(
+	command: &mut Command,
+	deadline: Instant,
+	input: &[u8],
+	capture_limit: u64,
+) -> Result<Output, OutputError> {
+	if input.len() > 64 * 1024 {
+		return Err(OutputError::Timeout);
+	}
 	if Instant::now() >= deadline {
-		return None;
+		return Err(OutputError::Timeout);
 	}
 	#[cfg(unix)]
 	{
@@ -43,12 +61,24 @@ pub(crate) fn bounded_output(command: &mut Command, deadline: Instant) -> Option
 		command.process_group(0);
 	}
 	let mut child = command
-		.stdin(Stdio::null())
+		.stdin(if input.is_empty() {
+			Stdio::null()
+		} else {
+			Stdio::piped()
+		})
 		.stdout(Stdio::piped())
 		.stderr(Stdio::null())
 		.spawn()
-		.ok()?;
-	let mut stdout = child.stdout.take()?;
+		.map_err(|_| OutputError::Process)?;
+	let writer = child.stdin.take().map(|mut stdin| {
+		let input = input.to_vec();
+		let (send, receive) = std::sync::mpsc::channel();
+		std::thread::spawn(move || {
+			let _ = send.send(stdin.write_all(&input));
+		});
+		receive
+	});
+	let mut stdout = child.stdout.take().ok_or(OutputError::Process)?;
 	let (send, receive) = std::sync::mpsc::channel();
 	// Drain while Git runs so a large status cannot fill its pipe. A descendant holding it open is bounded by the
 	// same deadline; a detached reader cannot hold this short-lived worker open.
@@ -56,7 +86,7 @@ pub(crate) fn bounded_output(command: &mut Command, deadline: Instant) -> Option
 		let mut bytes = Vec::new();
 		let result = stdout
 			.by_ref()
-			.take(8 * 1024 * 1024)
+			.take(capture_limit)
 			.read_to_end(&mut bytes)
 			// Keep draining after the capture limit. Closing the pipe early kills large Git statuses with SIGPIPE.
 			.and_then(|_| std::io::copy(&mut stdout, &mut std::io::sink()))
@@ -68,12 +98,22 @@ pub(crate) fn bounded_output(command: &mut Command, deadline: Instant) -> Option
 	let Ok(Ok(stdout)) = receive.recv_timeout(deadline.saturating_duration_since(Instant::now()))
 	else {
 		stop(&mut child);
-		return None;
+		return Err(OutputError::Timeout);
 	};
 	loop {
 		match child.try_wait() {
 			Ok(Some(status)) => {
-				return Some(Output {
+				if let Some(writer) = writer
+					&& !matches!(
+						writer.recv_timeout(deadline.saturating_duration_since(Instant::now())),
+						Ok(Ok(()))
+					) {
+					stop(&mut child);
+					return Err(OutputError::Timeout);
+				}
+				// A successful provider may have left detached helpers with closed pipes.
+				stop(&mut child);
+				return Ok(Output {
 					status,
 					stdout,
 					stderr: Vec::new(),
@@ -84,7 +124,7 @@ pub(crate) fn bounded_output(command: &mut Command, deadline: Instant) -> Option
 			}
 			_ => {
 				stop(&mut child);
-				return None;
+				return Err(OutputError::Timeout);
 			}
 		}
 	}
@@ -94,10 +134,12 @@ fn stop(child: &mut std::process::Child) {
 	// Git can start helpers (fsmonitor and submodule status, for example). Stop the whole group so repeated refreshes
 	// cannot accumulate helpers after Git itself has exited or timed out.
 	#[cfg(unix)]
-	let _ = rustix::process::kill_process_group(
-		rustix::process::Pid::from_child(child),
-		rustix::process::Signal::KILL,
-	);
+	{
+		let group = rustix::process::Pid::from_child(child);
+		// Freeze the group before killing it: a shell must not continue its script when its sleeping child dies.
+		let _ = rustix::process::kill_process_group(group, rustix::process::Signal::STOP);
+		let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+	}
 	let _ = child.kill();
 	let _ = child.wait();
 }

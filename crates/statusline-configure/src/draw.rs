@@ -413,8 +413,7 @@ pub(crate) fn run_editor(
 			continue;
 		}
 
-		let editing =
-			model.options.editing_label.is_some() || model.options.editing_color.is_some();
+		let editing = model.options.editing_text.is_some() || model.options.editing_color.is_some();
 		let Some(key) = map_key(k, model.focus, editing) else {
 			continue;
 		};

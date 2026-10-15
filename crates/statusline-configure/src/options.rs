@@ -8,6 +8,9 @@ pub enum OptionKind {
 	Icon,
 	IconColor,
 	Label,
+	Var,
+	ColorEnv,
+	LimitId,
 	Style,
 	Dirty,
 	DirtyColor,
@@ -60,7 +63,14 @@ pub fn applicable_fields(set: OptionSet) -> Vec<OptionKind> {
 	if set.details {
 		fields.push(OptionKind::Details);
 	}
+	if set.environment {
+		fields.push(OptionKind::Var);
+		fields.push(OptionKind::ColorEnv);
+	}
 
+	if set.limit_id {
+		fields.push(OptionKind::LimitId);
+	}
 	fields
 }
 

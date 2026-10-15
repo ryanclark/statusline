@@ -1,6 +1,7 @@
 mod accounts;
 mod background;
 mod browser;
+mod external_usage;
 mod git_cache;
 mod install;
 mod plugin_install;
@@ -128,6 +129,13 @@ enum Commands {
 	#[command(hide = true)]
 	UpdateRefresh,
 	#[command(hide = true)]
+	ExternalUsageRefresh {
+		#[arg(long)]
+		source: String,
+		#[arg(long)]
+		request: String,
+	},
+	#[command(hide = true)]
 	UsageRefresh {
 		#[arg(long)]
 		org: String,
@@ -144,6 +152,17 @@ fn main() {
 	let cli = Cli::parse();
 
 	match cli.command {
+		Some(Commands::ExternalUsageRefresh { source, request }) => {
+			let result = serde_json::from_str(&source)
+				.ok()
+				.zip(serde_json::from_str(&request).ok())
+				.ok_or(statusline_core::external_usage::ExternalUsageError::Configuration)
+				.and_then(|(source, request)| external_usage::run_refresh(&source, &request));
+			if let Err(error) = result {
+				eprintln!("{error}");
+				std::process::exit(1);
+			}
+		}
 		Some(Commands::Install {
 			five_hour_reset_threshold,
 			seven_day_reset_threshold,
@@ -329,8 +348,15 @@ fn main() {
 				None
 			};
 
-			let accounts_file = accounts::load();
-			let identity = accounts::live_identity();
+			let source = external_usage::resolve_source(&settings, |name| std::env::var(name).ok());
+			let external_configured = !matches!(source, Ok(None));
+			if let Err(error) = &source {
+				eprintln!("{error}");
+			}
+			let accounts_file = (!external_configured).then(accounts::load).flatten();
+			let identity = (!external_configured)
+				.then(accounts::live_identity)
+				.flatten();
 			let account = match (&identity, &accounts_file) {
 				(Some((email, org)), Some(file)) => accounts::find_for_identity(file, email, org),
 				_ => None,
@@ -354,7 +380,9 @@ fn main() {
 				s.enabled()
 					&& matches!(
 						s.segment_type(),
-						segment::SegmentType::FiveHour | segment::SegmentType::SevenDay
+						segment::SegmentType::FiveHour
+							| segment::SegmentType::SevenDay
+							| segment::SegmentType::UsageLimit
 					)
 			});
 			let needs_autocompact = segments.iter().any(|s| {
@@ -362,7 +390,8 @@ fn main() {
 			});
 
 			let plugin_usage = input.mod_info.as_ref().and_then(|m| m.usage.as_ref());
-			let from_cookies = plugin_usage.is_none() && (needs_usage || needs_credits);
+			let from_cookies =
+				!external_configured && plugin_usage.is_none() && (needs_usage || needs_credits);
 
 			let resolved = if from_cookies {
 				match &identity {
@@ -384,8 +413,8 @@ fn main() {
 			} = usage_cache::resolve(
 				plugin_usage,
 				usage_cache::read,
-				needs_usage,
-				needs_credits,
+				needs_usage && !external_configured,
+				needs_credits && !external_configured,
 				chrono::Utc::now(),
 			);
 
@@ -393,7 +422,7 @@ fn main() {
 				Some((org_uuid, browser, profile)) => {
 					usage_cache::maybe_spawn_refresh(org_uuid, browser, profile);
 				}
-				None if needs_usage && plugin_usage.is_none() => {
+				None if !external_configured && needs_usage && plugin_usage.is_none() => {
 					let err = usage::UsageError::Other("no active Claude account".to_owned());
 					eprintln!("{}", format_args!("usage error: {err}").color(RED).dimmed());
 					usage_result = Some(Err(err));
@@ -401,6 +430,45 @@ fn main() {
 				None => {}
 			}
 
+			let source_needed = needs_usage
+				|| needs_credits
+				|| needs_rate_limits
+				|| segments
+					.iter()
+					.any(|s| s.enabled() && *s.segment_type() == segment::SegmentType::Account);
+			let cached_external = source
+				.as_ref()
+				.ok()
+				.and_then(Option::as_ref)
+				.filter(|_| source_needed)
+				.and_then(|source| {
+					match external_usage::request(source, &input, |name| std::env::var(name).ok()) {
+						Ok(request) => {
+							let cached = external_usage::read(source, &request);
+							external_usage::maybe_spawn_refresh(source, &request);
+							cached
+						}
+						Err(error) => {
+							eprintln!("{error}");
+							None
+						}
+					}
+				});
+			let external_view = external_configured.then(|| {
+				use statusline_core::external_usage::{ExternalUsage, SnapshotState};
+				let now = chrono::Utc::now();
+				let snapshot = cached_external.as_ref().map(|cache| &cache.snapshot);
+				let state = snapshot
+					.zip(source.as_ref().ok().and_then(Option::as_ref))
+					.map_or(SnapshotState::Unusable, |(snapshot, source)| {
+						snapshot.state(now, source.max_age)
+					});
+				ExternalUsage {
+					snapshot,
+					state,
+					now,
+				}
+			});
 			let divider = settings.divider.as_deref().unwrap_or(DIVIDER);
 			let git_cache = git_cache::load(&input.cwd, &segments);
 
@@ -409,9 +477,13 @@ fn main() {
 				color: a.color.clone(),
 			});
 
+			let environment =
+				segment::EnvironmentValues::resolve(&segments, |name| std::env::var(name).ok());
 			let line = SegmentLine {
 				segments: &segments,
 				ctx: RenderContext {
+					external_usage: external_view,
+					environment: Some(&environment),
 					path_format: Some(&settings.path_format),
 					input: &input,
 					usage: usage_result.as_ref().map(|r| r.as_ref()),
@@ -451,7 +523,9 @@ fn main() {
 					let output = if cli.plugin_data {
 						serde_json::json!({
 							"rows": rows,
-							"needs": { "usage": needs_usage || needs_credits || needs_rate_limits, "autocompact": needs_autocompact },
+							"usage_source": if external_configured { "external" } else { "native" },
+							"usage_attempted_at": cached_external.as_ref().and_then(|cache| cache.last_attempt),
+							"needs": { "usage": !external_configured && (needs_usage || needs_credits || needs_rate_limits), "autocompact": needs_autocompact },
 							"update": update.map(|u| format!("v{} available • brew upgrade ryanclark/tap/statusline", u.version))
 						})
 					} else {

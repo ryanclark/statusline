@@ -4,6 +4,9 @@ mod context;
 mod cost;
 mod credits;
 mod env;
+mod environment;
+mod external;
+pub use environment::EnvironmentValues;
 mod git;
 mod grid;
 pub use grid::align_rows;
@@ -32,6 +35,7 @@ pub enum SegmentType {
 	TotalInputTokens,
 	InputTokens,
 	OutputTokens,
+	UsageLimit,
 	FiveHour,
 	SevenDay,
 	SpendLimit,
@@ -52,6 +56,7 @@ pub enum SegmentType {
 	AgentName,
 	Worktree,
 	Account,
+	Env,
 	LinesAdded,
 	LinesRemoved,
 	Duration,
@@ -103,7 +108,8 @@ impl SegmentType {
 				ContextPercentage => TotalInputTokens,
 				TotalInputTokens => InputTokens,
 				InputTokens => OutputTokens,
-				OutputTokens => FiveHour,
+				OutputTokens => UsageLimit,
+				UsageLimit => FiveHour,
 				FiveHour => SevenDay,
 				SevenDay => SpendLimit,
 				SpendLimit => FableUsage,
@@ -123,7 +129,8 @@ impl SegmentType {
 				VimMode => AgentName,
 				AgentName => Worktree,
 				Worktree => Account,
-				Account => LinesAdded,
+				Account => Env,
+				Env => LinesAdded,
 				LinesAdded => LinesRemoved,
 				LinesRemoved => Duration,
 				Duration => ApiDuration,
@@ -210,6 +217,14 @@ pub struct SegmentOptions {
 	pub warm_color: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub cold_color: Option<String>,
+	/// Name of the environment variable displayed by the `env` segment.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub var: Option<String>,
+	/// Name of a variable containing a colour in the standard colour syntax.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub color_env: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub limit_id: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub capitalize: Option<bool>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -534,6 +549,9 @@ impl SegmentConfig {
 				dirty_color: None,
 				warm_color: None,
 				cold_color: None,
+				var: None,
+				color_env: None,
+				limit_id: None,
 				capitalize: None,
 				show_time: None,
 				time_format: None,
@@ -563,6 +581,9 @@ impl SegmentConfig {
 				&& opts.dirty_color.is_none()
 				&& opts.warm_color.is_none()
 				&& opts.cold_color.is_none()
+				&& opts.var.is_none()
+				&& opts.color_env.is_none()
+				&& opts.limit_id.is_none()
 				&& opts.capitalize.unwrap_or(true)
 				&& opts.show_time.is_none()
 				&& opts.time_format.is_none()
@@ -602,6 +623,8 @@ pub struct AccountDisplay {
 }
 
 pub struct RenderContext<'a> {
+	pub external_usage: Option<crate::external_usage::ExternalUsage<'a>>,
+	pub environment: Option<&'a EnvironmentValues>,
 	pub path_format: Option<&'a crate::path_format::PathFormat>,
 	pub input: &'a InputData,
 	pub usage: Option<Result<&'a UsageResponse, &'a UsageError>>,

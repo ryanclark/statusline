@@ -14,6 +14,7 @@ use chrono::{TimeDelta, Utc};
 use std::time::Duration;
 
 pub struct SampleData {
+	pub external: crate::external_usage::UsageSnapshot,
 	pub input: InputData,
 	pub tasks: Vec<Task>,
 	/// Each task viewed as a status line input, borrowed by [`Self::task_context`].
@@ -92,6 +93,16 @@ fn sample_mod_info() -> ModInfo {
 }
 
 impl SampleData {
+	/// Representative values for explicitly configured environment segments.
+	#[must_use]
+	pub fn environment(
+		segments: &[crate::segment::SegmentConfig],
+	) -> crate::segment::EnvironmentValues {
+		crate::segment::EnvironmentValues::resolve(segments, |name| {
+			let color = segments.iter().any(|segment| matches!(segment, crate::segment::SegmentConfig::Advanced(options) if options.color_env.as_deref() == Some(name)));
+			Some(if color { "#64c8dc" } else { "Example" }.to_owned())
+		})
+	}
 	#[must_use]
 	pub fn representative() -> Self {
 		let five_reset = Utc::now().timestamp() + 7200; // +2h
@@ -262,6 +273,24 @@ impl SampleData {
 		let task_inputs = tasks.iter().map(Task::to_input).collect();
 
 		Self {
+			external: crate::external_usage::UsageSnapshot {
+				version: 1,
+				key: "example".into(),
+				observed_at: Utc::now(),
+				account: crate::external_usage::ExternalAccount {
+					id: "example".into(),
+					label: "Work".into(),
+					color: Some("#64c8dc".into()),
+				},
+				limits: vec![crate::external_usage::ExternalLimit {
+					id: "example".into(),
+					label: Some("Burst".into()),
+					used_percent: Some(42.0),
+					window_seconds: Some(3600),
+					resets_at: Some(Utc::now() + TimeDelta::hours(1)),
+				}],
+				spend: None,
+			},
 			input,
 			tasks,
 			task_inputs,
@@ -301,6 +330,8 @@ impl SampleData {
 		seven_threshold: Percentage,
 	) -> Option<RenderContext<'a>> {
 		Some(RenderContext {
+			external_usage: None,
+			environment: None,
 			path_format: None,
 			input: self.task_inputs.get(index)?,
 			usage: None,
@@ -325,6 +356,8 @@ impl SampleData {
 		seven_threshold: Percentage,
 	) -> RenderContext<'a> {
 		RenderContext {
+			external_usage: None,
+			environment: None,
 			path_format: None,
 			input: &self.input,
 			usage: Some(self.usage.as_ref()),
@@ -350,10 +383,22 @@ mod tests {
 	#[test]
 	fn sample_renders_every_segment() {
 		let data = SampleData::representative();
-		let ctx = data.render_context();
-
 		for m in catalog() {
-			let seg = SegmentConfig::Simple(m.ty.clone());
+			let mut seg = SegmentConfig::Simple(m.ty.clone());
+			if m.ty == SegmentType::Env {
+				seg.options_mut().var = Some("EXAMPLE".into());
+			}
+			let environment = SampleData::environment(std::slice::from_ref(&seg));
+			let mut ctx = data.render_context();
+			ctx.environment = Some(&environment);
+			if m.ty == SegmentType::UsageLimit {
+				seg.options_mut().limit_id = Some("example".into());
+				ctx.external_usage = Some(crate::external_usage::ExternalUsage {
+					snapshot: Some(&data.external),
+					state: crate::external_usage::SnapshotState::Fresh,
+					now: Utc::now(),
+				});
+			}
 			let out = render_segment(&seg, &ctx);
 			assert!(
 				out.as_deref().is_some_and(|s| !s.is_empty()),

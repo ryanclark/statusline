@@ -32,6 +32,9 @@ impl Category {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OptionSet {
+	/// Environment value and colour variable names.
+	pub environment: bool,
+	pub limit_id: bool,
 	pub colors: bool,
 	pub icon: bool,
 	pub label: bool,
@@ -59,6 +62,8 @@ pub struct SegmentMeta {
 }
 
 const ICON_TEXT: OptionSet = OptionSet {
+	environment: false,
+	limit_id: false,
 	colors: true,
 	icon: true,
 	label: true,
@@ -72,6 +77,8 @@ const ICON_TEXT: OptionSet = OptionSet {
 };
 
 const COLORED_TEXT: OptionSet = OptionSet {
+	environment: false,
+	limit_id: false,
 	colors: true,
 	icon: false,
 	label: false,
@@ -85,6 +92,8 @@ const COLORED_TEXT: OptionSet = OptionSet {
 };
 
 const NO_OPTIONS: OptionSet = OptionSet {
+	environment: false,
+	limit_id: false,
 	colors: false,
 	icon: false,
 	label: false,
@@ -98,6 +107,8 @@ const NO_OPTIONS: OptionSet = OptionSet {
 };
 
 const STYLED_TEXT: OptionSet = OptionSet {
+	environment: false,
+	limit_id: false,
 	colors: false,
 	icon: false,
 	label: false,
@@ -118,6 +129,7 @@ pub fn catalog() -> &'static [SegmentMeta] {
 /// Status line segments that also make sense per subagent task, because a task carries its own
 /// model, effort, cwd, and context counts.
 const PER_TASK_IDS: &[&str] = &[
+	"env",
 	"model",
 	"model_id",
 	"effort",
@@ -140,6 +152,29 @@ pub fn for_subagent() -> Vec<&'static SegmentMeta> {
 }
 
 static CATALOG: &[SegmentMeta] = &[
+	SegmentMeta {
+		ty: SegmentType::UsageLimit,
+		id: "usage_limit",
+		label: "External usage limit",
+		category: Category::RateLimits,
+		description: "A named limit supplied by an external usage source",
+		options: OptionSet {
+			limit_id: true,
+			countdown: true,
+			..ICON_TEXT
+		},
+	},
+	SegmentMeta {
+		ty: SegmentType::Env,
+		id: "env",
+		label: "Environment value",
+		category: Category::Environment,
+		description: "Display an environment variable, with an optional colour variable",
+		options: OptionSet {
+			environment: true,
+			..COLORED_TEXT
+		},
+	},
 	SegmentMeta {
 		ty: SegmentType::ContextPercentage,
 		id: "context_percentage",
@@ -211,6 +246,8 @@ static CATALOG: &[SegmentMeta] = &[
 		category: Category::Context,
 		description: "Prompt cache state (warm with time until cold, or cold)",
 		options: OptionSet {
+			environment: false,
+			limit_id: false,
 			cache_state: true,
 			countdown: true,
 			..ICON_TEXT
@@ -231,6 +268,8 @@ static CATALOG: &[SegmentMeta] = &[
 		category: Category::Context,
 		description: "Prompt cache misses in the last 30m or the `within` window, or the session total without the plugin",
 		options: OptionSet {
+			environment: false,
+			limit_id: false,
 			within: true,
 			..COLORED_TEXT
 		},
@@ -242,6 +281,8 @@ static CATALOG: &[SegmentMeta] = &[
 		category: Category::Context,
 		description: "Cause and age of the last prompt cache miss, hidden after 30m or `within`",
 		options: OptionSet {
+			environment: false,
+			limit_id: false,
 			within: true,
 			details: true,
 			..COLORED_TEXT
@@ -262,6 +303,8 @@ static CATALOG: &[SegmentMeta] = &[
 		category: Category::RateLimits,
 		description: "5-hour rate limit % with optional reset countdown",
 		options: OptionSet {
+			environment: false,
+			limit_id: false,
 			countdown: true,
 			..ICON_TEXT
 		},
@@ -273,6 +316,8 @@ static CATALOG: &[SegmentMeta] = &[
 		category: Category::RateLimits,
 		description: "7-day rate limit % with optional reset countdown",
 		options: OptionSet {
+			environment: false,
+			limit_id: false,
 			countdown: true,
 			..ICON_TEXT
 		},
@@ -284,6 +329,8 @@ static CATALOG: &[SegmentMeta] = &[
 		category: Category::RateLimits,
 		description: "Spend limit % with reset countdown (Claude apps gateway only)",
 		options: OptionSet {
+			environment: false,
+			limit_id: false,
 			countdown: true,
 			..ICON_TEXT
 		},
@@ -295,6 +342,8 @@ static CATALOG: &[SegmentMeta] = &[
 		category: Category::RateLimits,
 		description: "Fable weekly rate limit % with reset countdown (calls the API)",
 		options: OptionSet {
+			environment: false,
+			limit_id: false,
 			countdown: true,
 			..ICON_TEXT
 		},
@@ -378,6 +427,8 @@ static CATALOG: &[SegmentMeta] = &[
 		category: Category::Git,
 		description: "Current git branch name with optional dirty marker",
 		options: OptionSet {
+			environment: false,
+			limit_id: false,
 			colors: true,
 			icon: false,
 			label: false,
@@ -533,6 +584,8 @@ static CATALOG: &[SegmentMeta] = &[
 		category: Category::Account,
 		description: "Current Claude account nickname (colored per entry)",
 		options: OptionSet {
+			environment: false,
+			limit_id: false,
 			colors: true,
 			icon: false,
 			label: false,
@@ -552,6 +605,8 @@ static CATALOG: &[SegmentMeta] = &[
 		category: Category::Layout,
 		description: "Separator character (default •)",
 		options: OptionSet {
+			environment: false,
+			limit_id: false,
 			colors: true,
 			icon: false,
 			label: false,
